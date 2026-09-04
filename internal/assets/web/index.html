@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>lxsc 控制台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+    <symbol id="i-backup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+    <symbol id="i-disc" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  </defs>
+</svg>
+
+<div id="login" class="screen hidden">
+  <div class="glow glow-a"></div><div class="glow glow-b"></div>
+  <form id="loginForm" class="card login">
+    <div class="logo-mark lg"><svg class="icon"><use href="#i-logo"/></svg></div>
+    <h1>lxsc</h1>
+    <p class="muted">支持洛雪音源的 Subsonic 服务端 · 统一控制台</p>
+    <label>用户名<input name="username" autocomplete="username" required autofocus></label>
+    <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="block">登录</button>
+    <p id="loginError" class="err"></p>
+  </form>
+</div>
+
+<div id="app" class="shell hidden">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo-mark"><svg class="icon"><use href="#i-logo"/></svg></span><span>lxsc</span><span id="roleTag" class="tag"></span></div>
+    <nav>
+      <a href="#playlists" data-tab="playlists"><svg class="icon"><use href="#i-music"/></svg><span>歌单</span></a>
+      <a href="#dashboard" data-tab="dashboard" class="admin-only hidden"><svg class="icon"><use href="#i-dash"/></svg><span>概览</span></a>
+      <a href="#sources" data-tab="sources" class="admin-only hidden"><svg class="icon"><use href="#i-code"/></svg><span>音源</span></a>
+      <a href="#users" data-tab="users" class="admin-only hidden"><svg class="icon"><use href="#i-users"/></svg><span>用户</span></a>
+      <a href="#backups" data-tab="backups" class="admin-only hidden"><svg class="icon"><use href="#i-backup"/></svg><span>备份</span></a>
+      <a href="#settings" data-tab="settings" class="admin-only hidden"><svg class="icon"><use href="#i-sliders"/></svg><span>设置</span></a>
+      <a href="#search" data-tab="search" class="admin-only hidden"><svg class="icon"><use href="#i-search"/></svg><span>搜索测试</span></a>
+      <a href="#logs" data-tab="logs" class="admin-only hidden"><svg class="icon"><use href="#i-file"/></svg><span>日志</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <div id="identity" class="identity"></div>
+      <a href="#" id="logoutButton"><svg class="icon"><use href="#i-logout"/></svg><span>退出登录</span></a>
+    </div>
+  </aside>
+
+  <main>
+    <section id="tab-playlists" class="tab">
+      <div class="page-head"><div><h2>歌单</h2><p>管理歌曲、顺序与洛雪歌单导入</p></div><div class="page-actions"><label class="quality-control">默认播放音质<select id="qualitySelect"><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label><button id="refreshButton" class="sec"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
+      <div class="playlist-layout">
+        <aside class="playlist-pane">
+          <label id="ownerFilterWrap" class="hidden">按用户筛选
+            <select id="ownerFilter"><option value="">全部用户</option></select>
+          </label>
+          <div id="playlistList" class="playlist-list"></div>
+
+          <details class="card create-card">
+            <summary><svg class="icon"><use href="#i-plus"/></svg>新建歌单</summary>
+            <form id="createForm">
+              <label>名称<input name="name" maxlength="100" required></label>
+              <label>备注<textarea name="comment" maxlength="1000" rows="3"></textarea></label>
+              <label id="ownerCreateWrap" class="hidden">归属用户<select name="ownerId"></select></label>
+              <label class="switch"><span>公开歌单</span><input name="public" type="checkbox"></label>
+              <button type="submit" class="block">创建</button>
+            </form>
+          </details>
+
+          <details class="card create-card">
+            <summary><svg class="icon"><use href="#i-upload"/></svg>导入洛雪歌单</summary>
+            <form id="importForm">
+              <label>备份文件<input name="file" type="file" accept=".lxmc,.json,application/json,application/gzip" required><small>支持洛雪音乐导出的 .lxmc / .json 文件</small></label>
+              <div id="importLists" class="import-lists hidden"></div>
+              <label>导入方式<select name="mode"><option value="create">每个列表新建一个歌单</option><option value="append">追加到当前选中的歌单</option></select></label>
+              <label id="importOwnerWrap" class="hidden">归属用户<select name="ownerId"></select></label>
+              <label class="switch" id="importPublicWrap"><span>公开歌单</span><input name="public" type="checkbox"></label>
+              <button type="submit" class="block" disabled>导入</button>
+            </form>
+          </details>
+        </aside>
+
+        <section class="playlist-content">
+          <div id="emptyDetail" class="card playlist-empty"><svg class="icon big"><use href="#i-disc"/></svg><div>选择左侧的歌单开始管理</div><div class="muted hint">或新建一个歌单，搜索歌曲添加进去</div></div>
+          <div id="detail" class="hidden">
+            <div class="section-title detail-head">
+              <div><h2 id="detailTitle"></h2><div id="detailOwner" class="muted"></div></div>
+              <button id="deleteButton" class="danger"><svg class="icon"><use href="#i-trash"/></svg>删除歌单</button>
+            </div>
+
+            <form id="metaForm" class="card meta-grid">
+              <label class="wide">名称<input name="name" maxlength="100" required></label>
+              <label class="wide">备注<textarea name="comment" maxlength="1000" rows="2"></textarea></label>
+              <label class="switch"><span>公开歌单<small>其他用户可见</small></span><input name="public" type="checkbox"></label>
+              <div class="actions"><button type="submit">保存信息</button></div>
+            </form>
+
+            <div id="readonlyNotice" class="card notice hidden"><svg class="icon"><use href="#i-lock"/></svg>这是其他用户的公开歌单，你可以查看但不能修改。</div>
+
+            <section id="searchSection" class="card playlist-search-card">
+              <h4 class="card-title"><svg class="icon"><use href="#i-search"/></svg>搜索并添加歌曲</h4>
+              <form id="searchForm" class="search-row">
+                <input name="query" placeholder="歌名或歌手" maxlength="200" required>
+                <select name="source"><option value="">全部平台</option><option value="wy">网易云</option><option value="tx">QQ音乐</option><option value="kw">酷我</option><option value="kg">酷狗</option><option value="mg">咪咕</option></select>
+                <button type="submit">搜索</button>
+              </form>
+              <div id="searchResults"></div>
+            </section>
+
+            <section class="card tracks-card">
+              <div class="section-title">
+                <div><h4 class="card-title">歌曲 <span id="trackCount" class="muted count"></span></h4><div class="muted hint track-tip">可拖放排序，也可使用上移 / 下移按钮</div></div>
+                <button id="saveTracksButton" disabled>保存歌曲变更</button>
+              </div>
+              <div class="table-wrap playlist-table-wrap">
+                <table id="playlistTrackTable">
+                  <thead><tr><th class="num">#</th><th>歌曲</th><th>歌手</th><th>专辑</th><th>平台</th><th class="track-actions"></th></tr></thead>
+                  <tbody id="trackTable"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="tab-dashboard" class="tab admin-only">
+      <div class="page-head"><div><h2>概览</h2><p>服务健康、数据规模与备份状态</p></div><button class="sec" onclick="loadDashboard()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
+      <div id="healthHero" class="card health-hero"></div>
+      <div id="statusCards" class="overview-stats"></div>
+      <div class="overview-grid">
+        <div class="card connect overview-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>客户端连接</h4><div class="kv"><span class="k">服务器地址</span><code id="serverUrl"></code><button type="button" class="ghost sm" onclick="copyText($('#serverUrl').textContent)"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="kv"><span class="k">认证账号</span><span>任一已创建用户</span></div><p class="muted hint">支持音流、Feishin、Symfonium 等 Subsonic 客户端；搜索前缀：<code>wy:</code> <code>tx:</code> <code>kw:</code> <code>kg:</code> <code>mg:</code></p></div>
+        <div id="backupSummary" class="card overview-card"></div>
+      </div>
+      <div class="section-title overview-section"><h3>音源与平台</h3><a href="#sources">管理音源 →</a></div>
+      <div id="dashSources" class="dash-source-list"></div>
+    </section>
+
+    <section id="tab-sources" class="tab admin-only">
+      <div class="page-head"><div><h2>音源脚本</h2><p>上传或导入洛雪自定义音源，用于解析播放直链</p></div></div>
+      <div class="grid2">
+        <form onsubmit="return uploadSource(event)" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>上传脚本</h4><input type="file" name="file" accept=".js,text/javascript" required><input name="name" placeholder="名称（可选，默认取脚本 @name）"><button type="submit">上传</button></form>
+        <form onsubmit="return importSource(event)" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>从 URL 导入</h4><input name="url" placeholder="https://example.com/source.js" required><button type="submit">导入</button></form>
+      </div>
+      <div id="sourceList" class="stack"></div>
+    </section>
+
+    <section id="tab-users" class="tab admin-only">
+      <div class="page-head"><div><h2>用户</h2><p>Subsonic 客户端与控制台使用的登录账号</p></div></div>
+      <form onsubmit="return createUser(event)" class="card toolbar"><input name="name" placeholder="用户名" required><input name="password" type="password" placeholder="密码" required><select name="quality"><option value="128k">128k</option><option value="320k" selected>320k</option><option value="flac">flac</option><option value="flac24bit">flac24bit</option></select><label class="inline"><input type="checkbox" name="isAdmin">管理员</label><button type="submit"><svg class="icon"><use href="#i-plus"/></svg>新建用户</button></form>
+      <div class="table-wrap"><table id="userTable"><thead><tr><th style="width:60px">ID</th><th>用户名</th><th>角色</th><th>默认音质</th><th class="right">操作</th></tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <section id="tab-backups" class="tab admin-only">
+      <div class="page-head"><div><h2>备份与恢复</h2><p>完整迁移备份、本地恢复和 WebDAV 自动备份</p></div><button class="sec" onclick="loadBackups()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
+      <div id="pendingRestore"></div>
+      <div class="grid2 backup-top-grid">
+        <form id="exportBackupForm" class="card form-card" onsubmit="return exportBackup(event)"><h4 class="card-title"><svg class="icon"><use href="#i-backup"/></svg>下载完整备份</h4><p class="muted hint">包含数据库、用户、歌单、音源、设置与迁移密钥，属于敏感文件。</p><label>可选备份密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不额外加密"></label><label>确认密码<input name="confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入"></label><button type="submit">生成并下载</button></form>
+        <form id="importBackupForm" class="card form-card" onsubmit="return importBackup(event)"><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>导入完整备份</h4><p class="muted hint">先检查备份摘要，确认后再暂存；重启容器后才覆盖当前数据。</p><label>备份文件<input name="file" type="file" accept=".lxsc-backup,application/octet-stream" required></label><label>备份密码<input name="password" type="password" placeholder="加密备份必填"></label><div id="backupPreview" class="backup-preview muted">尚未检查备份</div><button type="button" class="sec" onclick="previewBackup()">检查备份</button><label class="inline danger-confirm"><input name="confirm" type="checkbox" required disabled>我已核对摘要，并理解重启后将替换当前业务数据</label><button type="submit" class="danger" disabled>暂存恢复</button></form>
+      </div>
+      <form id="webdavForm" class="card" onsubmit="return saveWebDAV(event)"><div class="section-title"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>WebDAV 配置</h4><span id="webdavSecurity" class="badge off"></span></div><div class="form-grid"><label>WebDAV 地址<input name="url" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user/"></label><label>用户名<input name="username" autocomplete="username"></label><label>密码 / 应用密码<input name="password" type="password" autocomplete="new-password" placeholder="留空保留现有密码"><small id="webdavPasswordState"></small></label><label>远程目录<input name="path" placeholder="lxsc-backups"></label><label>备份文件加密密码<input name="backupPassword" type="password" autocomplete="new-password" placeholder="留空保留现有密码"><small id="backupPasswordState"></small></label><label>执行周期<select name="frequency"><option value="daily">每日</option><option value="weekly">每周</option></select></label><label>执行时间<input name="time" type="time"></label><label id="weekdayWrap">星期<select name="weekday"><option value="1">星期一</option><option value="2">星期二</option><option value="3">星期三</option><option value="4">星期四</option><option value="5">星期五</option><option value="6">星期六</option><option value="0">星期日</option></select></label><label>保留最近份数<input name="retention" type="number" min="0" max="1000"><small>默认 3；0 表示不自动删除</small></label></div><div class="secret-clear-row"><label class="inline"><input name="clearPassword" type="checkbox">清除已保存的 WebDAV 密码</label><label class="inline"><input name="clearBackupPassword" type="checkbox">清除已保存的备份加密密码</label></div><label class="switch"><span>启用自动 WebDAV 备份<small id="backupTimezone"></small></span><input name="auto" type="checkbox"></label><div class="form-actions"><button type="submit">保存配置</button><button type="button" class="sec" onclick="testWebDAV()">测试连接</button><button type="button" onclick="runWebDAVBackup()"><svg class="icon"><use href="#i-upload"/></svg>立即备份</button></div></form>
+      <div class="section-title overview-section"><h3>远程备份</h3><span id="backupLastStatus" class="muted hint"></span></div><div class="table-wrap"><table id="remoteBackupTable"><thead><tr><th>文件</th><th>时间</th><th>大小</th><th class="right">操作</th></tr></thead><tbody><tr><td colspan="4">尚未加载</td></tr></tbody></table></div>
+    </section>
+
+    <section id="tab-settings" class="tab admin-only">
+      <div class="page-head"><div><h2>设置</h2><p>运行时配置，保存后立即生效</p></div></div>
+      <form id="settingsForm" onsubmit="return saveSettings(event)">
+        <div class="card"><h4 class="card-title">基本</h4><div class="form-grid"><label>服务器名称<input name="serverName"></label><label>新用户默认音质<select name="defaultQuality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label>聚合搜索平台及顺序<input name="searchSources" placeholder="wy,tx,kw,kg,mg"><small>逗号分隔，按填写顺序合并结果</small></label><label>每平台搜索条数<input name="searchLimit" type="number" min="1" max="100"></label></div></div>
+        <div class="card"><h4 class="card-title">播放与缓存</h4><div class="form-grid"><label>播放方式<select name="streamMode"><option value="redirect">302 重定向到音源直链（推荐）</option><option value="proxy">服务端代理转发</option></select></label><label>封面方式<select name="coverMode"><option value="redirect">302 重定向</option><option value="proxy">服务端代理</option></select></label><label>直链缓存<input name="urlCacheTTL" type="number" min="0"><small>秒，0 表示不缓存</small></label><label>搜索缓存<input name="searchCacheTTL" type="number" min="0"><small>秒，0 表示不缓存</small></label><label>歌手页最多歌曲<input name="artistSongLimit" type="number" min="1" max="100"><small>默认 30；不会再自动跨平台扩展搜索</small></label><label>歌手页最多专辑<input name="artistAlbumLimit" type="number" min="1" max="50"><small>默认 12，限制客户端级联拉取</small></label></div></div>
+        <div class="card"><h4 class="card-title">榜单与歌单</h4><label class="switch"><span>在在线音乐目录和歌单中展示平台榜单<small>列表会展示所选平台返回的全部榜单名称；打开具体榜单后才加载歌曲。歌曲浏览只进入内存缓存，不会造成持久化元数据膨胀。</small></span><input type="checkbox" name="showBoards"></label><div class="form-grid"><label>榜单平台<input name="boardSources" placeholder="wy,tx,kw,kg,mg"><small>逗号分隔；每个平台的榜单目录均为全量展示</small></label></div><label class="switch"><span>新建歌单默认公开<small>其他用户可见</small></span><input type="checkbox" name="publicPlaylists"></label></div>
+        <div class="form-actions"><button type="submit">保存设置</button><span id="settingsMsg" class="ok"></span></div>
+      </form>
+      <div class="card"><h4 class="card-title">元数据维护</h4><p class="muted hint">删除未被歌单、收藏、播放历史或收藏专辑引用的临时歌曲、专辑与歌手缓存，并压缩数据库。不会删除用户歌单和收藏。</p><button type="button" class="danger" onclick="cleanupMetadata()">清理无引用元数据</button></div>
+      <p class="muted hint">监听端口、数据目录、上游代理等启动项通过环境变量或 config.yaml 配置，修改后需重启。</p>
+    </section>
+
+    <section id="tab-search" class="tab admin-only">
+      <div class="page-head"><div><h2>搜索测试</h2><p>验证各平台搜索是否正常</p></div></div>
+      <form class="card toolbar" onsubmit="return doSearch(event)"><input name="query" placeholder="歌名 歌手" required class="grow"><select name="source"><option value="">全部平台</option><option value="wy">网易云</option><option value="tx">QQ音乐</option><option value="kw">酷我</option><option value="kg">酷狗</option><option value="mg">咪咕</option></select><button type="submit"><svg class="icon"><use href="#i-search"/></svg>搜索</button></form>
+      <div class="table-wrap"><table id="searchTable"><thead><tr><th>平台</th><th>歌名</th><th>歌手</th><th>专辑</th><th>音质</th><th>ID</th></tr></thead><tbody><tr><td colspan="6" class="muted center">输入关键词开始搜索</td></tr></tbody></table></div>
+    </section>
+
+    <section id="tab-logs" class="tab admin-only">
+      <div class="page-head"><div><h2>日志</h2><p>最近 300 条服务日志</p></div><button class="sec" onclick="loadLogs()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
+      <div id="logBox" class="logbox"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="userDialog"><form method="dialog" class="dialog-form" onsubmit="return submitUser(event)"><h3>编辑用户</h3><input type="hidden" name="id"><label>用户名<input name="name" required></label><label>新密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label><label>默认音质<select name="quality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label class="switch"><span>管理员</span><input type="checkbox" name="isAdmin"></label><div class="dialog-actions"><button type="button" class="sec" onclick="$('#userDialog').close()">取消</button><button type="submit">保存</button></div></form></dialog>
+<dialog id="keyDialog"><div class="dialog-form"><h3>API Key</h3><p class="muted">用于 OpenSubsonic 的 <code>apiKey</code> 参数，仅显示一次，请妥善保存。</p><div class="kv"><input id="keyValue" readonly class="mono"><button type="button" class="sec" onclick="copyText($('#keyValue').value)"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="dialog-actions"><button type="button" onclick="$('#keyDialog').close()">关闭</button></div></div></dialog>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+services:
+  lxsc:
+    image: lxsc:latest
+    build: .
+    container_name: lxsc
+    restart: unless-stopped
+    ports:
+      - "27880:8080"   # 主机端口:容器端口，容器内仍监听 8080
+    volumes:
+      - ./data:/data          # 数据库、密钥、config.yaml；把音源脚本放到 ./data/sources/*.js 会自动导入
+    environment:
+      - LXSC_ADMIN_USER=admin
+      - LXSC_ADMIN_PASSWORD=admin   # 首次启动创建管理员，之后请在管理页修改
+      # - LXSC_PROXY=http://127.0.0.1:7890
+      # - LXSC_SDK_WORKERS=2
+      # - LXSC_LOG_LEVEL=info

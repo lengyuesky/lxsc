@@ -1,0 +1,9 @@
+# lxsc 启动配置（放到数据目录 config.yaml 或用 --config 指定；环境变量 LXSC_* 优先级更高）
+listen: ":8080"
+data_dir: "./data"
+admin_user: "admin"
+admin_password: "admin"      # 仅首次启动创建管理员时使用
+proxy: ""                    # 上游代理，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
+sdk_workers: 2               # 搜索/歌词等 SDK 的 JS 工作线程数
+log_level: "info"            # debug / info / warn / error
+secret_key: ""               # 口令加密密钥，留空自动生成到 data_dir/secret.key

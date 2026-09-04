@@ -1,0 +1,184 @@
+// Package settings 管理运行时可修改的设置（存于 SQLite settings 表，内存缓存）
+package settings
+
+import (
+	"context"
+	"encoding/json"
+	"strconv"
+	"strings"
+	"sync"
+
+	"lxsc/internal/db"
+)
+
+// Values 运行时设置
+type Values struct {
+	SearchSources    []string `json:"searchSources"`    // 聚合搜索的平台及顺序
+	StreamMode       string   `json:"streamMode"`       // redirect / proxy
+	CoverMode        string   `json:"coverMode"`        // redirect / proxy
+	URLCacheTTL      int      `json:"urlCacheTTL"`      // 直链缓存秒数
+	SearchCacheTTL   int      `json:"searchCacheTTL"`   // 搜索缓存秒数
+	DefaultQuality   string   `json:"defaultQuality"`   // 新用户默认音质
+	ShowBoards       bool     `json:"showBoards"`       // 是否在在线音乐目录展示榜单
+	BoardSources     []string `json:"boardSources"`     // 展示榜单的平台
+	BoardLimit       int      `json:"boardLimit"`       // 旧字段，仅后端兼容读取
+	BoardTrackLimit  int      `json:"boardTrackLimit"`  // 旧字段，仅后端兼容读取
+	ArtistSongLimit  int      `json:"artistSongLimit"`  // 歌手页最多歌曲数
+	ArtistAlbumLimit int      `json:"artistAlbumLimit"` // 歌手页最多专辑数
+	SearchLimit      int      `json:"searchLimit"`      // 每平台每次搜索条数
+	PublicPlaylists  bool     `json:"publicPlaylists"`  // 新建歌单默认公开
+	ServerName       string   `json:"serverName"`
+}
+
+// Defaults 默认值
+func Defaults() Values {
+	return Values{
+		SearchSources:    []string{"wy", "tx", "kw", "kg", "mg"},
+		StreamMode:       "redirect",
+		CoverMode:        "redirect",
+		URLCacheTTL:      900,
+		SearchCacheTTL:   600,
+		DefaultQuality:   "320k",
+		ShowBoards:       true,
+		BoardSources:     []string{"wy", "tx", "kw", "kg", "mg"},
+		BoardLimit:       3,
+		BoardTrackLimit:  30,
+		ArtistSongLimit:  30,
+		ArtistAlbumLimit: 12,
+		SearchLimit:      20,
+		ServerName:       "lxsc",
+	}
+}
+
+// Store 设置存储
+type Store struct {
+	mu  sync.RWMutex
+	db  *db.DB
+	cur Values
+}
+
+// New 从数据库加载
+func New(ctx context.Context, d *db.DB) (*Store, error) {
+	s := &Store{db: d, cur: Defaults()}
+	all, err := d.AllSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.cur = apply(s.cur, all)
+	return s, nil
+}
+
+func apply(v Values, m map[string]string) Values {
+	for k, val := range m {
+		switch k {
+		case "searchSources":
+			v.SearchSources = splitList(val)
+		case "streamMode":
+			if val == "proxy" || val == "redirect" {
+				v.StreamMode = val
+			}
+		case "coverMode":
+			if val == "proxy" || val == "redirect" {
+				v.CoverMode = val
+			}
+		case "urlCacheTTL":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				v.URLCacheTTL = n
+			}
+		case "searchCacheTTL":
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				v.SearchCacheTTL = n
+			}
+		case "defaultQuality":
+			if val != "" {
+				v.DefaultQuality = val
+			}
+		case "showBoards":
+			v.ShowBoards = val == "true" || val == "1"
+		case "boardSources":
+			v.BoardSources = splitList(val)
+		case "boardLimit":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 20 {
+				v.BoardLimit = n
+			}
+		case "boardTrackLimit":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+				v.BoardTrackLimit = n
+			}
+		case "artistSongLimit":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+				v.ArtistSongLimit = n
+			}
+		case "artistAlbumLimit":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 50 {
+				v.ArtistAlbumLimit = n
+			}
+		case "searchLimit":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 100 {
+				v.SearchLimit = n
+			}
+		case "publicPlaylists":
+			v.PublicPlaylists = val == "true" || val == "1"
+		case "serverName":
+			if val != "" {
+				v.ServerName = val
+			}
+		}
+	}
+	return v
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Get 当前设置快照
+func (s *Store) Get() Values {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cur
+}
+
+// Update 以 JSON 对象更新（仅更新提供的字段），并持久化
+func (s *Store) Update(ctx context.Context, patch map[string]json.RawMessage) (Values, error) {
+	m := map[string]string{}
+	for k, raw := range patch {
+		var str string
+		if err := json.Unmarshal(raw, &str); err == nil {
+			m[k] = str
+			continue
+		}
+		var b bool
+		if err := json.Unmarshal(raw, &b); err == nil {
+			m[k] = strconv.FormatBool(b)
+			continue
+		}
+		var n float64
+		if err := json.Unmarshal(raw, &n); err == nil {
+			m[k] = strconv.Itoa(int(n))
+			continue
+		}
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err == nil {
+			m[k] = strings.Join(arr, ",")
+			continue
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := apply(s.cur, m)
+	for k, v := range m {
+		if err := s.db.SetSetting(ctx, k, v); err != nil {
+			return s.cur, err
+		}
+	}
+	s.cur = next
+	return s.cur, nil
+}

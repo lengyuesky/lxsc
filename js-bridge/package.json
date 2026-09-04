@@ -1,0 +1,14 @@
+{
+  "name": "lxsc-js-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run build.ts"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3"
+  }
+}

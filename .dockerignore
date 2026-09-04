@@ -1,0 +1,4 @@
+data/
+js-bridge/node_modules/
+.git/
+*.db
