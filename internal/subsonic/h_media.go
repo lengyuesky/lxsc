@@ -54,12 +54,25 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, persistPlayb
 		return
 	}
 	quality := pickQuality(r, u.Quality)
-	ctx, cancel := context.WithTimeout(rc.ctx, 45*time.Second)
-	defer cancel()
-	res, err := s.Catalog.ResolveURL(ctx, in, quality)
+	remaining := 45 * time.Second
+	resolve := func(failed *music.URLResolution) (music.URLResolution, error) {
+		started := time.Now()
+		ctx, cancel := context.WithTimeout(rc.ctx, remaining)
+		defer func() {
+			cancel()
+			remaining -= time.Since(started)
+		}()
+		if failed != nil {
+			return s.Catalog.RefreshPlaybackURL(ctx, in, *failed)
+		}
+		return s.Catalog.ResolvePlaybackURL(ctx, in, quality)
+	}
+	res, err := resolve(nil)
 	if err != nil {
-		s.Log.Warn("获取直链失败", "id", id, "quality", quality, "err", err)
-		writeErr(w, r, ErrGeneric, "无法获取播放地址: "+err.Error())
+		s.Log.Warn("获取直链失败", "id", id, "quality", quality)
+		if r.Context().Err() == nil {
+			writeErr(w, r, ErrGeneric, "无法获取播放地址")
+		}
 		return
 	}
 	persist := func() {
@@ -70,17 +83,17 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, persistPlayb
 			s.Log.Warn("持久化播放歌曲元数据失败", "id", id, "err", err)
 		}
 	}
-	s.Log.Info("播放", "user", u.Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", res.Quality, "via", res.Source)
 	if s.Settings.Get().StreamMode == "proxy" || param(r, "proxy") == "1" {
-		if s.proxyStream(w, r, in, res.URL, res.Quality) {
+		if s.proxyStream(w, r, in, res, func(failed music.URLResolution) (music.URLResolution, error) { return resolve(&failed) }) {
 			persist()
 		}
 		return
 	}
 	// 重定向成功即可交由客户端直连上游，此时记录播放。
+	s.Log.Info("播放", "user", u.Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", res.Result.Quality, "via", res.Result.Source)
 	persist()
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, res.URL, http.StatusFound)
+	http.Redirect(w, r, res.Result.URL, http.StatusFound)
 }
 
 // refererFor 为部分平台的 CDN 添加 Referer/UA
@@ -101,27 +114,62 @@ func refererFor(source string) (referer, ua string) {
 	return
 }
 
-func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.Info, url, quality string) bool {
+// openMedia 只请求响应头，不向客户端提交内容，为限次恢复保留空间。
+func (s *Server) openMedia(r *http.Request, in *music.Info, url string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
 	if err != nil {
-		writeErr(w, r, ErrGeneric, err.Error())
-		return false
+		return nil, err
 	}
 	ref, ua := refererFor(in.Source())
 	req.Header.Set("User-Agent", ua)
 	if ref != "" {
 		req.Header.Set("Referer", ref)
 	}
-	if rg := r.Header.Get("Range"); rg != "" {
-		req.Header.Set("Range", rg)
+	for _, h := range []string{"Range", "If-Range"} {
+		if value := r.Header.Get(h); value != "" {
+			req.Header.Set(h, value)
+		}
 	}
-	resp, err := s.HTTP.Do(req)
-	if err != nil {
-		writeErr(w, r, ErrGeneric, "上游请求失败: "+err.Error())
-		return false
+	return s.HTTP.Do(req)
+}
+
+func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.Info, resolution music.URLResolution, refresh func(music.URLResolution) (music.URLResolution, error)) bool {
+	var resp *http.Response
+	for attempt := 0; attempt < 2; attempt++ {
+		if r.Context().Err() != nil {
+			return false
+		}
+		var err error
+		resp, err = s.openMedia(r, in, resolution.Result.URL)
+		if err != nil {
+			// http 错误可能包含签名 URL，只记录阶段，不输出原始错误。
+			s.Log.Warn("代理上游请求失败", "id", in.TrackID(), "attempt", attempt+1)
+			if r.Context().Err() == nil {
+				writeErr(w, r, ErrGeneric, "上游请求失败")
+			}
+			return false
+		}
+		if attempt == 0 && (resp.StatusCode == 403 || resp.StatusCode == 404 || resp.StatusCode == 410) {
+			_ = resp.Body.Close()
+			s.Log.Info("直链失效，尝试刷新", "id", in.TrackID(), "status", resp.StatusCode)
+			resolution, err = refresh(resolution)
+			if err != nil {
+				s.Log.Warn("直链刷新失败", "id", in.TrackID())
+				if r.Context().Err() == nil {
+					writeErr(w, r, ErrGeneric, "重新获取播放地址失败")
+				}
+				return false
+			}
+			continue
+		}
+		break
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if r.Context().Err() != nil {
+		return false
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
+		s.Log.Warn("代理上游响应失败", "id", in.TrackID(), "status", resp.StatusCode)
 		writeErr(w, r, ErrGeneric, "上游返回 "+strconv.Itoa(resp.StatusCode))
 		return false
 	}
@@ -130,14 +178,22 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 			w.Header().Set(h, v)
 		}
 	}
-	if w.Header().Get("Content-Type") == "" || strings.HasPrefix(w.Header().Get("Content-Type"), "application/octet") {
-		_, _, ct := music.QualityMeta(quality)
+	if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable && (w.Header().Get("Content-Type") == "" || strings.HasPrefix(w.Header().Get("Content-Type"), "application/octet")) {
+		_, _, ct := music.QualityMeta(resolution.Result.Quality)
 		w.Header().Set("Content-Type", ct)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
-	return err == nil
+	_, err := io.Copy(w, resp.Body)
+	if err != nil || r.Context().Err() != nil {
+		s.Log.Info("代理传输中断", "id", in.TrackID())
+		return false
+	}
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		return false
+	}
+	s.Log.Info("播放", "user", currentUser(r).Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", resolution.Result.Quality, "via", resolution.Result.Source)
+	return true
 }
 
 func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {

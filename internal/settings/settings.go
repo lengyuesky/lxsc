@@ -4,12 +4,27 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"lxsc/internal/db"
 )
+
+// ErrInvalidSetting 表示设置值不合法，可由 HTTP 层映射为 400。
+var ErrInvalidSetting = errors.New("设置值不合法")
+
+// parseTTL 同时限制 Duration 和当前平台 int 的范围，不截断小数。
+func parseTTL(value string) (int, error) {
+	n, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || n > uint64((1<<63-1)/time.Second) || n > uint64(^uint(0)>>1) {
+		return 0, ErrInvalidSetting
+	}
+	return int(n), nil
+}
 
 // Values 运行时设置
 type Values struct {
@@ -82,11 +97,11 @@ func apply(v Values, m map[string]string) Values {
 				v.CoverMode = val
 			}
 		case "urlCacheTTL":
-			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+			if n, err := parseTTL(val); err == nil {
 				v.URLCacheTTL = n
 			}
 		case "searchCacheTTL":
-			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+			if n, err := parseTTL(val); err == nil {
 				v.SearchCacheTTL = n
 			}
 		case "defaultQuality":
@@ -143,13 +158,32 @@ func splitList(s string) []string {
 func (s *Store) Get() Values {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cur
+	return cloneValues(s.cur)
+}
+
+func cloneValues(v Values) Values {
+	v.SearchSources = append([]string(nil), v.SearchSources...)
+	v.BoardSources = append([]string(nil), v.BoardSources...)
+	return v
 }
 
 // Update 以 JSON 对象更新（仅更新提供的字段），并持久化
 func (s *Store) Update(ctx context.Context, patch map[string]json.RawMessage) (Values, error) {
 	m := map[string]string{}
 	for k, raw := range patch {
+		if k == "urlCacheTTL" || k == "searchCacheTTL" {
+			value := strings.TrimSpace(string(raw))
+			var str string
+			if json.Unmarshal(raw, &str) == nil {
+				value = str
+			}
+			n, err := parseTTL(value)
+			if err != nil {
+				return s.Get(), fmt.Errorf("%w: %s 必须是范围内的非负整数秒数", ErrInvalidSetting, k)
+			}
+			m[k] = strconv.Itoa(n)
+			continue
+		}
 		var str string
 		if err := json.Unmarshal(raw, &str); err == nil {
 			m[k] = str
@@ -174,11 +208,9 @@ func (s *Store) Update(ctx context.Context, patch map[string]json.RawMessage) (V
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := apply(s.cur, m)
-	for k, v := range m {
-		if err := s.db.SetSetting(ctx, k, v); err != nil {
-			return s.cur, err
-		}
+	if err := s.db.SetSettings(ctx, m); err != nil {
+		return cloneValues(s.cur), err
 	}
 	s.cur = next
-	return s.cur, nil
+	return cloneValues(s.cur), nil
 }

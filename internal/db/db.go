@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -118,6 +119,26 @@ func (d *DB) GetSetting(ctx context.Context, key, def string) string {
 func (d *DB) SetSetting(ctx context.Context, key, value string) error {
 	_, err := d.sql.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
+}
+
+// SetSettings 原子写入一批设置，任一写入失败都会回滚。
+func (d *DB) SetSettings(ctx context.Context, values map[string]string) error {
+	tx, err := d.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, values[key]); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // AllSettings 读取全部设置

@@ -40,8 +40,11 @@ type Catalog struct {
 	observeMu       sync.RWMutex
 	observer        func(RemoteRequest)
 	remoteCall      func(context.Context, string, ...any) (json.RawMessage, error)
-	urls            *lru.LRU[string, *js.MusicURLResult]
-	search          *lru.LRU[string, []*Info]
+	configMu        sync.Mutex
+	urls            *requestCache[urlKey, js.MusicURLResult]
+	search          *requestCache[searchKey, []*Info]
+	searchCall      func(context.Context, string, ...any) (json.RawMessage, error)
+	urlCall         func(context.Context, string, any, string) (*js.MusicURLResult, error)
 	lyrics          *lru.LRU[string, *Lyrics]
 	generic         *lru.LRU[string, json.RawMessage]
 }
@@ -49,7 +52,7 @@ type Catalog struct {
 // NewCatalog 创建
 func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.Store, log *slog.Logger) *Catalog {
 	v := st.Get()
-	return &Catalog{
+	c := &Catalog{
 		DB: d, SDK: sdk, Sources: src, Settings: st, Log: log,
 		tracks:          lru.NewLRU[string, *Info](5000, nil, time.Hour),
 		albums:          lru.NewLRU[string, []*Info](2000, nil, time.Hour),
@@ -62,11 +65,24 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		albumMetadata:   lru.NewLRU[string, AlbumMeta](4000, nil, time.Hour),
 		boardNames:      lru.NewLRU[string, string](2000, nil, 30*time.Minute),
 		failures:        lru.NewLRU[string, string](500, nil, 30*time.Second),
-		urls:            lru.NewLRU[string, *js.MusicURLResult](2000, nil, time.Duration(max(v.URLCacheTTL, 30))*time.Second),
-		search:          lru.NewLRU[string, []*Info](500, nil, time.Duration(max(v.SearchCacheTTL, 30))*time.Second),
+		urls:            newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
+		search:          newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:          lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
 		generic:         lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
 	}
+	c.searchCall = func(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
+		if c.SDK == nil {
+			return nil, errors.New("sdk 未初始化")
+		}
+		return c.SDK.CallRaw(ctx, path, args...)
+	}
+	c.urlCall = func(ctx context.Context, platform string, info any, quality string) (*js.MusicURLResult, error) {
+		if c.Sources == nil {
+			return nil, errors.New("音源未初始化")
+		}
+		return c.Sources.MusicURL(ctx, platform, info, quality)
+	}
+	return c
 }
 
 // rememberRows 写入内存缓存并生成待落库的行
@@ -278,22 +294,65 @@ func (c *Catalog) fetchInfo(ctx context.Context, source, key string) (*Info, err
 	return FromMap(m), nil
 }
 
-// ResolveURL 获取直链（带缓存）
+type urlKey struct {
+	trackID string
+	quality string
+}
+
+// URLResolution 携带不透明的缓存版本，用于失败后的条件刷新。
+// Result 为值拷贝，调用者不能修改缓存内的解析结果。
+type URLResolution struct {
+	Result js.MusicURLResult
+	key    urlKey
+	token  cacheToken
+}
+
+// ResolveURL 保留已有取链接口。
 func (c *Catalog) ResolveURL(ctx context.Context, in *Info, quality string) (*js.MusicURLResult, error) {
-	if quality == "" {
-		quality = c.Settings.Get().DefaultQuality
-	}
-	quality = SelectQuality(quality, in.Qualities())
-	key := in.TrackID() + "|" + quality
-	if r, ok := c.urls.Get(key); ok {
-		return r, nil
-	}
-	r, err := c.Sources.MusicURL(ctx, in.Source(), c.ScriptInfo(in), quality)
+	r, err := c.ResolvePlaybackURL(ctx, in, quality)
 	if err != nil {
 		return nil, err
 	}
-	c.urls.Add(key, r)
-	return r, nil
+	return &r.Result, nil
+}
+
+// ResolvePlaybackURL 获取直链和对应的版本标识。
+func (c *Catalog) ResolvePlaybackURL(ctx context.Context, in *Info, quality string) (URLResolution, error) {
+	if quality == "" {
+		quality = c.Settings.Get().DefaultQuality
+	}
+	key := urlKey{trackID: in.TrackID(), quality: SelectQuality(quality, in.Qualities())}
+	return c.resolvePlaybackURL(ctx, in, key, nil)
+}
+
+// RefreshPlaybackURL 仅失效失败请求所使用的版本，复用其他请求刚刷新的结果。
+func (c *Catalog) RefreshPlaybackURL(ctx context.Context, in *Info, failed URLResolution) (URLResolution, error) {
+	if failed.key.trackID != in.TrackID() {
+		return URLResolution{}, errors.New("直链刷新歌曲不匹配")
+	}
+	return c.resolvePlaybackURL(ctx, in, failed.key, &failed.token)
+}
+
+func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, key urlKey, failed *cacheToken) (URLResolution, error) {
+	r, err := c.urls.load(ctx, key, failed, 45*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
+		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), key.quality)
+		if remoteCtx.Err() != nil {
+			err = remoteCtx.Err()
+		}
+		if err != nil {
+			return js.MusicURLResult{}, false, err
+		}
+		if value == nil || value.URL == "" {
+			return js.MusicURLResult{}, false, errors.New("音源返回空播放地址")
+		}
+		return *value, true, nil
+	})
+	return URLResolution{Result: r.value, key: key, token: r.token}, err
+}
+
+// InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
+func (c *Catalog) InvalidateURLs() {
+	c.urls.purge()
 }
 
 // scriptInfo 传给音源脚本的 musicInfo：扁平字段 + meta 结构（兼容两种脚本写法）
@@ -336,7 +395,14 @@ type SearchOptions struct {
 	Limit   int
 }
 
-// Search 聚合搜索：并发请求各平台，按平台顺序交错合并
+type searchKey struct {
+	query   string
+	sources string
+	page    int
+	limit   int
+}
+
+// Search 聚合搜索：并发请求各平台，按平台顺序交错合并。
 func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) []*Info {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -351,13 +417,25 @@ func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) 
 	if len(opts.Sources) == 0 {
 		opts.Sources = c.Settings.Get().SearchSources
 	}
-	key := fmt.Sprintf("%s|%s|%d|%d", strings.Join(opts.Sources, ","), query, opts.Page, opts.Limit)
-	if r, ok := c.search.Get(key); ok {
-		return r
+	opts.Sources = append([]string(nil), opts.Sources...)
+	encodedSources, _ := json.Marshal(opts.Sources)
+	key := searchKey{query: query, sources: string(encodedSources), page: opts.Page, limit: opts.Limit}
+	r, err := c.search.load(ctx, key, nil, 15*time.Second, func(remoteCtx context.Context) ([]*Info, bool, error) {
+		return c.searchPlatforms(remoteCtx, query, opts)
+	})
+	if err != nil {
+		return nil
 	}
+	c.Cache(r.value)
+	c.rememberArtistRefs(r.value, true)
+	return append([]*Info(nil), r.value...)
+}
+
+func (c *Catalog) searchPlatforms(ctx context.Context, query string, opts SearchOptions) ([]*Info, bool, error) {
 	type res struct {
 		idx  int
 		list []*Info
+		err  error
 	}
 	ch := make(chan res, len(opts.Sources))
 	for i, s := range opts.Sources {
@@ -367,9 +445,15 @@ func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) 
 			var out struct {
 				List []map[string]any `json:"list"`
 			}
-			if err := c.SDK.Call(cctx, s+".musicSearch.search", &out, query, opts.Page, opts.Limit); err != nil {
-				c.Log.Debug("搜索失败", "source", s, "err", err)
-				ch <- res{i, nil}
+			raw, err := c.searchCall(cctx, s+".musicSearch.search", query, opts.Page, opts.Limit)
+			if err == nil {
+				err = json.Unmarshal(raw, &out)
+			}
+			if err != nil {
+				if c.Log != nil {
+					c.Log.Debug("搜索失败", "source", s, "err", err)
+				}
+				ch <- res{idx: i, err: err}
 				return
 			}
 			list := make([]*Info, 0, len(out.List))
@@ -382,13 +466,15 @@ func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) 
 				}
 				list = append(list, FromMap(m))
 			}
-			ch <- res{i, list}
+			ch <- res{idx: i, list: list}
 		}(i, s)
 	}
 	lists := make([][]*Info, len(opts.Sources))
+	complete := true
 	for range opts.Sources {
 		r := <-ch
 		lists[r.idx] = r.list
+		complete = complete && r.err == nil
 	}
 	var merged []*Info
 	for {
@@ -404,12 +490,7 @@ func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) 
 			break
 		}
 	}
-	c.Cache(merged)
-	c.rememberArtistRefs(merged, true)
-	if len(merged) > 0 {
-		c.search.Add(key, merged)
-	}
-	return merged
+	return merged, complete && len(merged) > 0, nil
 }
 
 // Board 榜单
@@ -604,7 +685,8 @@ func (c *Catalog) Cover(ctx context.Context, in *Info) string {
 	if pic != "" {
 		b, _ := json.Marshal(pic)
 		c.generic.Add(key, b)
-		in.Raw["img"] = pic
+		// 歌曲元数据被搜索、封面和取链请求共享，不能在这里修改 Raw。
+		// 封面结果只保存在独立缓存中。
 	}
 	return pic
 }
@@ -622,13 +704,15 @@ func (c *Catalog) PurgeMetadataCaches() {
 	c.albumMetadata.Purge()
 	c.boardNames.Purge()
 	c.failures.Purge()
-	c.search.Purge()
+	c.search.purge()
 	c.generic.Purge()
 }
 
-// RefreshTTL 设置变更后更新缓存 TTL（重新建缓存）
+// RefreshTTL 幂等地应用最新 TTL，仅失效发生变化的缓存。
 func (c *Catalog) RefreshTTL() {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
 	v := c.Settings.Get()
-	c.urls = lru.NewLRU[string, *js.MusicURLResult](2000, nil, time.Duration(max(v.URLCacheTTL, 30))*time.Second)
-	c.search = lru.NewLRU[string, []*Info](500, nil, time.Duration(max(v.SearchCacheTTL, 30))*time.Second)
+	c.urls.configure(time.Duration(v.URLCacheTTL) * time.Second)
+	c.search.configure(time.Duration(v.SearchCacheTTL) * time.Second)
 }

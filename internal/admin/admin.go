@@ -168,6 +168,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	v, err := s.Settings.Update(r.Context(), patch)
 	if err != nil {
+		if errors.Is(err, settings.ErrInvalidSetting) {
+			fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		fail(w, 500, err.Error())
 		return
 	}
@@ -376,6 +380,7 @@ func (s *Server) AddSource(ctx context.Context, script, name string, priority in
 	if err != nil {
 		return nil, nil, err
 	}
+	defer s.Catalog.InvalidateURLs()
 	st, lerr := s.Sources.Load(ctx, src.ID, src.Priority, script)
 	if lerr != nil {
 		s.Log.Warn("音源加载失败（已保存，可稍后重试）", "name", name, "err", lerr)
@@ -470,16 +475,30 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
-	src, _ = s.DB.GetSource(r.Context(), id)
+	invalidateURLs := upd.Enabled != src.Enabled || upd.Priority != src.Priority || upd.Script != ""
+	defer func() {
+		if invalidateURLs {
+			s.Catalog.InvalidateURLs()
+		}
+	}()
+	src, err = s.DB.GetSource(r.Context(), id)
+	if err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
 	var st *js.SourceStatus
 	if src.Enabled {
 		if body.Script != nil || s.Sources.StatusOf(id) == nil {
+			invalidateURLs = true
 			st, _ = s.Sources.Load(r.Context(), id, src.Priority, src.Script)
 		} else {
 			s.Sources.SetPriority(id, src.Priority)
 			st = s.Sources.StatusOf(id)
 		}
 	} else {
+		if s.Sources.StatusOf(id) != nil {
+			invalidateURLs = true
+		}
 		s.Sources.Unload(id)
 	}
 	writeJSON(w, 200, sourceView{Source: src, Status: st})
@@ -487,6 +506,7 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	defer s.Catalog.InvalidateURLs()
 	s.Sources.Unload(id)
 	if err := s.DB.DeleteSource(r.Context(), id); err != nil {
 		fail(w, 500, err.Error())
@@ -502,6 +522,7 @@ func (s *Server) reloadSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "不存在")
 		return
 	}
+	defer s.Catalog.InvalidateURLs()
 	st, lerr := s.Sources.Load(r.Context(), id, src.Priority, src.Script)
 	out := map[string]any{"status": st}
 	if lerr != nil {
