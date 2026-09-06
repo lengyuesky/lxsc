@@ -1,23 +1,36 @@
 // lxsc 统一控制台脚本（无框架）
 const $ = s => document.querySelector(s)
+const sessionState = { me: null, defaultPublic: false, epoch: 0, requests: new Set() }
+const isAbort = error => error?.name === 'AbortError'
 const requestAPI = async (base, path, opts = {}) => {
-  const o = { headers: {}, ...opts }
-  if (o.body && !(o.body instanceof FormData)) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(o.body) }
-  const r = await fetch(base + path, o)
-  const d = await r.json().catch(() => ({}))
-  if (r.status === 401 && path !== '/login') showLogin()
-  if (!r.ok) throw new Error(d.error || r.statusText)
-  return d
+  const epoch = sessionState.epoch, controller = new AbortController()
+  const abort = () => controller.abort()
+  if (opts.signal?.aborted) abort()
+  else opts.signal?.addEventListener('abort', abort, { once: true })
+  sessionState.requests.add(controller)
+  try {
+    const o = { ...opts, headers: { ...opts.headers }, credentials: 'same-origin', signal: controller.signal }
+    if (o.body && !(o.body instanceof FormData)) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(o.body) }
+    const r = await fetch(base + path, o)
+    const d = await r.json().catch(() => ({}))
+    if (epoch !== sessionState.epoch || controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError')
+    if (r.status === 401 && path !== '/login') showLogin()
+    if (!r.ok) { const error = new Error(d.error || r.statusText); error.status = r.status; throw error }
+    return d
+  } finally {
+    sessionState.requests.delete(controller)
+    opts.signal?.removeEventListener('abort', abort)
+  }
 }
 const authAPI = (path, opts) => requestAPI('/api/auth', path, opts)
 const adminAPI = (path, opts) => requestAPI('/api/admin', path, opts)
 const playlistAPI = (path, opts) => requestAPI('/api/app', path, opts)
-const sessionState = { me: null, defaultPublic: false }
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
 const platName = { wy: '网易云', tx: 'QQ音乐', kw: '酷我', kg: '酷狗', mg: '咪咕', local: '本地' }
 
 let toastTimer
 function toast(message, isError = false) {
+  if (!sessionState.me) return
   const box = $('#toast')
   box.textContent = message
   box.classList.toggle('err', isError)
@@ -33,12 +46,16 @@ function showLogin() {
   $('#login').classList.remove('hidden')
   $('#app').classList.add('hidden')
   sessionState.me = null
+  playlistState.me = null
+  resetMusicSession()
+  clearDetail()
 }
 function showApp() {
   $('#login').classList.add('hidden')
   $('#app').classList.remove('hidden')
 }
 async function initializeSession(data) {
+  resetMusicSession()
   sessionState.me = data.user
   sessionState.defaultPublic = !!data.defaultPublic
   document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !data.user.isAdmin))
@@ -76,11 +93,11 @@ function route() {
   if (!sessionState.me) return
   const fallback = sessionState.me.isAdmin ? 'dashboard' : 'playlists'
   let tab = (location.hash || '#' + fallback).slice(1)
-  if (!loaders[tab] || (!sessionState.me.isAdmin && tab !== 'playlists')) tab = fallback
+  if (!loaders[tab] || (!sessionState.me.isAdmin && !['playlists', 'search'].includes(tab))) tab = fallback
   if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab)
   document.querySelectorAll('nav a[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === tab))
   document.querySelectorAll('.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + tab))
-  ;(loaders[tab] || loaders[fallback])().catch?.(e => console.error(e))
+  Promise.resolve((loaders[tab] || loaders[fallback])()).catch(error => { if (!isAbort(error)) toast(error.message, true) })
 }
 window.addEventListener('hashchange', route)
 
@@ -370,19 +387,6 @@ async function cleanupMetadata() {
   } catch (err) { toast(err.message, true) }
 }
 
-// ---- 搜索测试 ----
-async function doSearch(e) {
-  e.preventDefault()
-  const f = new FormData(e.target)
-  const tb = $('#searchTable tbody')
-  tb.innerHTML = '<tr><td colspan="6" class="muted center">搜索中…</td></tr>'
-  try {
-    const r = await adminAPI('/search', { method: 'POST', body: { query: f.get('query'), sources: f.get('source') ? [f.get('source')] : [] } })
-    tb.innerHTML = r.length ? r.map(s => `<tr><td><span class="badge off">${esc(platName[s.source] || s.source)}</span></td><td><b>${esc(s.name)}</b></td><td>${esc(s.singer)}</td><td class="muted">${esc(s.album)}</td><td class="muted mono">${esc((s.qualities || []).join('/'))}</td><td><code>${esc(s.id)}</code></td></tr>`).join('') : '<tr><td colspan="6" class="muted center">无结果</td></tr>'
-  } catch (err) { tb.innerHTML = `<tr><td colspan="6" class="err center">${esc(err.message)}</td></tr>` }
-  return false
-}
-
 // ---- 日志 ----
 async function loadLogs() {
   const logs = await adminAPI('/logs?n=300')
@@ -399,6 +403,8 @@ const playlistState = {
   playlists: [],
   current: null,
   draftTracks: [],
+  draftRevision: '',
+  editVersion: 0,
   tracksDirty: false,
   metaDirty: false,
   searchResults: [],
@@ -423,7 +429,7 @@ async function initializePlaylists(data) {
   $('#ownerFilterWrap').classList.toggle('hidden', !playlistState.me.isAdmin)
   $('#ownerCreateWrap').classList.toggle('hidden', !playlistState.me.isAdmin)
   $('#importOwnerWrap').classList.toggle('hidden', !playlistState.me.isAdmin)
-  $('#qualitySelect').value = ['128k', '320k', 'flac', 'flac24bit'].includes(playlistState.me.quality) ? playlistState.me.quality : '320k'
+  syncQualityControls()
   $('#importForm').elements.public.checked = playlistState.defaultPublic
   resetImportForm()
   $('#createForm').elements.public.checked = playlistState.defaultPublic
@@ -455,9 +461,15 @@ function renderUserOptions() {
 async function loadPlaylists() {
   const selectedID = playlistState.current?.id
   const ownerID = playlistState.me?.isAdmin ? $('#ownerFilter').value : ''
-  playlistState.playlists = await playlistAPI('/playlists' + (ownerID ? '?ownerId=' + encodeURIComponent(ownerID) : ''))
+  const request = playlistListGate.begin()
+  let playlists
+  try { playlists = await playlistAPI('/playlists' + (ownerID ? '?ownerId=' + encodeURIComponent(ownerID) : ''), { signal: request.signal }) }
+  catch (error) { if (isAbort(error)) return false; throw error }
+  if (!request.current()) return false
+  playlistState.playlists = playlists
   renderPlaylistList()
-  if (selectedID && !playlistState.playlists.some(item => item.id === selectedID)) clearDetail()
+  if (selectedID && playlistState.current?.id === selectedID && !playlists.some(item => item.id === selectedID) && !playlistState.tracksDirty && !playlistState.metaDirty) clearDetail()
+  return true
 }
 
 function renderPlaylistList() {
@@ -479,20 +491,32 @@ function confirmDiscard() {
 async function selectPlaylist(id, force = false) {
   if (!force && playlistState.current?.id === id) return
   if (!force && !confirmDiscard()) return
-  const detail = await playlistAPI('/playlists/' + encodeURIComponent(id))
+  const request = playlistDetailGate.begin()
+  playlistDetailTarget = id
+  const editVersion = playlistState.editVersion
+  const detail = await playlistAPI('/playlists/' + encodeURIComponent(id), { signal: request.signal })
+  if (!request.current() || playlistState.editVersion !== editVersion) return false
+  playlistSearchGate.cancel()
   playlistState.current = detail
   playlistState.draftTracks = detail.tracks.map(track => ({ ...track }))
+  playlistState.draftRevision = detail.tracksRevision
   playlistState.tracksDirty = false
   playlistState.metaDirty = false
   playlistState.searchResults = []
   renderDetail()
   renderPlaylistList()
   updateImportMode()
+  return true
 }
 
 function clearDetail() {
+  playlistDetailGate.cancel()
+  playlistDetailTarget = ''
+  playlistState.editVersion++
+  playlistSearchGate.cancel()
   playlistState.current = null
   playlistState.draftTracks = []
+  playlistState.draftRevision = ''
   playlistState.tracksDirty = false
   playlistState.metaDirty = false
   playlistState.searchResults = []
@@ -526,21 +550,24 @@ function renderTracks() {
   const canEdit = !!playlistState.current?.canEdit
   $('#trackCount').textContent = `(${playlistState.draftTracks.length} 首)`
   $('#saveTracksButton').disabled = !canEdit || !playlistState.tracksDirty
+  renderCollectForm()
   document.querySelector('.tracks-card .track-tip').classList.toggle('hidden', !canEdit)
   const body = $('#trackTable')
   if (!playlistState.draftTracks.length) {
     body.innerHTML = `<tr><td colspan="6" class="muted">${canEdit ? '歌单还是空的，可从上方搜索添加歌曲。' : '该歌单暂无歌曲。'}</td></tr>`
     return
   }
-  body.innerHTML = playlistState.draftTracks.map((track, index) => `<tr class="track-row" data-track-index="${index}" draggable="${canEdit}">
+  body.innerHTML = playlistState.draftTracks.map((track, index) => `<tr class="track-row" data-track-index="${index}" data-playing-id="${esc(track.id)}" draggable="${canEdit}">
     <td>${index + 1}</td>
     <td class="${track.unavailable ? 'unavailable' : ''}"><div class="song-title">${esc(track.name)}</div>${track.unavailable ? `<div class="song-sub">${esc(track.id)}</div>` : ''}</td>
     <td>${esc(track.singer || '')}</td><td class="muted">${esc(track.album || '')}</td><td><span class="badge">${esc(platName[track.source] || track.source || '')}</span></td>
-    <td class="track-actions">${canEdit ? `<button type="button" title="上移" data-track-action="up" ${index === 0 ? 'disabled' : ''}><svg class="icon"><use href="#i-up"/></svg></button><button type="button" title="下移" data-track-action="down" ${index === playlistState.draftTracks.length - 1 ? 'disabled' : ''}><svg class="icon"><use href="#i-down"/></svg></button><button type="button" title="移除" class="remove" data-track-action="remove"><svg class="icon"><use href="#i-x"/></svg></button>` : ''}</td>
+    <td class="track-actions"><button type="button" title="播放" aria-label="播放 ${esc(track.name)}" data-track-action="play" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg></button>${canEdit ? `<button type="button" title="上移" data-track-action="up" ${index === 0 ? 'disabled' : ''}><svg class="icon"><use href="#i-up"/></svg></button><button type="button" title="下移" data-track-action="down" ${index === playlistState.draftTracks.length - 1 ? 'disabled' : ''}><svg class="icon"><use href="#i-down"/></svg></button><button type="button" title="移除" class="remove" data-track-action="remove"><svg class="icon"><use href="#i-x"/></svg></button>` : ''}</td>
   </tr>`).join('')
+  renderPlaybackMarkers()
 }
 
 function markTracksDirty() {
+  playlistState.editVersion++
   playlistState.tracksDirty = true
   renderTracks()
   renderSearchResults()
@@ -557,33 +584,22 @@ function renderSearchResults() {
   const box = $('#searchResults')
   if (!playlistState.searchResults.length) return
   const existing = new Set(playlistState.draftTracks.map(track => track.id))
-  box.innerHTML = '<div class="search-results">' + playlistState.searchResults.map(track => {
+  box.innerHTML = '<div class="search-results">' + playlistState.searchResults.map((track, index) => {
     const added = existing.has(track.id)
-    return `<div class="search-item"><div><div class="song-title">${esc(track.name)}</div><div class="song-sub">${esc(track.singer)} · ${esc(track.album)} · ${esc(platName[track.source] || track.source)}</div></div><button type="button" data-add-track="${esc(track.id)}" ${added ? 'disabled' : ''}>${added ? '已加入' : '加入'}</button></div>`
+    return `<div class="search-item" data-playing-id="${esc(track.id)}"><div><div class="song-title">${esc(track.name)}</div><div class="song-sub">${esc(track.singer)} · ${esc(track.album)} · ${esc(platName[track.source] || track.source)}</div></div><div class="search-item-actions"><button type="button" class="sec" data-play-playlist-search="${index}" ${track.unavailable ? 'disabled' : ''}>播放</button><button type="button" data-add-track="${esc(track.id)}" ${added ? 'disabled' : ''}>${added ? '已加入' : '加入草稿'}</button></div></div>`
   }).join('') + '</div>'
+  renderPlaybackMarkers()
 }
-
-$('#qualitySelect').addEventListener('change', async event => {
-  const select = event.currentTarget
-  const previous = playlistState.me?.quality || '320k'
-  try {
-    const user = await playlistAPI('/profile', { method: 'PUT', body: { quality: select.value } })
-    playlistState.me = user
-    sessionState.me = { ...sessionState.me, quality: user.quality }
-    toast('默认播放音质已保存，不可用时会自动向下降级')
-  } catch (error) {
-    select.value = previous
-    toast(error.message, true)
-  }
-})
 
 $('#refreshButton').addEventListener('click', async () => {
   if (!confirmDiscard()) return
-  playlistState.tracksDirty = false
-  playlistState.metaDirty = false
-  await loadPlaylists()
-  if (playlistState.current) await selectPlaylist(playlistState.current.id, true)
-  toast('已刷新')
+  try {
+    playlistState.tracksDirty = false
+    playlistState.metaDirty = false
+    if (!await loadPlaylists()) return
+    if (playlistState.current && !await selectPlaylist(playlistState.current.id, true)) return
+    toast('已刷新')
+  } catch (error) { if (!isAbort(error)) toast(error.message, true) }
 })
 
 $('#ownerFilter').addEventListener('change', async () => {
@@ -598,7 +614,7 @@ $('#ownerFilter').addEventListener('change', async () => {
 
 $('#playlistList').addEventListener('click', event => {
   const button = event.target.closest('[data-playlist-id]')
-  if (button) selectPlaylist(button.dataset.playlistId).catch(error => toast(error.message))
+  if (button) selectPlaylist(button.dataset.playlistId).catch(error => { if (!isAbort(error)) toast(error.message, true) })
 })
 
 $('#createForm').addEventListener('submit', async event => {
@@ -623,21 +639,28 @@ $('#createForm').addEventListener('submit', async event => {
 })
 
 $('#metaForm').addEventListener('input', () => {
-  if (playlistState.current?.canEdit) playlistState.metaDirty = true
+  if (playlistState.current?.canEdit) { playlistState.metaDirty = true; playlistState.editVersion++ }
+  renderCollectForm()
 })
 
 $('#metaForm').addEventListener('submit', async event => {
   event.preventDefault()
   if (!playlistState.current?.canEdit) return
-  const form = new FormData(event.currentTarget)
+  const form = new FormData(event.currentTarget), id = playlistState.current.id
+  const body = { name: form.get('name'), comment: form.get('comment'), public: form.get('public') === 'on' }
   try {
-    const updated = await playlistAPI('/playlists/' + encodeURIComponent(playlistState.current.id), { method: 'PUT', body: { name: form.get('name'), comment: form.get('comment'), public: form.get('public') === 'on' } })
-    playlistState.current = { ...updated, tracks: playlistState.current.tracks }
-    playlistState.metaDirty = false
+    const updated = await playlistAPI('/playlists/' + encodeURIComponent(id), { method: 'PUT', body })
+    invalidatePlaylistReads(id)
+    if (playlistState.current?.id === id) {
+      playlistState.current = { ...updated, tracks: playlistState.current.tracks, tracksRevision: playlistState.current.tracksRevision }
+      const fields = $('#metaForm').elements
+      playlistState.metaDirty = fields.name.value !== body.name || fields.comment.value !== body.comment || fields.public.checked !== body.public
+      if (!playlistState.metaDirty) renderDetail()
+      else renderCollectForm()
+    }
     await loadPlaylists()
-    renderDetail()
     toast('歌单信息已保存')
-  } catch (error) { toast(error.message) }
+  } catch (error) { if (!isAbort(error)) toast(error.message, true) }
 })
 
 $('#deleteButton').addEventListener('click', async () => {
@@ -650,32 +673,26 @@ $('#deleteButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message) }
 })
 
-$('#searchForm').addEventListener('submit', async event => {
-  event.preventDefault()
-  const form = new FormData(event.currentTarget)
-  const box = $('#searchResults')
-  box.innerHTML = '<p class="muted">搜索中…</p>'
-  try {
-    playlistState.searchResults = await playlistAPI('/search', { method: 'POST', body: { query: form.get('query'), sources: form.get('source') ? [form.get('source')] : [] } })
-    if (!playlistState.searchResults.length) box.innerHTML = '<p class="muted">没有找到歌曲</p>'
-    else renderSearchResults()
-  } catch (error) { box.innerHTML = `<p class="err">${esc(error.message)}</p>` }
-})
-
 $('#searchResults').addEventListener('click', event => {
+  const play = event.target.closest('[data-play-playlist-search]')
+  if (play && !play.disabled) { webPlayer.playList(playlistState.searchResults, Number(play.dataset.playPlaylistSearch)); return }
   const button = event.target.closest('[data-add-track]')
   if (!button || button.disabled) return
   const track = playlistState.searchResults.find(item => item.id === button.dataset.addTrack)
-  if (!track || playlistState.draftTracks.some(item => item.id === track.id)) return
+  if (!playlistState.current?.canEdit || !track || playlistState.draftTracks.some(item => item.id === track.id)) return
+  if (playlistState.draftTracks.length >= 2000) return toast('单个歌单最多包含 2000 首歌曲', true)
   playlistState.draftTracks.unshift({ ...track })
   markTracksDirty()
+  toast('已加入草稿，请保存歌曲变更')
 })
 
 $('#trackTable').addEventListener('click', event => {
   const button = event.target.closest('[data-track-action]')
-  if (!button) return
+  if (!button || button.disabled) return
   const row = button.closest('[data-track-index]')
   const index = Number(row.dataset.trackIndex)
+  if (button.dataset.trackAction === 'play') { webPlayer.playList(playlistState.draftTracks, index); return }
+  if (!playlistState.current?.canEdit) return
   switch (button.dataset.trackAction) {
     case 'up': moveTrack(index, index - 1); break
     case 'down': moveTrack(index, index + 1); break
@@ -684,6 +701,7 @@ $('#trackTable').addEventListener('click', event => {
 })
 
 $('#trackTable').addEventListener('dragstart', event => {
+  if (event.target.closest('button')) { event.preventDefault(); return }
   const row = event.target.closest('[data-track-index]')
   if (!row || !playlistState.current?.canEdit) return
   playlistState.dragIndex = Number(row.dataset.trackIndex)
@@ -713,16 +731,24 @@ $('#trackTable').addEventListener('dragend', () => {
 $('#saveTracksButton').addEventListener('click', async () => {
   if (!playlistState.current?.canEdit || !playlistState.tracksDirty) return
   try {
-    const updated = await playlistAPI('/playlists/' + encodeURIComponent(playlistState.current.id) + '/tracks', { method: 'PUT', body: { trackIds: playlistState.draftTracks.map(track => track.id) } })
+    const id = playlistState.current.id
+    const draft = playlistState.draftTracks.map(track => track.id)
+    const updated = await playlistAPI('/playlists/' + encodeURIComponent(id) + '/tracks', { method: 'PUT', body: { trackIds: draft, expectedRevision: playlistState.draftRevision } })
+    invalidatePlaylistReads(id)
+    if (playlistState.current?.id !== id) { await loadPlaylists(); return }
     playlistState.current = updated
-    playlistState.draftTracks = updated.tracks.map(track => ({ ...track }))
-    playlistState.tracksDirty = false
-    await loadPlaylists()
+    playlistState.draftRevision = updated.tracksRevision
+    // 请求发出后继续编辑的草稿不能被旧响应覆盖。
+    if (JSON.stringify(draft) === JSON.stringify(playlistState.draftTracks.map(track => track.id))) {
+      playlistState.draftTracks = updated.tracks.map(track => ({ ...track }))
+      playlistState.tracksDirty = false
+    }
     $('#detailOwner').textContent = `${updated.owner} · 创建于 ${formatTime(updated.createdAt)} · 更新于 ${formatTime(updated.updatedAt)}`
     renderTracks()
     renderSearchResults()
+    await loadPlaylists()
     toast('歌曲变更已保存')
-  } catch (error) { toast(error.message) }
+  } catch (error) { if (!isAbort(error)) toast(error.message, true) }
 })
 
 // ---- 导入洛雪歌单 ----
@@ -815,5 +841,4 @@ window.addEventListener('beforeunload', event => {
   event.preventDefault()
   event.returnValue = ''
 })
-// ---- 启动 ----
-authAPI('/me').then(initializeSession).catch(showLogin)
+// 登录初始化由最后加载的 music-ui.js 发起，确保音乐控件与会话清理已就绪。

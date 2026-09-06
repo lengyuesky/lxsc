@@ -274,7 +274,7 @@ func (c *Catalog) Tracks(ctx context.Context, ids []string) []*Info {
 
 // fetchInfo 通过平台接口按 ID 获取元数据
 func (c *Catalog) fetchInfo(ctx context.Context, source, key string) (*Info, error) {
-	if len(c.SDK.Workers()) == 0 {
+	if c.SDK == nil || len(c.SDK.Workers()) == 0 {
 		return nil, errors.New("sdk 未初始化")
 	}
 	raw, err := c.SDK.CallFn(ctx, "__sdk_info", source, key)

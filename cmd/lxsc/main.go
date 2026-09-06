@@ -162,7 +162,7 @@ func run(cfgPath string) error {
 	importDir(ctx, adminSrv, srcs, filepath.Join(cfg.DataDir, "sources"), log)
 
 	sub := &subsonic.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
-	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager}
+	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}
 	webFS, err := fs.Sub(assets.Web, "web")
 	if err != nil {
 		return err

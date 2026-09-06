@@ -26,7 +26,7 @@ import (
 const (
 	maxJSONBody       = 2 << 20
 	maxImportBody     = 40 << 20
-	maxPlaylistTracks = 2000
+	maxPlaylistTracks = db.MaxPlaylistTracks
 )
 
 // Server 用户歌单管理服务。
@@ -37,6 +37,7 @@ type Server struct {
 	Secret   *secret.Box
 	Log      *slog.Logger
 	Auth     *webauth.Manager
+	Stream   func(http.ResponseWriter, *http.Request, *db.User)
 }
 
 type userContextKey struct{}
@@ -67,13 +68,15 @@ type trackView struct {
 	Singer      string   `json:"singer"`
 	Album       string   `json:"album"`
 	Source      string   `json:"source"`
+	Duration    int      `json:"duration"`
 	Qualities   []string `json:"qualities,omitempty"`
 	Unavailable bool     `json:"unavailable,omitempty"`
 }
 
 type playlistDetail struct {
 	playlistView
-	Tracks []trackView `json:"tracks"`
+	Tracks         []trackView `json:"tracks"`
+	TracksRevision string      `json:"tracksRevision"`
 }
 
 // Routes 返回挂载到 /api/app 的 API 路由。
@@ -87,9 +90,11 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/playlists/{id}", s.getPlaylist)
 	r.Put("/playlists/{id}", s.updatePlaylist)
 	r.Put("/playlists/{id}/tracks", s.replacePlaylistTracks)
+	r.Post("/playlists/{id}/tracks", s.addPlaylistTrack)
 	r.Post("/playlists/import", s.importPlaylists)
 	r.Delete("/playlists/{id}", s.deletePlaylist)
 	r.Post("/search", s.search)
+	r.Get("/stream", s.stream)
 	return r
 }
 
@@ -251,10 +256,11 @@ func validatePlaylistMeta(name, comment string) (string, string, error) {
 func (s *Server) createPlaylist(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	var body struct {
-		Name    string `json:"name"`
-		Comment string `json:"comment"`
-		Public  *bool  `json:"public"`
-		OwnerID int64  `json:"ownerId"`
+		Name     string   `json:"name"`
+		Comment  string   `json:"comment"`
+		Public   *bool    `json:"public"`
+		OwnerID  int64    `json:"ownerId"`
+		TrackIDs []string `json:"trackIds"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		fail(w, http.StatusBadRequest, "参数错误: "+err.Error())
@@ -281,8 +287,13 @@ func (s *Server) createPlaylist(w http.ResponseWriter, r *http.Request) {
 	if body.Public != nil {
 		public = *body.Public
 	}
+	ids := uniqueTrackIDs(body.TrackIDs)
+	tracks, ok := s.resolvePlaylistTracks(w, r, ids)
+	if !ok {
+		return
+	}
 	id := music.KindPlaylist + "-" + secret.RandomToken(9)
-	if err := s.DB.CreatePlaylistFull(r.Context(), id, ownerID, name, comment, public, nil); err != nil {
+	if err := s.DB.CreatePlaylistWithMetadata(r.Context(), id, ownerID, name, comment, public, ids, tracks); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -316,7 +327,7 @@ func (s *Server) loadPlaylistForEdit(w http.ResponseWriter, r *http.Request) (*d
 }
 
 func infoTrackView(in *music.Info) trackView {
-	return trackView{ID: in.TrackID(), Name: in.Name(), Singer: in.Singer(), Album: in.Album(), Source: in.Source(), Qualities: in.Qualities()}
+	return trackView{ID: in.TrackID(), Name: in.Name(), Singer: in.Singer(), Album: in.Album(), Source: in.Source(), Duration: in.Duration(), Qualities: in.Qualities()}
 }
 
 func (s *Server) detail(ctx context.Context, u *db.User, p *db.Playlist) playlistDetail {
@@ -331,7 +342,7 @@ func (s *Server) detail(ctx context.Context, u *db.User, p *db.Playlist) playlis
 		view.ID = id // 保留歌单中实际存储的 ID，避免平台兜底元数据改写别名 ID。
 		tracks = append(tracks, view)
 	}
-	return playlistDetail{playlistView: makePlaylistView(u, p), Tracks: tracks}
+	return playlistDetail{playlistView: makePlaylistView(u, p), Tracks: tracks, TracksRevision: db.TracksRevision(p.TrackIDs)}
 }
 
 func (s *Server) writePlaylistDetail(w http.ResponseWriter, r *http.Request, id string) {
@@ -396,32 +407,27 @@ func (s *Server) replacePlaylistTracks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		TrackIDs []string `json:"trackIds"`
+		TrackIDs         []string `json:"trackIds"`
+		ExpectedRevision *string  `json:"expectedRevision"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		fail(w, http.StatusBadRequest, "参数错误: "+err.Error())
 		return
 	}
-	if len(body.TrackIDs) > maxPlaylistTracks {
-		fail(w, http.StatusBadRequest, "单个歌单最多包含 2000 首歌曲")
+	if body.ExpectedRevision != nil && *body.ExpectedRevision != db.TracksRevision(p.TrackIDs) {
+		playlistWriteError(w, db.ErrPlaylistConflict)
 		return
 	}
-	for _, id := range body.TrackIDs {
-		parsed, valid := music.ParseID(id)
-		if !valid || parsed.Kind != music.KindTrack {
-			fail(w, http.StatusBadRequest, "无效的歌曲 ID: "+id)
-			return
-		}
-		if _, err := s.Catalog.Track(r.Context(), id); err != nil {
-			fail(w, http.StatusBadRequest, "找不到歌曲: "+id)
-			return
-		}
-	}
-	if err := s.DB.ReplacePlaylistTracks(r.Context(), p.ID, body.TrackIDs); err != nil {
-		fail(w, http.StatusInternalServerError, err.Error())
+	tracks, ok := s.resolvePlaylistTracks(w, r, body.TrackIDs)
+	if !ok {
 		return
 	}
-	s.writePlaylistDetail(w, r, p.ID)
+	updated, err := s.DB.ReplacePlaylistTracksChecked(r.Context(), p.ID, currentUser(r), body.TrackIDs, tracks, body.ExpectedRevision)
+	if err != nil {
+		playlistWriteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.detail(r.Context(), currentUser(r), updated))
 }
 
 func (s *Server) deletePlaylist(w http.ResponseWriter, r *http.Request) {

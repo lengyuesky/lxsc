@@ -437,6 +437,16 @@ func (d *DB) UpsertTracks(ctx context.Context, tracks []Track) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := upsertTracksTx(ctx, tx, tracks); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func upsertTracksTx(ctx context.Context, tx *sql.Tx, tracks []Track) error {
+	if len(tracks) == 0 {
+		return nil
+	}
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO tracks(id, source, name, singer, album, json, updated_at) VALUES(?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET source=excluded.source, name=excluded.name, singer=excluded.singer, album=excluded.album, json=excluded.json, updated_at=excluded.updated_at`)
 	if err != nil {
@@ -449,7 +459,7 @@ func (d *DB) UpsertTracks(ctx context.Context, tracks []Track) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // GetTrack 读取歌曲元数据
@@ -666,6 +676,11 @@ func (d *DB) CreatePlaylist(ctx context.Context, id string, userID int64, name s
 
 // CreatePlaylistFull 创建带完整元数据的歌单
 func (d *DB) CreatePlaylistFull(ctx context.Context, id string, userID int64, name, comment string, public bool, trackIDs []string) error {
+	return d.CreatePlaylistWithMetadata(ctx, id, userID, name, comment, public, trackIDs, nil)
+}
+
+// CreatePlaylistWithMetadata 在同一事务内创建歌单并保存歌曲元数据。
+func (d *DB) CreatePlaylistWithMetadata(ctx context.Context, id string, userID int64, name, comment string, public bool, trackIDs []string, tracks []Track) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -673,6 +688,9 @@ func (d *DB) CreatePlaylistFull(ctx context.Context, id string, userID int64, na
 	defer tx.Rollback()
 	t := now()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO playlists(id, user_id, name, comment, public, created_at, updated_at) VALUES(?,?,?,?,?,?,?)`, id, userID, name, comment, boolInt(public), t, t); err != nil {
+		return err
+	}
+	if err := upsertTracksTx(ctx, tx, tracks); err != nil {
 		return err
 	}
 	for i, tid := range trackIDs {
@@ -690,6 +708,13 @@ func (d *DB) ReplacePlaylistTracks(ctx context.Context, id string, trackIDs []st
 		return err
 	}
 	defer tx.Rollback()
+	if err := replacePlaylistTracksTx(ctx, tx, id, trackIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func replacePlaylistTracksTx(ctx context.Context, tx *sql.Tx, id string, trackIDs []string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM playlist_tracks WHERE playlist_id = ?`, id); err != nil {
 		return err
 	}
@@ -705,7 +730,7 @@ func (d *DB) ReplacePlaylistTracks(ctx context.Context, id string, trackIDs []st
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return tx.Commit()
+	return nil
 }
 
 // UpdatePlaylistMeta 更新名称/备注/公开

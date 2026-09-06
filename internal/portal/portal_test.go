@@ -22,9 +22,11 @@ import (
 )
 
 type portalFixture struct {
-	server *httptest.Server
-	db     *db.DB
-	users  map[string]*db.User
+	server  *httptest.Server
+	db      *db.DB
+	users   map[string]*db.User
+	service *Server
+	mux     *http.ServeMux
 }
 
 func newPortalFixture(t *testing.T) *portalFixture {
@@ -73,7 +75,7 @@ func newPortalFixture(t *testing.T) *portalFixture {
 	mux.Handle("/", service.Routes())
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
-	return &portalFixture{server: ts, db: database, users: users}
+	return &portalFixture{server: ts, db: database, users: users, service: service, mux: mux}
 }
 
 func (f *portalFixture) client(t *testing.T, username string) *http.Client {

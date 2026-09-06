@@ -32,6 +32,11 @@
     <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l14-8z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24" fill="currentColor"><path d="M5 4h3v16H5zm14 0v16L8 12z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24" fill="currentColor"><path d="M16 4h3v16h-3zM5 4v16l11-8z"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/></symbol>
   </defs>
 </svg>
 
@@ -53,12 +58,12 @@
     <div class="brand"><span class="logo-mark"><svg class="icon"><use href="#i-logo"/></svg></span><span>lxsc</span><span id="roleTag" class="tag"></span></div>
     <nav>
       <a href="#playlists" data-tab="playlists"><svg class="icon"><use href="#i-music"/></svg><span>歌单</span></a>
+      <a href="#search" data-tab="search"><svg class="icon"><use href="#i-search"/></svg><span>搜歌</span></a>
       <a href="#dashboard" data-tab="dashboard" class="admin-only hidden"><svg class="icon"><use href="#i-dash"/></svg><span>概览</span></a>
       <a href="#sources" data-tab="sources" class="admin-only hidden"><svg class="icon"><use href="#i-code"/></svg><span>音源</span></a>
       <a href="#users" data-tab="users" class="admin-only hidden"><svg class="icon"><use href="#i-users"/></svg><span>用户</span></a>
       <a href="#backups" data-tab="backups" class="admin-only hidden"><svg class="icon"><use href="#i-backup"/></svg><span>备份</span></a>
       <a href="#settings" data-tab="settings" class="admin-only hidden"><svg class="icon"><use href="#i-sliders"/></svg><span>设置</span></a>
-      <a href="#search" data-tab="search" class="admin-only hidden"><svg class="icon"><use href="#i-search"/></svg><span>搜索测试</span></a>
       <a href="#logs" data-tab="logs" class="admin-only hidden"><svg class="icon"><use href="#i-file"/></svg><span>日志</span></a>
     </nav>
     <div class="sidebar-foot">
@@ -69,7 +74,7 @@
 
   <main>
     <section id="tab-playlists" class="tab">
-      <div class="page-head"><div><h2>歌单</h2><p>管理歌曲、顺序与洛雪歌单导入</p></div><div class="page-actions"><label class="quality-control">默认播放音质<select id="qualitySelect"><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label><button id="refreshButton" class="sec"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
+      <div class="page-head"><div><h2>歌单</h2><p>管理歌曲、顺序与洛雪歌单导入</p></div><div class="page-actions"><label class="quality-control">默认播放音质<select id="qualitySelect" data-quality-select><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label><button id="refreshButton" class="sec"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
       <div class="playlist-layout">
         <aside class="playlist-pane">
           <label id="ownerFilterWrap" class="hidden">按用户筛选
@@ -195,10 +200,10 @@
       <p class="muted hint">监听端口、数据目录、上游代理等启动项通过环境变量或 config.yaml 配置，修改后需重启。</p>
     </section>
 
-    <section id="tab-search" class="tab admin-only">
-      <div class="page-head"><div><h2>搜索测试</h2><p>验证各平台搜索是否正常</p></div></div>
-      <form class="card toolbar" onsubmit="return doSearch(event)"><input name="query" placeholder="歌名 歌手" required class="grow"><select name="source"><option value="">全部平台</option><option value="wy">网易云</option><option value="tx">QQ音乐</option><option value="kw">酷我</option><option value="kg">酷狗</option><option value="mg">咪咕</option></select><button type="submit"><svg class="icon"><use href="#i-search"/></svg>搜索</button></form>
-      <div class="table-wrap"><table id="searchTable"><thead><tr><th>平台</th><th>歌名</th><th>歌手</th><th>专辑</th><th>音质</th><th>ID</th></tr></thead><tbody><tr><td colspan="6" class="muted center">输入关键词开始搜索</td></tr></tbody></table></div>
+    <section id="tab-search" class="tab">
+      <div class="page-head"><div><h2>搜歌</h2><p>在线找歌、连续播放，收藏到你的歌单</p></div><label class="quality-control">默认播放音质<select id="searchQualitySelect" data-quality-select><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label></div>
+      <form id="songSearchForm" class="card toolbar"><input name="query" aria-label="歌名或歌手" placeholder="歌名或歌手" maxlength="200" required class="grow"><select name="source" aria-label="搜索平台"><option value="">全部平台</option><option value="wy">网易云</option><option value="tx">QQ音乐</option><option value="kw">酷我</option><option value="kg">酷狗</option><option value="mg">咪咕</option></select><button type="submit"><svg class="icon"><use href="#i-search"/></svg>搜索</button></form>
+      <div class="table-wrap"><table id="searchTable"><thead><tr><th>歌曲</th><th>歌手</th><th class="song-album">专辑</th><th>平台</th><th class="song-duration">时长</th><th class="song-quality">音质</th><th class="right">操作</th></tr></thead><tbody><tr><td colspan="7" class="muted center">输入关键词开始搜索</td></tr></tbody></table></div>
     </section>
 
     <section id="tab-logs" class="tab admin-only">
@@ -206,12 +211,22 @@
       <div id="logBox" class="logbox"></div>
     </section>
   </main>
+  <aside id="playerBar" class="player-bar hidden" aria-label="音乐播放器">
+    <audio id="webAudio" preload="none"></audio>
+    <div class="player-info"><div id="playerTitle" class="song-title"></div><div id="playerMeta" class="song-sub"></div><div id="playerStatus" class="player-status" role="status"></div></div>
+    <div class="player-main"><div class="player-buttons"><button id="playerPrevious" type="button" class="ghost" aria-label="上一首" title="上一首"><svg class="icon"><use href="#i-prev"/></svg></button><button id="playerToggle" type="button" aria-label="播放" title="播放"><svg class="icon"><use href="#i-play"/></svg></button><button id="playerNext" type="button" class="ghost" aria-label="下一首" title="下一首"><svg class="icon"><use href="#i-next"/></svg></button><span id="playerPosition" class="muted hint"></span></div><div class="player-progress"><input id="playerSeek" type="range" min="0" max="0" step="0.1" value="0" aria-label="播放进度" disabled><span id="playerTime" class="mono">0:00 / 0:00</span></div></div>
+    <div class="player-actions"><button id="playerCollect" type="button" class="sec sm"><svg class="icon"><use href="#i-plus"/></svg>收藏到歌单</button><div class="player-volume"><button id="playerMute" type="button" class="ghost sm" aria-label="静音" title="静音" aria-pressed="false"><svg class="icon"><use href="#i-volume"/></svg></button><input id="playerVolume" type="range" min="0" max="1" step="0.01" value="1" aria-label="音量"></div></div>
+  </aside>
 </div>
 
 <dialog id="userDialog"><form method="dialog" class="dialog-form" onsubmit="return submitUser(event)"><h3>编辑用户</h3><input type="hidden" name="id"><label>用户名<input name="name" required></label><label>新密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label><label>默认音质<select name="quality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label class="switch"><span>管理员</span><input type="checkbox" name="isAdmin"></label><div class="dialog-actions"><button type="button" class="sec" onclick="$('#userDialog').close()">取消</button><button type="submit">保存</button></div></form></dialog>
 <dialog id="keyDialog"><div class="dialog-form"><h3>API Key</h3><p class="muted">用于 OpenSubsonic 的 <code>apiKey</code> 参数，仅显示一次，请妥善保存。</p><div class="kv"><input id="keyValue" readonly class="mono"><button type="button" class="sec" onclick="copyText($('#keyValue').value)"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="dialog-actions"><button type="button" onclick="$('#keyDialog').close()">关闭</button></div></div></dialog>
 
+<dialog id="collectDialog"><form id="collectForm" class="dialog-form"><h3>收藏到歌单</h3><p id="collectSong" class="song-sub"></p><label>收藏方式<select name="mode"><option value="existing">选择已有歌单</option><option value="create">新建歌单并收藏</option></select></label><label id="collectTargetWrap">目标歌单<select name="playlistId" aria-label="目标歌单"></select></label><div id="collectCreateFields" class="hidden"><label>歌单名称<input name="name" maxlength="100" autocomplete="off"></label><label class="switch"><span>公开歌单<small>新歌单归属当前登录用户</small></span><input name="public" type="checkbox"></label></div><p id="collectHint" class="muted hint"></p><p id="collectError" class="err" role="alert"></p><div class="dialog-actions"><button id="collectCancel" type="button" class="sec">取消</button><button id="collectSubmit" type="submit">收藏</button></div></form></dialog>
+
 <div id="toast" class="toast hidden"></div>
+<script src="player.js"></script>
 <script src="app.js"></script>
+<script src="music-ui.js"></script>
 </body>
 </html>

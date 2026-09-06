@@ -412,3 +412,76 @@ dialog::backdrop { background: rgba(15,23,42,.45); backdrop-filter: blur(2px) }
   .track-actions button { width: 26px; height: 26px; margin-left: 0 }
   .section-title { align-items: flex-start }
 }
+
+/* ========== 搜歌与全局播放器 ========== */
+#searchTable { table-layout: fixed; min-width: 820px }
+#searchTable th:first-child { width: 24% }
+#searchTable th:nth-child(2) { width: 16% }
+#searchTable th:nth-child(4) { width: 98px }
+#searchTable th.song-duration { width: 70px }
+#searchTable th.song-quality { width: 112px }
+#searchTable th:last-child { width: 204px }
+#searchTable td { overflow: hidden; text-overflow: ellipsis }
+#searchTable td:nth-child(2), #searchTable .badge { white-space: nowrap }
+.song-actions { text-align: right; white-space: nowrap }
+.song-actions button + button { margin-left: 5px }
+.search-item-actions { display: flex; align-items: center; gap: 6px }
+.now-playing td, tbody tr.now-playing:hover td, .search-item.now-playing { background: var(--pri-soft) }
+.now-playing .song-title { color: var(--pri) }
+#playlistTrackTable th.track-actions { width: 138px }
+button:focus-visible { outline: 2px solid var(--pri); outline-offset: 3px }
+
+.player-bar {
+  position: fixed; z-index: 30; left: var(--sidebar); right: 0; bottom: 0;
+  display: grid; grid-template-columns: minmax(120px, 1fr) minmax(230px, 1.7fr) auto;
+  align-items: center; gap: 14px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line); background: var(--card); box-shadow: 0 -5px 24px rgba(16,24,40,.08);
+}
+#webAudio { display: none }
+.player-info, .player-main { min-width: 0 }
+.player-status { color: var(--muted); font-size: 11.5px; line-height: 1.45; margin-top: 3px; overflow-wrap: anywhere }
+.player-status.err { color: var(--err) }
+.player-buttons { display: flex; align-items: center; justify-content: center; gap: 7px }
+.player-buttons button { width: 34px; height: 34px; padding: 6px; border-radius: 50% }
+#playerPosition { min-width: 36px }
+.player-progress { display: flex; align-items: center; gap: 10px; margin-top: 6px }
+.player-bar input[type=range] { padding: 0; border: 0; border-radius: 0; height: 20px; box-shadow: none; accent-color: var(--pri); cursor: pointer; min-width: 0 }
+.player-bar input[type=range]:focus-visible { outline: 2px solid var(--pri); outline-offset: 3px }
+.player-bar input[type=range]:disabled { opacity: .4; cursor: default }
+#playerSeek { flex: 1; width: 100% }
+#playerTime { font-size: 11px; white-space: nowrap; color: var(--muted) }
+.player-actions { display: flex; flex-direction: column; gap: 4px; align-items: flex-end }
+.player-volume { display: flex; gap: 4px; align-items: center }
+#playerVolume { width: 78px }
+#playerMute[aria-pressed=true] { color: var(--err) }
+.has-player main { padding-bottom: calc(var(--player-height, 140px) + 24px) }
+.has-player .playlist-pane { max-height: calc(100vh - var(--player-height, 140px) - 40px) }
+.has-player .toast { bottom: calc(var(--player-height, 140px) + 16px) }
+#collectSong { white-space: normal; overflow-wrap: anywhere }
+#collectError:empty { display: none }
+#collectHint.warn { color: var(--warn) }
+@media (max-width: 1000px) {
+  .has-player .playlist-pane { max-height: none }
+}
+@media (max-width: 820px) {
+  .player-bar { left: 0; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px)) }
+  .player-main { grid-column: 1 / -1; grid-row: 2 }
+  .player-actions { grid-column: 2; grid-row: 1 }
+  .player-progress { margin-top: 3px }
+}
+@media (max-width: 600px) {
+  #searchTable { min-width: 0 }
+  #searchTable th, #searchTable td { padding: 9px 7px }
+  #searchTable .song-album, #searchTable .song-duration, #searchTable .song-quality { display: none }
+  #searchTable th:first-child { width: auto }
+  #searchTable th:nth-child(2) { width: 66px }
+  #searchTable th:nth-child(4) { width: 72px }
+  #searchTable th:last-child { width: 100px }
+  #searchTable .badge { padding: 2px 5px; font-size: 10px }
+  .song-actions button { display: flex; width: 100%; font-size: 11px; padding: 5px 4px }
+  .song-actions button + button { margin: 5px 0 0 }
+  #playlistTrackTable th.track-actions { width: 118px }
+  #playlistTrackTable th.num, #playlistTrackTable td:first-child { width: 32px }
+  .search-item { gap: 6px; padding: 9px 8px }
+  .search-item-actions button { font-size: 11px; padding: 5px 7px }
+}
