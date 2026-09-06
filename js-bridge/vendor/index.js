@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：添加调用宿主哈希的 toMD5；详见 js-bridge/vendor/PATCHES.md。
 
 export const sizeFormate = (size) => {
     if (!size) return '0 B'

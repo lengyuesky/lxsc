@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：请求与代理改由 Go 宿主处理，保留 needle 语义封装；详见 js-bridge/vendor/PATCHES.md。
 // 服务端版本 request.js：代理由 Go 宿主处理，这里只保留 needle 语义封装
 import needle from 'needle'
 import { debugRequest } from './env'

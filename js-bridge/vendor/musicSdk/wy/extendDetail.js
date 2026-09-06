@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：无发行时间时跳过日期格式化；详见 js-bridge/vendor/PATCHES.md。
 import { weapiRequest } from './utils/index'
 import { formatSingerName } from '../utils'
 import musicDetail from './musicDetail'

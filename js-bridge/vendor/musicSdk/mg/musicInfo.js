@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：修正正则捕获与 Promise 汇总，并补充歌手 ID；详见 js-bridge/vendor/PATCHES.md。
 import { sizeFormate, formatPlayTime } from '../../index'
 import { createHttpFetch } from './utils'
 import { formatSingerName } from '../utils'

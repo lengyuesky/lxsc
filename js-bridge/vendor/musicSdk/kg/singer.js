@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：从封面字段而非对象本身替换图片尺寸；详见 js-bridge/vendor/PATCHES.md。
 import { getMusicInfosByList } from './musicInfo'
 import { createHttpFetch } from './util'
 

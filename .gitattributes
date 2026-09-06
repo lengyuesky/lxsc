@@ -1,0 +1,3 @@
+# 法律原文、源码副本及其摘要按字节保留，不转换换行或清理原文空白。
+/LICENSE -text -whitespace
+/licenses/** -text -whitespace

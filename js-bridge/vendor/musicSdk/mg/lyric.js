@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：空 resourceinfo 回退到歌曲已有歌词地址；详见 js-bridge/vendor/PATCHES.md。
 import { httpFetch } from '../../request'
 import { getMusicInfo } from './musicInfo'
 import { decrypt } from './utils/mrc'

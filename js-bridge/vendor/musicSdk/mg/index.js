@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：暴露专辑目录模块；详见 js-bridge/vendor/PATCHES.md。
 import { apis } from '../api-source' // 现在已适配服务器端
 import leaderboard from './leaderboard'
 import songList from './songList'

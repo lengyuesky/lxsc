@@ -1,0 +1,65 @@
+[
+  {
+    "repository": "actions/checkout",
+    "tag": "v7.0.1",
+    "commit": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/actions/checkout/git/ref/tags/v7.0.1"
+  },
+  {
+    "repository": "actions/setup-go",
+    "tag": "v7.0.0",
+    "commit": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/actions/setup-go/git/ref/tags/v7.0.0"
+  },
+  {
+    "repository": "actions/setup-node",
+    "tag": "v7.0.0",
+    "commit": "820762786026740c76f36085b0efc47a31fe5020",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/actions/setup-node/git/ref/tags/v7.0.0"
+  },
+  {
+    "repository": "oven-sh/setup-bun",
+    "tag": "v2.2.0",
+    "commit": "0c5077e51419868618aeaa5fe8019c62421857d6",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/oven-sh/setup-bun/git/ref/tags/v2.2.0"
+  },
+  {
+    "repository": "docker/setup-qemu-action",
+    "tag": "v4.3.0",
+    "commit": "1f40c72289eff860ee54a304f1438e3cff362e0a",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/docker/setup-qemu-action/git/ref/tags/v4.3.0"
+  },
+  {
+    "repository": "docker/setup-buildx-action",
+    "tag": "v4.3.0",
+    "commit": "37fe631027851001ddb9b187196cc803df7f5f0e",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/docker/setup-buildx-action/git/ref/tags/v4.3.0"
+  },
+  {
+    "repository": "docker/login-action",
+    "tag": "v4.6.0",
+    "commit": "dbcb813823bdd20940b903addbd779551569679f",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/docker/login-action/git/ref/tags/v4.6.0"
+  },
+  {
+    "repository": "docker/metadata-action",
+    "tag": "v6.2.0",
+    "commit": "dc802804100637a589fabce1cb79ff13a1411302",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/docker/metadata-action/git/ref/tags/v6.2.0"
+  },
+  {
+    "repository": "docker/build-push-action",
+    "tag": "v7.3.0",
+    "commit": "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
+    "verifiedAt": "2026-09-06",
+    "referenceURL": "https://api.github.com/repos/docker/build-push-action/git/ref/tags/v7.3.0"
+  }
+]

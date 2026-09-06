@@ -1,5 +1,6 @@
 // 使用 esbuild 打包 prelude 与 SDK，目标 ES2017（goja 支持范围内），产物写入 ../internal/assets/js
 import * as esbuild from 'esbuild'
+import fs from 'node:fs'
 import path from 'node:path'
 
 const root = import.meta.dir
@@ -33,6 +34,7 @@ const aliasPlugin: esbuild.Plugin = {
 }
 
 const common: esbuild.BuildOptions = {
+  absWorkingDir: root,
   bundle: true,
   format: 'iife',
   target: ['es2017'],
@@ -40,11 +42,26 @@ const common: esbuild.BuildOptions = {
   mainFields: ['module', 'main'],
   plugins: [aliasPlugin],
   logLevel: 'info',
-  legalComments: 'none',
+  legalComments: 'inline',
+  banner: { js: '// lxsc 桥接产物：许可、来源与修改记录见 LICENSE、NOTICE、THIRD_PARTY_NOTICES.md 和 licenses/；镜像内位于 /usr/share/licenses/lxsc。' },
+  metafile: true,
   minify: false,
   define: { 'process.env.NODE_ENV': '"production"' },
 }
 
-await esbuild.build({ ...common, entryPoints: [path.join(root, 'prelude/lx.js')], outfile: path.join(out, 'prelude.js') })
-await esbuild.build({ ...common, entryPoints: [path.join(root, 'sdk-entry.js')], outfile: path.join(out, 'sdk.bundle.js') })
+const results = await Promise.all([
+  esbuild.build({ ...common, entryPoints: [path.join(root, 'prelude/lx.js')], outfile: path.join(out, 'prelude.js') }),
+  esbuild.build({ ...common, entryPoints: [path.join(root, 'sdk-entry.js')], outfile: path.join(out, 'sdk.bundle.js') }),
+])
+const inputs = [...new Set(results.flatMap(result => Object.keys(result.metafile!.inputs)))].sort()
+const packageNames = [...new Set(inputs.filter(input => input.includes('node_modules/')).map(input => {
+  const name = input.split('node_modules/').at(-1)!.split('/')
+  return name.slice(0, name[0].startsWith('@') ? 2 : 1).join('/')
+}))].sort()
+const dependencies = packageNames.map(name => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'node_modules', name, 'package.json'), 'utf8'))
+  return { name, version: pkg.version }
+})
+// 只记录稳定的相对路径与版本，不将宿主绝对路径写入仓库或镜像。
+fs.writeFileSync(path.join(root, 'bundle-inputs.json'), JSON.stringify({ esbuildVersion: esbuild.version, dependencies, inputs }, null, 2) + '\n')
 console.log('构建完成 →', out)

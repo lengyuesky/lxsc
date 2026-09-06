@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：用 exec 结果替代 goja 不支持的 RegExp 静态属性；详见 js-bridge/vendor/PATCHES.md。
 import { httpFetch } from '../../request'
 import { decodeLyric, lrcTools } from './util'
 import { decodeName } from '../../index'

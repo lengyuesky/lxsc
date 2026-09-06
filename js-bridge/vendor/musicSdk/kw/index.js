@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：暴露专辑目录模块；详见 js-bridge/vendor/PATCHES.md。
 import { httpFetch } from '../../request'
 import tipSearch from './tipSearch'
 import musicSearch from './musicSearch'

@@ -1,3 +1,4 @@
+// lxsc 桥接产物：许可、来源与修改记录见 LICENSE、NOTICE、THIRD_PARTY_NOTICES.md 和 licenses/；镜像内位于 /usr/share/licenses/lxsc。
 (() => {
   var __create = Object.create;
   var __defProp = Object.defineProperty;

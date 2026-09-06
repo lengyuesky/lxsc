@@ -1,3 +1,4 @@
+// lxsc 修改标记（2026-09-06 补记）：在歌曲结果中补充歌手 ID；详见 js-bridge/vendor/PATCHES.md。
 // import { httpFetch } from '../../request'
 // import { weapi } from './utils/crypto'
 import { formatPlayTime } from '../../index'

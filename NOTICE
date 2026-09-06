@@ -1,0 +1,26 @@
+lxsc
+版权所有 © 2026 lxsc 贡献者
+项目地址：https://github.com/lengyuesky/lxsc
+
+本项目原创部分按根目录 LICENSE 中的 Apache License 2.0 授权。
+第三方源文件、内嵌 JS、Go 依赖、生成器辅助代码及基础镜像分别适用各自的
+许可与声明；根 LICENSE 不会将这些内容重新授权为仅 Apache-2.0。
+
+本发行版包含 XCQ0607/lxserver 的音乐 SDK 及工具代码，其再上游为
+lyswhut/lx-music-desktop。上游版权/归属声明包括：
+
+Apache License 2.0 copyright (c) 2026 [xcq0607](https://github.com/xcq0607)
+Copyright 2018 File Browser Contributors
+
+两者完整 LICENSE、README 适用协议节及固定核对版本保存在
+licenses/upstream/。lxserver LICENSE 原有 File Browser Contributors
+声明完整保留，不表示本项目另行引入了其全部文件。
+
+上游 README 明确有 Apache-2.0 的补充协议及优先表述，包括非商业性质、
+版权数据与使用限制；不能用本项目原创代码的 Apache 授权覆盖或删除。
+最初导入的上游提交尚不能证明；核对版本与原始导入版本已明确区分。
+修改文件有明显标记，记录见 js-bridge/vendor/PATCHES.md。
+
+其他第三方许可、版权、必要 NOTICE、内联声明和 LGPL 头文件源码副本见
+THIRD_PARTY_NOTICES.md 与 licenses/。随镜像副本位于
+/usr/share/licenses/lxsc；单独分发二进制时也应携带这些材料。

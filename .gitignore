@@ -1,5 +1,17 @@
 /data/
 /js-bridge/node_modules/
 /lxsc
+.pi/
+.env
+.env.*
 *.db
 *.db-*
+*.lxsc-backup
+*.bak
+*.tmp
+*.log
+/backups/
+/tmp/
+/temp/
+/.cache/
+/coverage/
