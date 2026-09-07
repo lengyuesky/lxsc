@@ -334,6 +334,44 @@ async function main() {
       assert.equal(await page.locator('#playerBar').isVisible(), false)
     })
 
+    await check('强制302设置保存、直连播放与禁止代理覆盖', async page => {
+      await page.locator('#logoutButton').click()
+      await page.locator('#login:not(.hidden)').waitFor()
+      await login(page, url, 'admin')
+      const loaded = page.waitForResponse(response => response.url().endsWith('/api/admin/settings') && response.request().method() === 'GET')
+      await page.locator('nav [data-tab=settings]').click()
+      assert.equal((await loaded).status(), 200)
+      await settle(page)
+      await page.locator('#settingsForm [name=streamMode]').selectOption('force_redirect')
+      const saved = page.waitForResponse(response => response.url().endsWith('/api/admin/settings') && response.request().method() === 'PUT')
+      await page.locator('#settingsForm button[type=submit]').click()
+      const savedResponse = await saved
+      assert.equal(savedResponse.status(), 200)
+      assert.equal((await savedResponse.json()).streamMode, 'force_redirect')
+      await page.reload()
+      await page.waitForFunction(() => document.querySelector('#settingsForm [name=streamMode]').value === 'force_redirect')
+      await page.screenshot({ path: path.join(artifacts, 'force-302-settings.png'), fullPage: true, animations: 'disabled' })
+      for (const path of ['/api/app/stream?id=tr-wy-1', '/rest/stream.view?id=tr-wy-1&u=alice&p=test-password', '/rest/download.view?id=tr-wy-1&u=alice&p=test-password']) {
+        const response = await page.request.get(url + path + '&proxy=1', { maxRedirects: 0, headers: { Range: 'bytes=100-199' } })
+        assert.equal(response.status(), 302)
+        assert.ok(response.headers().location.startsWith(info.upstreamURL + '/'))
+        assert.equal(response.headers()['cache-control'], 'no-store')
+      }
+      const upstreamRequests = []
+      page.on('request', request => { if (request.url().startsWith(info.upstreamURL)) upstreamRequests.push(request.url()) })
+      await search(page, '强制直连')
+      await playSearch(page)
+      assert.ok(upstreamRequests.length > 0, '强制302必须让浏览器直连音源')
+      const streams = []
+      page.on('request', request => { if (request.url().includes('/api/app/stream?')) streams.push(request.url()) })
+      await search(page, '播放失败')
+      await page.locator('#searchTable [data-song-action=play]').first().click()
+      await page.waitForFunction(() => webPlayer.status === 'error')
+      await settle(page)
+      assert.equal(streams.length, 1, '强制302直连失败不得自动重试或切换代理')
+      assert.equal(streams[0].includes('proxy='), false)
+    })
+
     assert.equal((await admin.put(url + '/api/admin/settings', { data: { streamMode: 'proxy' } })).status(), 200)
     await check('代理真实播放、Range与移动端深色布局', async page => {
       const upstreamRequests = []

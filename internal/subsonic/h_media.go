@@ -89,7 +89,9 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 			s.Log.Warn("持久化播放歌曲元数据失败", "id", id, "err", err)
 		}
 	}
-	if s.Settings.Get().StreamMode == "proxy" || param(r, "proxy") == "1" {
+	mode := s.Settings.Get().StreamMode
+	// 强制 302 优先于客户端的 proxy 参数，播放和下载均禁止服务器转发。
+	if mode != "force_redirect" && (mode == "proxy" || param(r, "proxy") == "1") {
 		if s.proxyStream(w, r, in, res, func(failed music.URLResolution) (music.URLResolution, error) { return resolve(&failed) }, fail) {
 			persist()
 		}

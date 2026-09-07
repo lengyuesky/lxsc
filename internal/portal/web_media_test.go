@@ -45,22 +45,38 @@ lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{wy:{name:'测试',type:'mus
 }
 
 func TestWebStreamCookieAndRedirectContract(t *testing.T) {
-	f, _ := webMediaFixture(t)
+	f, media := webMediaFixture(t)
+	var calls atomic.Int32
+	media.HTTP = &http.Client{Transport: webMediaTransport(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("不应请求音频上游")
+	})}
 	url := f.server.URL + "/stream?id=tr-wy-1"
 	if status := requestStatus(t, http.DefaultClient, http.MethodGet, url+"&u=alice&p=pw-alice"); status != 401 {
 		t.Fatalf("网页接口只能使用 Cookie，实际状态 %d", status)
 	}
 	alice := f.client(t, "alice")
 	alice.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	for _, tc := range []struct{ query, quality string }{{"", "320k"}, {"&quality=flac", "flac"}, {"&proxy=1", "320k"}} {
-		resp, err := alice.Get(url + tc.query)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != 302 || !strings.HasPrefix(resp.Header.Get("Location"), "https://media.invalid/"+tc.quality+"/") || resp.Header.Get("Cache-Control") != "no-store" {
-			t.Fatalf("应遵循直连配置和默认音质，且不接受 proxy 覆盖: %d %v", resp.StatusCode, resp.Header)
-		}
+	for _, mode := range []string{"redirect", "force_redirect"} {
+		t.Run(mode, func(t *testing.T) {
+			raw, err := json.Marshal(mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.service.Settings.Update(context.Background(), map[string]json.RawMessage{"streamMode": raw}); err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct{ query, quality string }{{"", "320k"}, {"&quality=flac", "flac"}, {"&proxy=1", "320k"}} {
+				resp, err := alice.Get(url + tc.query)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != 302 || !strings.HasPrefix(resp.Header.Get("Location"), "https://media.invalid/"+tc.quality+"/") || resp.Header.Get("Cache-Control") != "no-store" || calls.Load() != 0 {
+					t.Fatalf("应遵循直连配置和默认音质，且不接受 proxy 覆盖或请求音频上游: %d %v calls=%d", resp.StatusCode, resp.Header, calls.Load())
+				}
+			}
+		})
 	}
 	for _, query := range []string{"id=bad", "id=tr-wy", "id=al-wy-1", "id=tr-bad-1", "id=tr-wy-1&quality=master"} {
 		if status := requestStatus(t, alice, http.MethodGet, f.server.URL+"/stream?"+query); status != 400 {

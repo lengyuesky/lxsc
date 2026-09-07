@@ -29,7 +29,7 @@ func parseTTL(value string) (int, error) {
 // Values 运行时设置
 type Values struct {
 	SearchSources    []string `json:"searchSources"`    // 聚合搜索的平台及顺序
-	StreamMode       string   `json:"streamMode"`       // redirect / proxy
+	StreamMode       string   `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
 	CoverMode        string   `json:"coverMode"`        // redirect / proxy
 	URLCacheTTL      int      `json:"urlCacheTTL"`      // 直链缓存秒数
 	SearchCacheTTL   int      `json:"searchCacheTTL"`   // 搜索缓存秒数
@@ -89,7 +89,7 @@ func apply(v Values, m map[string]string) Values {
 		case "searchSources":
 			v.SearchSources = splitList(val)
 		case "streamMode":
-			if val == "proxy" || val == "redirect" {
+			if val == "proxy" || val == "redirect" || val == "force_redirect" {
 				v.StreamMode = val
 			}
 		case "coverMode":
