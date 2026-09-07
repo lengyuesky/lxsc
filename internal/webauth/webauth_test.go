@@ -53,9 +53,12 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	authManager := &webauth.Manager{DB: database, Secret: box}
 	authServer := &webauth.Server{Auth: authManager, Settings: store}
 	catalog := music.NewCatalog(database, nil, nil, store, logger)
+	catalog.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
+		return json.RawMessage(`{"list":[{"name":"测试榜单","bangid":"one"}]}`), nil
+	})
 	portalServer := &portal.Server{DB: database, Catalog: catalog, Settings: store, Secret: box, Log: logger, Auth: authManager}
 	backupServer := backup.New(database, box, dir, "test", nil, logger)
-	adminServer := &admin.Server{DB: database, Settings: store, Secret: box, Auth: authManager, Backup: backupServer}
+	adminServer := &admin.Server{DB: database, Catalog: catalog, Settings: store, Secret: box, Auth: authManager, Backup: backupServer}
 
 	router := chi.NewRouter()
 	router.Mount("/api/auth", authServer.Routes())
@@ -74,6 +77,9 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/settings", nil); status != http.StatusForbidden {
 		t.Fatalf("普通用户访问管理接口应返回 403，实际为 %d", status)
 	}
+	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/boards?source=wy", nil); status != http.StatusForbidden {
+		t.Fatalf("普通用户不能读取管理榜单候选接口: %d", status)
+	}
 	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/backups/status", nil); status != http.StatusForbidden {
 		t.Fatalf("普通用户访问备份接口应返回 403，实际为 %d", status)
 	}
@@ -88,6 +94,9 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/settings", nil); status != http.StatusOK {
 		t.Fatalf("管理员会话应可访问管理接口: %d", status)
 	}
+	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/boards?source=wy", nil); status != http.StatusOK {
+		t.Fatalf("管理员应能读取完整榜单候选: %d", status)
+	}
 	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/backups/status", nil); status != http.StatusOK {
 		t.Fatalf("管理员会话应可访问备份接口: %d", status)
 	}
@@ -99,6 +108,9 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	}
 	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/settings", nil); status != http.StatusUnauthorized {
 		t.Fatalf("注销后管理接口应返回 401，实际为 %d", status)
+	}
+	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/boards?source=wy", nil); status != http.StatusUnauthorized {
+		t.Fatalf("未登录不能读取榜单候选接口: %d", status)
 	}
 }
 

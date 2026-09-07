@@ -40,7 +40,14 @@ function song(source, key, query) {
   const names=['测试歌曲一','第二首歌曲','<img src=x onerror=alert(1)>'];
   return {source,songmid:String(key),name:(query ? query+' · ' : '')+names[Number(String(key).replace(/^fail-/,''))-1],singer:'测试歌手',albumName:'合成音频',interval:'00:45',types:[{type:'320k'},{type:'128k'}]};
 }
-globalThis.__sdk_call=(path,args)=>Promise.resolve({list:args[0]==='空' ? [] : [1,2,3].map(id=>song(path.split('.')[0],args[0]==='播放失败' ? 'fail-'+id : id,args[0]))});
+globalThis.__sdk_call=(path,args)=> {
+  if (path.endsWith('.leaderboard.getBoards')) return Promise.resolve({list:[
+    {id:'旧标识',bangid:'hot',name:'热歌榜'},
+    {bangid:'new',name:'新歌榜'},
+    {bangid:'special',name:'<img src=x onerror=alert(1)>'},
+  ]});
+  return Promise.resolve({list:args[0]==='空' ? [] : [1,2,3].map(id=>song(path.split('.')[0],args[0]==='播放失败' ? 'fail-'+id : id,args[0]))});
+};
 globalThis.__sdk_info=(source,key)=>key==='missing' ? Promise.reject(new Error('测试缺失')) : Promise.resolve(song(source,key,''));
 `
 

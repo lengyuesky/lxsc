@@ -111,17 +111,16 @@ func (s *Server) getMusicDirectory(w http.ResponseWriter, r *http.Request) {
 
 	switch p.Kind {
 	case music.KindDir:
+		display := newBoardVisibility(s.Settings.Get())
 		if p.Source == "root" {
 			children := []M{{"id": music.ArtistCategoryID("root"), "parent": "1", "isDir": true, "title": "歌手", "name": "歌手"}}
-			if s.Settings.Get().ShowBoards {
-				for _, src := range uniquePlatforms(s.Settings.Get().BoardSources) {
-					children = append(children, M{"id": "dir-" + src, "parent": "1", "isDir": true, "title": music.PlatformName(src) + "榜单", "name": music.PlatformName(src) + "榜单"})
-				}
+			for _, src := range display.sources {
+				children = append(children, M{"id": "dir-" + src, "parent": "1", "isDir": true, "title": music.PlatformName(src) + "榜单", "name": music.PlatformName(src) + "榜单"})
 			}
 			writeOK(w, r, "directory", M{"id": "1", "name": "在线音乐", "child": children})
 			return
 		}
-		if !s.Settings.Get().ShowBoards || !music.IsPlatform(p.Source) {
+		if !display.includesSource(p.Source) {
 			writeErr(w, r, ErrNotFound, "directory not found")
 			return
 		}
@@ -132,6 +131,9 @@ func (s *Server) getMusicDirectory(w http.ResponseWriter, r *http.Request) {
 		}
 		children := make([]M, 0, len(boards))
 		for _, board := range boards {
+			if !display.allows(board) {
+				continue
+			}
 			children = append(children, M{"id": music.BoardID(p.Source, board.BangID), "parent": id, "isDir": true, "title": board.Name, "name": board.Name})
 		}
 		writeOK(w, r, "directory", M{"id": id, "parent": "1", "name": music.PlatformName(p.Source) + "榜单", "child": children})

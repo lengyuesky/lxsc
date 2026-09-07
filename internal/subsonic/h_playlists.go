@@ -54,10 +54,8 @@ func boardPlaylistObj(board music.Board) (M, bool) {
 // boardPlaylistObjects 并行读取各平台榜单名称，保持配置的平台顺序。
 // 每个平台只请求榜单目录，不请求任何榜单歌曲。
 func (s *Server) boardPlaylistObjects(rc *reqCtx) []M {
-	if !s.Settings.Get().ShowBoards {
-		return nil
-	}
-	sources := uniquePlatforms(s.Settings.Get().BoardSources)
+	display := newBoardVisibility(s.Settings.Get())
+	sources := display.sources
 	if len(sources) == 0 {
 		return nil
 	}
@@ -90,6 +88,9 @@ func (s *Server) boardPlaylistObjects(rc *reqCtx) []M {
 			continue
 		}
 		for _, board := range result.boards {
+			if !display.allows(board) {
+				continue
+			}
 			obj, ok := boardPlaylistObj(board)
 			boardID, _ := obj["id"].(string)
 			if !ok || boardID == "" || seen[boardID] {

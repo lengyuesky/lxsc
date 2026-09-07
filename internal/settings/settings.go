@@ -28,21 +28,22 @@ func parseTTL(value string) (int, error) {
 
 // Values 运行时设置
 type Values struct {
-	SearchSources    []string `json:"searchSources"`    // 聚合搜索的平台及顺序
-	StreamMode       string   `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
-	CoverMode        string   `json:"coverMode"`        // redirect / proxy
-	URLCacheTTL      int      `json:"urlCacheTTL"`      // 直链缓存秒数
-	SearchCacheTTL   int      `json:"searchCacheTTL"`   // 搜索缓存秒数
-	DefaultQuality   string   `json:"defaultQuality"`   // 新用户默认音质
-	ShowBoards       bool     `json:"showBoards"`       // 是否在在线音乐目录展示榜单
-	BoardSources     []string `json:"boardSources"`     // 展示榜单的平台
-	BoardLimit       int      `json:"boardLimit"`       // 旧字段，仅后端兼容读取
-	BoardTrackLimit  int      `json:"boardTrackLimit"`  // 旧字段，仅后端兼容读取
-	ArtistSongLimit  int      `json:"artistSongLimit"`  // 歌手页最多歌曲数
-	ArtistAlbumLimit int      `json:"artistAlbumLimit"` // 歌手页最多专辑数
-	SearchLimit      int      `json:"searchLimit"`      // 每平台每次搜索条数
-	PublicPlaylists  bool     `json:"publicPlaylists"`  // 新建歌单默认公开
-	ServerName       string   `json:"serverName"`
+	SearchSources    []string            `json:"searchSources"`    // 聚合搜索的平台及顺序
+	StreamMode       string              `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
+	CoverMode        string              `json:"coverMode"`        // redirect / proxy
+	URLCacheTTL      int                 `json:"urlCacheTTL"`      // 直链缓存秒数
+	SearchCacheTTL   int                 `json:"searchCacheTTL"`   // 搜索缓存秒数
+	DefaultQuality   string              `json:"defaultQuality"`   // 新用户默认音质
+	ShowBoards       bool                `json:"showBoards"`       // 是否在在线音乐目录和歌单中展示榜单
+	BoardSources     []string            `json:"boardSources"`     // 展示榜单的平台
+	BoardSelections  map[string][]string `json:"boardSelections"`  // 缺少平台表示全部，空数组表示不展示
+	BoardLimit       int                 `json:"boardLimit"`       // 旧字段，仅后端兼容读取
+	BoardTrackLimit  int                 `json:"boardTrackLimit"`  // 旧字段，仅后端兼容读取
+	ArtistSongLimit  int                 `json:"artistSongLimit"`  // 歌手页最多歌曲数
+	ArtistAlbumLimit int                 `json:"artistAlbumLimit"` // 歌手页最多专辑数
+	SearchLimit      int                 `json:"searchLimit"`      // 每平台每次搜索条数
+	PublicPlaylists  bool                `json:"publicPlaylists"`  // 新建歌单默认公开
+	ServerName       string              `json:"serverName"`
 }
 
 // Defaults 默认值
@@ -56,6 +57,7 @@ func Defaults() Values {
 		DefaultQuality:   "320k",
 		ShowBoards:       true,
 		BoardSources:     []string{"wy", "tx", "kw", "kg", "mg"},
+		BoardSelections:  map[string][]string{},
 		BoardLimit:       3,
 		BoardTrackLimit:  30,
 		ArtistSongLimit:  30,
@@ -112,6 +114,10 @@ func apply(v Values, m map[string]string) Values {
 			v.ShowBoards = val == "true" || val == "1"
 		case "boardSources":
 			v.BoardSources = splitList(val)
+		case "boardSelections":
+			if selections, err := parseBoardSelections([]byte(val)); err == nil {
+				v.BoardSelections = selections
+			}
 		case "boardLimit":
 			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= 20 {
 				v.BoardLimit = n
@@ -164,6 +170,12 @@ func (s *Store) Get() Values {
 func cloneValues(v Values) Values {
 	v.SearchSources = append([]string(nil), v.SearchSources...)
 	v.BoardSources = append([]string(nil), v.BoardSources...)
+	selections := make(map[string][]string, len(v.BoardSelections))
+	for source, ids := range v.BoardSelections {
+		// 保留显式空数组，不能将它序列化成 null 或丢掉平台键。
+		selections[source] = append([]string{}, ids...)
+	}
+	v.BoardSelections = selections
 	return v
 }
 
@@ -171,6 +183,15 @@ func cloneValues(v Values) Values {
 func (s *Store) Update(ctx context.Context, patch map[string]json.RawMessage) (Values, error) {
 	m := map[string]string{}
 	for k, raw := range patch {
+		if k == "boardSelections" {
+			selections, err := parseBoardSelections(raw)
+			if err != nil {
+				return s.Get(), err
+			}
+			encoded, _ := json.Marshal(selections)
+			m[k] = string(encoded)
+			continue
+		}
 		if k == "urlCacheTTL" || k == "searchCacheTTL" {
 			value := strings.TrimSpace(string(raw))
 			var str string

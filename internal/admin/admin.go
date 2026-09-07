@@ -73,6 +73,7 @@ func (s *Server) Routes() http.Handler {
 	r.Delete("/backups/webdav/files/{name}", s.deleteWebDAVFile)
 	r.Get("/settings", s.getSettings)
 	r.Put("/settings", s.putSettings)
+	r.Get("/boards", s.getBoards)
 	r.Post("/metadata/cleanup", s.cleanupMetadata)
 	r.Get("/users", s.listUsers)
 	r.Post("/users", s.createUser)

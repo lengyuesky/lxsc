@@ -48,6 +48,50 @@ async function selectPlaylistUI(page, id) {
   await page.locator(`[data-playlist-id="${id}"]`).click()
   await page.waitForFunction(id => playlistState.current?.id === id, id)
 }
+async function adminSettings(page, url) {
+  await page.locator('#logoutButton').click()
+  await page.locator('#login:not(.hidden)').waitFor()
+  await login(page, url, 'admin')
+  await page.locator('nav [data-tab=settings]').click()
+  await page.locator('#settingsForm:not([inert])').waitFor()
+}
+async function showBoardSettings(page) {
+  await page.locator('nav [data-tab=playlists]').click()
+  const panel = page.locator('#boardSettingsPanel')
+  await panel.waitFor()
+  if (!await panel.evaluate(element => element.open)) await panel.locator(':scope > summary').click()
+  await page.locator('#boardSettingsForm:not([inert])').waitFor()
+}
+async function adminBoardSettings(page, url) {
+  await page.locator('#logoutButton').click()
+  await page.locator('#login:not(.hidden)').waitFor()
+  await login(page, url, 'admin')
+  await showBoardSettings(page)
+}
+async function boardGroup(page, source) {
+  const group = page.locator(`[data-board-source="${source}"]`)
+  await group.waitFor()
+  if (!await group.evaluate(element => element.open)) await group.locator('summary').click()
+  return group
+}
+async function saveSettingsUI(page, status = 200) {
+  const saved = page.waitForResponse(response => response.url().endsWith('/api/admin/settings') && response.request().method() === 'PUT')
+  await page.locator('#settingsForm button[type=submit]').click()
+  const response = await saved
+  assert.equal(response.status(), status)
+  for (const field of ['showBoards', 'boardSources', 'boardSelections']) assert.equal(Object.hasOwn(response.request().postDataJSON(), field), false, '系统设置不能回写榜单字段')
+  await page.waitForFunction(() => !settingsState.saving)
+  return response.json()
+}
+async function saveBoardSettingsUI(page, status = 200) {
+  const saved = page.waitForResponse(response => response.url().endsWith('/api/admin/settings') && response.request().method() === 'PUT' && Object.hasOwn(response.request().postDataJSON(), 'boardSelections'))
+  await page.locator('#boardSettingsForm button[type=submit]').click()
+  const response = await saved
+  assert.equal(response.status(), status)
+  assert.deepEqual(Object.keys(response.request().postDataJSON()).sort(), ['boardSelections', 'boardSources', 'showBoards'], '榜单保存只能更新自己的字段')
+  await page.waitForFunction(() => !boardSettingsState.saving)
+  return response.json()
+}
 async function draftSong(page) {
   await page.locator('#searchForm [name=query]').fill('草稿')
   await page.locator('#searchForm [name=source]').selectOption('wy')
@@ -117,6 +161,8 @@ async function main() {
     }
 
     await check('普通用户搜歌、真实播放、队列和导航', async page => {
+      const boardRequests = []
+      page.on('request', request => { if (request.url().includes('/api/admin/boards')) boardRequests.push(request.url()) })
       assert.equal(await page.locator('nav .admin-only:visible').count(), 0)
       assert.equal((await page.request.get(url + '/api/admin/settings')).status(), 403)
       await search(page)
@@ -130,6 +176,8 @@ async function main() {
       await page.locator('#playerPrevious').click()
       await page.waitForFunction(() => webPlayer.index === 0 && webPlayer.status === 'playing')
       await page.locator('nav [data-tab=playlists]').click()
+      assert.equal(await page.locator('#boardSettingsPanel').isVisible(), false)
+      assert.deepEqual(boardRequests, [], '普通用户进入歌单页不能加载管理员榜单目录')
       await search(page, '新搜索')
       assert.equal(await page.evaluate(() => document.querySelector('#webAudio') === window.originalAudio), true)
       assert.match(await page.locator('#playerTitle').innerText(), /^听歌/)
@@ -332,6 +380,181 @@ async function main() {
       await held.finish()
       assert.equal(await page.locator('#toast').isVisible(), false)
       assert.equal(await page.locator('#playerBar').isVisible(), false)
+    })
+
+    await check('榜单勾选保存、刷新及两处展示一致，关闭或移除平台保留选择', async page => {
+      assert.equal((await admin.put(url + '/api/admin/settings', { data: { showBoards: true, boardSources: ['tx', 'wy', 'kg'], boardSelections: {} } })).status(), 200)
+      await adminBoardSettings(page, url)
+      assert.equal(await page.locator('#tab-playlists #boardSettingsForm').count(), 1)
+      assert.equal(await page.locator('#tab-settings [name=showBoards], #tab-settings #boardSelections').count(), 0)
+      for (const [source, selected] of [['tx', 'hot'], ['wy', 'new'], ['kg', null]]) {
+        const group = await boardGroup(page, source)
+        await group.locator('[data-board-mode] option[value=custom]:not([disabled])').waitFor({ state: 'attached' })
+        await group.locator('[data-board-mode]').selectOption('custom')
+        await group.locator('[data-board-action=clear]').click()
+        if (selected) await group.locator(`[data-board-id="${selected}"]`).check()
+      }
+      assert.equal(await page.locator('#boardSelections img').count(), 0, '榜单名称必须按文本转义')
+      const wanted = { tx: ['hot'], wy: ['new'], kg: [] }
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, wanted)
+      async function client(path) {
+        const response = await page.request.get(url + '/rest/' + path + '&f=json&u=alice&p=test-password')
+        const result = (await response.json())['subsonic-response']
+        assert.equal(result.status, 'ok')
+        return result
+      }
+      let root = (await client('getMusicDirectory.view?id=1')).directory
+      assert.deepEqual(root.child.filter(item => item.id.startsWith('dir-')).map(item => item.id), ['dir-tx', 'dir-wy'])
+      const playlistIDs = (await client('getPlaylists.view?')).playlists.playlist.filter(item => item.id.startsWith('lb-')).map(item => item.id)
+      assert.deepEqual(playlistIDs, ['lb-tx-hot', 'lb-wy-new'])
+      assert.deepEqual((await client('getMusicDirectory.view?id=dir-wy')).directory.child.map(item => item.id), ['lb-wy-new'])
+      await page.reload()
+      await showBoardSettings(page)
+      assert.equal(await page.locator('[data-board-source=wy] [data-board-id=new]').isChecked(), true)
+      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), wanted)
+      await page.locator('#boardSettingsPanel').screenshot({ path: path.join(artifacts, 'board-settings-desktop.png') })
+      await page.locator('#boardSettingsForm [name=showBoards]').uncheck()
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, wanted)
+      root = (await client('getMusicDirectory.view?id=1')).directory
+      assert.equal(root.child.filter(item => item.id.startsWith('dir-')).length, 0)
+      await page.locator('#boardSettingsForm [name=boardSources]').fill('wy,kg')
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, wanted)
+      assert.equal(await page.locator('[data-board-source=tx]').count(), 0)
+      await page.locator('#boardSettingsForm [name=boardSources]').fill('tx,wy,kg')
+      await page.locator('#boardSettingsForm [name=showBoards]').check()
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, wanted)
+      assert.equal(await page.locator('[data-board-source=tx] [data-board-id=hot]').isChecked(), true)
+      assert.deepEqual((await client('getPlaylists.view?')).playlists.playlist.filter(item => item.id.startsWith('lb-')).map(item => item.id), playlistIDs)
+    })
+
+    await check('榜单加载失败可保存其他设置，重试与迟到目录不覆盖勾选', async page => {
+      const savedChoices = { wy: ['hot', 'missing'], tx: ['new'] }
+      assert.equal((await admin.put(url + '/api/admin/settings', { data: { showBoards: true, boardSources: ['wy', 'tx'], boardSelections: savedChoices } })).status(), 200)
+      let failures = 0
+      await page.route('**/api/admin/boards?source=wy', route => failures++ === 0
+        ? route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: '模拟平台不可用，请重试' }) })
+        : route.continue())
+      const txHeld = await holdResponse(page, '**/api/admin/boards?source=tx')
+      await adminBoardSettings(page, url)
+      await txHeld.ready
+      const wy = await boardGroup(page, 'wy'), tx = await boardGroup(page, 'tx')
+      await wy.locator('[role=alert]').waitFor()
+      assert.match(await wy.innerText(), /已有选择已保留/)
+      await page.locator('#boardSettingsForm [name=showBoards]').uncheck()
+      await page.locator('nav [data-tab=settings]').click()
+      await page.locator('#settingsForm:not([inert])').waitFor()
+      await page.locator('#settingsForm [name=serverName]').fill('平台失败仍可保存')
+      assert.deepEqual((await saveSettingsUI(page)).boardSelections, savedChoices)
+      await showBoardSettings(page)
+      assert.equal(await page.locator('#boardSettingsForm [name=showBoards]').isChecked(), false, '系统设置读取或保存不能覆盖榜单草稿')
+      await page.locator('#boardSettingsForm [name=showBoards]').check()
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, savedChoices)
+      await tx.locator('[data-board-action=clear]').click()
+      const wyHeld = await holdResponse(page, '**/api/admin/boards?source=wy')
+      await wy.locator('[data-board-action=reload]').click()
+      await wyHeld.ready
+      // 取消一个尚未返回的已选项后，该占位行会立即移除。
+      await wy.locator('[data-board-id=hot]').click()
+      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: ['missing'], tx: [] })
+      await wyHeld.finish()
+      await txHeld.finish()
+      assert.equal(await wy.locator('[data-board-id=hot]').isChecked(), false)
+      assert.equal(await wy.locator('[data-board-id=missing]').isChecked(), true)
+      assert.equal(await tx.locator('input:checked').count(), 0)
+      assert.match(await wy.innerText(), /当前目录未返回，选择仍保留/)
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, { wy: ['missing'], tx: [] })
+      await page.locator('#boardSettingsPanel').screenshot({ path: path.join(artifacts, 'board-settings-retry.png') })
+    })
+
+    await check('旧设置响应和保存失败均保留最新榜单草稿', async page => {
+      assert.equal((await admin.put(url + '/api/admin/settings', { data: { boardSources: ['wy'], boardSelections: { wy: ['hot'] } } })).status(), 200)
+      await page.locator('#logoutButton').click()
+      await page.locator('#login:not(.hidden)').waitFor()
+      await login(page, url, 'admin')
+      const held = await holdResponse(page, '**/api/admin/settings')
+      await page.locator('nav [data-tab=playlists]').click()
+      await page.locator('#boardSettingsPanel > summary').click()
+      await held.ready
+      assert.equal((await admin.put(url + '/api/admin/settings', { data: { boardSelections: { wy: ['new'] } } })).status(), 200)
+      await page.locator('nav [data-tab=search]').click()
+      await page.locator('nav [data-tab=playlists]').click()
+      await page.locator('#boardSettingsForm:not([inert])').waitFor()
+      const wy = await boardGroup(page, 'wy')
+      await wy.locator('[data-board-id=new]').uncheck()
+      await held.finish()
+      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: [] })
+      await wy.locator('[data-board-id=hot]').check()
+      let saves = 0
+      await page.route('**/api/admin/settings', route => route.request().method() === 'PUT' && saves++ === 0
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: '模拟保存失败' }) })
+        : route.continue())
+      await saveBoardSettingsUI(page, 500)
+      assert.equal(await wy.locator('[data-board-id=hot]').isChecked(), true)
+      assert.equal(await page.evaluate(() => boardSettingsState.dirty), true)
+      assert.deepEqual((await (await admin.get(url + '/api/admin/settings')).json()).boardSelections, { wy: ['new'] })
+      assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, { wy: ['hot'] })
+    })
+
+    await check('榜单设置在移动端深色界面可用且不横向溢出', async page => {
+      assert.equal((await admin.put(url + '/api/admin/settings', { data: { boardSources: ['wy', 'tx', 'kw', 'kg', 'mg'], boardSelections: { wy: ['hot', 'temporarily-unavailable-board-with-a-long-identifier'], tx: [] } } })).status(), 200)
+      await adminBoardSettings(page, url)
+      const wy = await boardGroup(page, 'wy')
+      await wy.locator('[data-board-id=new]').waitFor()
+      await wy.locator('[data-board-id=new]').check()
+      const saved = await saveBoardSettingsUI(page)
+      assert.equal(saved.boardSelections.wy.includes('new'), true)
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await page.locator('#boardSettingsPanel').screenshot({ path: path.join(artifacts, 'board-settings-mobile-dark.png') })
+    }, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', isMobile: true, hasTouch: true })
+
+    await check('榜单设置与系统设置独立保存，保留当前歌单草稿和播放', async page => {
+      assert.equal((await admin.put(url + '/api/admin/settings', { data: { boardSources: ['wy'], boardSelections: {}, serverName: '系统原名称' } })).status(), 200)
+      await adminSettings(page, url)
+      await page.locator('#settingsForm [name=serverName]').fill('未保存的系统名称')
+      const target = await createPlaylist(page, url, '榜单保存时的歌单草稿')
+      await selectPlaylistUI(page, target.id)
+      await page.locator('#metaForm [name=name]').fill('未保存的歌单名称')
+      await draftSong(page)
+      await page.waitForFunction(() => webPlayer.status === 'playing')
+      const currentTrack = await page.evaluate(() => webPlayer.track.id)
+      await showBoardSettings(page)
+      const wy = await boardGroup(page, 'wy')
+      await wy.locator('[data-board-mode] option[value=custom]:not([disabled])').waitFor({ state: 'attached' })
+      await wy.locator('[data-board-mode]').selectOption('custom')
+      await wy.locator('[data-board-action=clear]').click()
+      await wy.locator('[data-board-id=hot]').check()
+      const boardSaved = await saveBoardSettingsUI(page)
+      assert.equal(boardSaved.serverName, '系统原名称', '保存榜单不得提交另一个表单的系统草稿')
+      assert.deepEqual(await page.evaluate(() => ({ systemDirty: settingsState.dirty, metaDirty: playlistState.metaDirty, tracksDirty: playlistState.tracksDirty, ids: playlistState.draftTracks.map(track => track.id) })), { systemDirty: true, metaDirty: true, tracksDirty: true, ids: ['tr-wy-2', 'tr-wy-1'] })
+      assert.equal(await page.locator('#metaForm [name=name]').inputValue(), '未保存的歌单名称')
+      assert.deepEqual(await page.evaluate(() => [webPlayer.track.id, webPlayer.status]), [currentTrack, 'playing'])
+      await page.locator('nav [data-tab=settings]').click()
+      assert.equal(await page.locator('#settingsForm [name=serverName]').inputValue(), '未保存的系统名称')
+      const systemSaved = await saveSettingsUI(page)
+      assert.equal(systemSaved.serverName, '未保存的系统名称')
+      assert.deepEqual(systemSaved.boardSelections, { wy: ['hot'] }, '较早打开的系统设置不能覆盖刚保存的榜单')
+      const stored = await (await page.request.get(url + '/api/app/playlists/' + target.id)).json()
+      assert.equal(stored.name, '榜单保存时的歌单草稿')
+      assert.deepEqual(stored.tracks.map(track => track.id), ['tr-wy-1'])
+    })
+
+    await check('歌单页榜单设置读取失败后可以在面板内重试', async page => {
+      await page.locator('#logoutButton').click()
+      await page.locator('#login:not(.hidden)').waitFor()
+      await login(page, url, 'admin')
+      let reads = 0
+      await page.route('**/api/admin/settings', route => route.request().method() === 'GET' && reads++ === 0
+        ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '模拟暂时无法读取' }) })
+        : route.continue())
+      await page.locator('nav [data-tab=playlists]').click()
+      await page.locator('#boardSettingsPanel > summary').click()
+      await page.locator('#retryBoardSettings').waitFor()
+      assert.match(await page.locator('#boardSettingsLoadMsg').innerText(), /读取榜单设置失败/)
+      assert.equal(await page.locator('#boardSettingsForm').isVisible(), false)
+      await page.locator('#retryBoardSettings').click()
+      await page.locator('#boardSettingsForm:not([inert])').waitFor()
+      assert.equal(await page.locator('#boardSettingsLoadNotice').isVisible(), false)
+      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: ['hot'] })
     })
 
     await check('强制302设置保存、直连播放与禁止代理覆盖', async page => {
