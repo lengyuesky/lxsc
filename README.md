@@ -13,20 +13,20 @@
 
 ## 快速开始（Docker / GHCR）
 
-镜像配置地址为 `ghcr.io/lengyuesky/lxsc`，支持 `linux/amd64` 和 `linux/arm64`。**首次 Actions 发布成功且 GHCR 包单独设置为 Public 后**，才能匿名拉取；仓库公开不等于镜像包自动公开。若镜像尚未就绪，可使用下方的本地源码构建。
+默认的 `docker-compose.yml` 直接使用公开镜像 `ghcr.io/lengyuesky/lxsc:latest`，支持 `linux/amd64` 和 `linux/arm64`，可匿名拉取，无需本地构建或登录 GHCR。
 
 ```bash
 mkdir -p lxsc/data/sources && cd lxsc
-curl -fsSLO https://raw.githubusercontent.com/lengyuesky/lxsc/main/docker-compose.ghcr.yml
+curl -fsSLO https://raw.githubusercontent.com/lengyuesky/lxsc/main/docker-compose.yml
 export LXSC_ADMIN_PASSWORD='请替换为自己的强密码'
 # 把音源脚本放到 data/sources/ 目录会在启动时自动导入，也可之后在管理页上传
-docker compose -f docker-compose.ghcr.yml pull
-docker compose -f docker-compose.ghcr.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
-`docker-compose.ghcr.yml` 是独立示例，不要与现有 `docker-compose.yml` 叠加使用。可通过 `LXSC_IMAGE=ghcr.io/lengyuesky/lxsc:v1.2.3` 选择已发布版本，或用 `sha-<完整提交 SHA>` 固定构建；示例标签不代表该版本已经发布。请确保绑定的 `data/` 可由容器 UID 1000 写入。
+可通过 `export LXSC_IMAGE=ghcr.io/lengyuesky/lxsc:v1.2.3` 选择已发布版本，或用 `sha-<完整提交 SHA>` 固定构建；示例标签不代表该版本已经发布。请确保绑定的 `data/` 可由容器 UID 1000 写入。
 
-访问 `http://<host>:27880/` 进入统一控制台。GHCR 示例要求设置首次管理员口令，用户名默认为 `admin`；账号由 `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` 控制，仅首次启动生效。原本地构建 compose 的默认账号仍为 `admin` / `admin`，请在使用前修改口令。
+访问 `http://<host>:27880/` 进入统一控制台。Compose 要求显式设置非空的 `LXSC_ADMIN_PASSWORD`，请使用强密码；用户名默认为 `admin`。账号由 `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` 控制，仅首次启动创建时生效，不会覆盖已有账号。后续执行 Compose 命令时也需提供该密码变量；可将变量保存到 Compose 文件同目录的 `.env`（仓库已忽略），妥善限制文件权限，不要提交密码。
 
 所有账号共用同一登录入口：普通用户可使用「歌单」「搜歌」，管理自己的歌单，并浏览、播放其他用户的公开歌单；管理员还会显示概览、音源、用户、备份、设置和日志，并可管理全部用户歌单及替用户创建歌单。
 
@@ -39,20 +39,24 @@ docker compose -f docker-compose.ghcr.yml up -d
 
 发布任务仅使用本次运行的 `GITHUB_TOKEN` 和 `packages: write`，没有长期 PAT，也不使用 `pull_request_target`。第三方 Actions 固定完整提交 SHA，核对记录在 `.github/actions-pins.json`。工作流只构建/发布镜像，不更改仓库可见性，不自动部署或重启服务器。
 
-**首次发布须由包管理员另外处理可见性**：在 GitHub 的 `Packages → lxsc → Package settings → Change visibility` 将包设为 `Public`，然后实际验证匿名拉取。GHCR 包默认可能为 Private，仓库权限继承不包含包可见性；若发布受限，还需核对包的 `Manage Actions access` 与组织策略。当前文档说明已实施的配置，远程运行/发布结果以 Actions 和 Packages 页面为准，不预先保证某次运行成功。
+本仓库的 GHCR 包已公开。**Fork 或首次发布到新包时，须单独确认包可见性**：若为 Private，由包管理员在 GitHub 的 `Packages → lxsc → Package settings → Change visibility` 将包设为 `Public`，然后实际验证匿名拉取。仓库权限继承不包含包可见性；若发布受限，还需核对包的 `Manage Actions access` 与组织策略。各次构建和发布结果以 Actions 和 Packages 页面为准。
 
 ### 本地 Docker 构建
 
-现有 `docker-compose.yml` 保持本地 `image: lxsc:latest` 加 `build: .` 的行为不变：
+默认 `docker-compose.yml` 不再包含 `build: .`。需要从源码构建时，先手动构建本地镜像，再通过 `LXSC_IMAGE` 复用同一份 Compose 配置：
 
 ```bash
 git clone https://github.com/lengyuesky/lxsc.git
 cd lxsc
-# 先在 docker-compose.yml 修改首次管理员口令，再构建启动。
-docker compose up -d --build
+export LXSC_ADMIN_PASSWORD='请替换为自己的强密码'
+export LXSC_IMAGE=lxsc:local
+docker build -t "$LXSC_IMAGE" .
+docker compose up -d --pull never
 ```
 
-已有部署不会因增加 GHCR 示例或 Actions 而自动切换镜像。
+后续使用本地镜像时，请继续设置 `LXSC_IMAGE=lxsc:local`，或将其保存到 `.env`；更新源码后需重新执行 `docker build`，仅加 `--build` 不会构建镜像。
+
+更新仓库文件不会自动部署或重启已有服务。原本地构建部署若要切换到 GHCR，请先备份 `data/`、设置上述密码变量并取消本地 `LXSC_IMAGE` 覆盖，再执行 `docker compose pull` 和 `docker compose up -d`；已有账号与数据继续保存在原来的 `data/` 中。
 
 ### 本地运行
 
@@ -102,7 +106,7 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 |---|---|---|
 | `LXSC_LISTEN` / `LXSC_PORT` | 监听地址 | `:8080` |
 | `LXSC_DATA_DIR` | 数据目录（数据库、密钥、`sources/`） | `./data`（Docker 为 `/data`） |
-| `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` | 首次启动创建的管理员 | `admin` / `admin` |
+| `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` | 首次启动创建的管理员 | 程序默认 `admin` / `admin`；Compose 要求显式设置密码 |
 | `LXSC_PROXY` | 上游代理 `http://` 或 `socks5://` | 空 |
 | `LXSC_SDK_WORKERS` | 搜索/歌词 SDK 的 JS 线程数 | `2` |
 | `LXSC_LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
