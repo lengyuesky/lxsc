@@ -83,6 +83,8 @@ $('#loginForm').addEventListener('submit', async event => {
 $('#logoutButton').addEventListener('click', async event => {
   event.preventDefault()
   if (!confirmDiscard()) return
+  webPlayer.audio.pause()
+  await listeningTracker.flush()
   await authAPI('/logout', { method: 'POST' })
   clearDetail()
   location.hash = ''
@@ -90,12 +92,12 @@ $('#logoutButton').addEventListener('click', async event => {
 })
 
 // ---- 路由 ----
-const loaders = { playlists: loadPlaylistTab, dashboard: loadDashboard, sources: loadSources, users: loadUsers, backups: loadBackups, settings: loadSettings, search: () => {}, logs: loadLogs }
+const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), dashboard: loadDashboard, sources: loadSources, users: loadUsers, backups: loadBackups, settings: loadSettings, search: () => {}, logs: loadLogs }
 function route() {
   if (!sessionState.me) return
   const fallback = sessionState.me.isAdmin ? 'dashboard' : 'playlists'
   let tab = (location.hash || '#' + fallback).slice(1)
-  if (!loaders[tab] || (!sessionState.me.isAdmin && !['playlists', 'search'].includes(tab))) tab = fallback
+  if (!loaders[tab] || (!sessionState.me.isAdmin && !['playlists', 'search', 'listening'].includes(tab))) tab = fallback
   if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab)
   document.querySelectorAll('nav a[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === tab))
   document.querySelectorAll('.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + tab))

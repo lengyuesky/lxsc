@@ -95,6 +95,8 @@ func (s *Server) Routes() http.Handler {
 	r.Delete("/playlists/{id}", s.deletePlaylist)
 	r.Post("/search", s.search)
 	r.Get("/stream", s.stream)
+	r.Post("/listening/progress", s.listeningProgress)
+	r.Get("/listening/stats", s.listeningStats)
 	return r
 }
 

@@ -81,6 +81,33 @@ CREATE TABLE IF NOT EXISTS history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id, played_at DESC);
 
+-- 新版首次打开数据库时启用统计，保留原有历史但不回填。
+CREATE TABLE IF NOT EXISTS listening_meta (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  enabled_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO listening_meta(id, enabled_at) VALUES(1, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+
+CREATE TABLE IF NOT EXISTS listening_sessions (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_key TEXT NOT NULL,
+  source TEXT NOT NULL CHECK(source IN ('web', 'client')),
+  track_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  singer TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  unknown_duration INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, source, session_key)
+);
+CREATE TABLE IF NOT EXISTS listening_days (
+  session_id INTEGER NOT NULL REFERENCES listening_sessions(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  milliseconds INTEGER NOT NULL CHECK(milliseconds >= 0),
+  PRIMARY KEY(session_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_listening_day ON listening_days(day, session_id);
+
 -- 专辑/歌手元数据缓存
 CREATE TABLE IF NOT EXISTS albums (
   id         TEXT PRIMARY KEY,

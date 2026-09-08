@@ -160,6 +160,8 @@ async function main() {
       }
     }
 
+    await require('./listening-browser.cjs')({ check, url, artifacts, login, search, playSearch, holdResponse })
+
     await check('普通用户搜歌、真实播放、队列和导航', async page => {
       const boardRequests = []
       page.on('request', request => { if (request.url().includes('/api/admin/boards')) boardRequests.push(request.url()) })

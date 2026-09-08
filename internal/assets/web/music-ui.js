@@ -26,11 +26,24 @@ const webPlayer = new LXSCMusic.PlayerController({
   audio: $('#webAudio'),
   streamURL: track => '/api/app/stream?' + new URLSearchParams({ id: track.id, quality: sessionState.me?.quality || '320k' }),
   onChange: renderPlayer,
+  onLoad: track => listeningTracker.start(track),
   onFailure: () => {
     // 原生音频事件拿不到 HTTP 状态，通过普通会话接口确认是否需要退出。
     authAPI('/me').catch(() => {})
   },
 })
+
+const listeningTracker = new LXSCListening.ListeningTracker({
+  audio: $('#webAudio'), user: () => sessionState.me,
+  send: async (body, options) => {
+    const response = await fetch('/api/app/listening/progress', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...options })
+    if (!response.ok) { const error = new Error('听歌进度上报失败'); error.status = response.status; throw error }
+  },
+})
+setInterval(() => listeningTracker.sample(), 1000)
+setInterval(() => listeningTracker.flush(), 15000)
+window.addEventListener('pagehide', () => listeningTracker.flush(true))
+document.addEventListener('visibilitychange', () => { if (document.hidden) listeningTracker.flush(true) })
 
 function renderPlaybackMarkers() {
   const track = webPlayer.track
@@ -256,6 +269,8 @@ $('#collectForm').addEventListener('submit', async event => {
 })
 
 function resetMusicSession() {
+  listeningTracker.reset()
+  resetListeningSession()
   sessionState.epoch++
   for (const controller of sessionState.requests) controller.abort()
   sessionState.requests.clear()

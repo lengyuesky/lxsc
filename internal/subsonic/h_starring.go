@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"lxsc/internal/db"
 	"lxsc/internal/music"
 )
 
@@ -144,22 +145,36 @@ func (s *Server) scrobble(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(id, music.KindTrack+"-") {
 			continue
 		}
-		var at int64
+		now := time.Now()
+		playedAt := now.UnixMilli()
+		hasTimestamp, validTimestamp := false, true
 		if i < len(times) {
-			if ms, err := strconv.ParseInt(times[i], 10, 64); err == nil {
-				at = ms / 1000
+			ms, err := strconv.ParseInt(times[i], 10, 64)
+			validTimestamp = err == nil && ms > 0
+			if validTimestamp {
+				playedAt, hasTimestamp = ms, true
 			}
 		}
-		if at <= 0 {
-			at = time.Now().Unix()
-		}
+		track := db.ListeningTrack{ID: id, Name: "未知歌曲"}
+		var durationMS int64
 		// scrobble 可能先于 stream 到达；此时将歌曲视为实际播放并持久化元数据。
 		if in, err := s.Catalog.Track(r.Context(), id); err == nil {
+			track.Name, track.Singer = in.Name(), in.Singer()
+			durationMS = int64(in.Duration()) * 1000
 			if err := s.Catalog.RememberSync(r.Context(), []*music.Info{in}); err != nil && s.Log != nil {
 				s.Log.Warn("持久化 scrobble 歌曲元数据失败", "id", id, "err", err)
 			}
 		}
-		_ = s.DB.AddHistory(r.Context(), u.ID, id, at)
+		if validTimestamp {
+			if err := s.DB.AddClientListening(r.Context(), u.ID, param(r, "c"), track, durationMS, playedAt, hasTimestamp, now); err != nil {
+				if s.Log != nil {
+					s.Log.Error("保存客户端听歌统计失败", "err", err)
+				}
+				writeErr(w, r, ErrGeneric, "保存听歌统计失败")
+				return
+			}
+		}
+		_ = s.DB.AddHistory(r.Context(), u.ID, id, playedAt/1000)
 	}
 	writeOK(w, r, "", nil)
 }

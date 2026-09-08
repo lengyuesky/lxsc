@@ -6,6 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>lxsc 控制台</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="listening.css">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -59,6 +60,7 @@
     <nav>
       <a href="#playlists" data-tab="playlists"><svg class="icon"><use href="#i-music"/></svg><span>歌单</span></a>
       <a href="#search" data-tab="search"><svg class="icon"><use href="#i-search"/></svg><span>搜歌</span></a>
+      <a href="#listening" data-tab="listening"><svg class="icon"><use href="#i-dash"/></svg><span>听歌统计</span></a>
       <a href="#dashboard" data-tab="dashboard" class="admin-only hidden"><svg class="icon"><use href="#i-dash"/></svg><span>概览</span></a>
       <a href="#sources" data-tab="sources" class="admin-only hidden"><svg class="icon"><use href="#i-code"/></svg><span>音源</span></a>
       <a href="#users" data-tab="users" class="admin-only hidden"><svg class="icon"><use href="#i-users"/></svg><span>用户</span></a>
@@ -162,6 +164,12 @@
       </div>
     </section>
 
+    <section id="tab-listening" class="tab" aria-label="听歌统计">
+      <div class="page-head listening-head"><div><h2>听歌统计</h2><p>让每一段旋律，都留下时间的回响</p></div><div class="listening-filters"><label id="listeningScopeWrap" class="hidden">查看对象<select id="listeningScope" aria-label="查看对象"><option value="me">我的统计</option><option value="all">全站统计</option></select></label><label>时间范围<select id="listeningRange" aria-label="统计时间范围"><option value="7">近 7 天</option><option value="30" selected>近 30 天</option><option value="90">近 90 天</option><option value="365">近 365 天</option></select></label><button id="listeningRefresh" class="sec" type="button" aria-label="刷新听歌统计"><svg class="icon"><use href="#i-refresh"/></svg></button></div></div>
+      <div id="listeningNotice" role="status"></div>
+      <div id="listeningContent" aria-busy="false"></div>
+    </section>
+
     <section id="tab-dashboard" class="tab admin-only">
       <div class="page-head"><div><h2>概览</h2><p>服务健康、数据规模与备份状态</p></div><button class="sec" onclick="loadDashboard()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
       <div id="healthHero" class="card health-hero"></div>
@@ -240,8 +248,10 @@
 
 <div id="toast" class="toast hidden"></div>
 <script src="player.js"></script>
+<script src="listening-tracker.js"></script>
 <script src="board-settings.js"></script>
 <script src="app.js"></script>
+<script src="listening.js"></script>
 <script src="music-ui.js"></script>
 </body>
 </html>

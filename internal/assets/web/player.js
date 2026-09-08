@@ -16,11 +16,12 @@
   }
 
   class PlayerController {
-    constructor({ audio, streamURL, onChange = () => {}, onFailure = () => {} }) {
+    constructor({ audio, streamURL, onChange = () => {}, onFailure = () => {}, onLoad = () => {} }) {
       this.audio = audio
       this.streamURL = streamURL
       this.onChange = onChange
       this.onFailure = onFailure
+      this.onLoad = onLoad
       this.queue = []
       this.index = -1
       this.version = 0
@@ -62,6 +63,7 @@
 
     load() {
       if (!this.track) return
+      this.onLoad(this.track)
       const version = ++this.version
       this.unbind()
       this.audio.pause()

@@ -1,0 +1,108 @@
+/* 听歌统计：延续控制台主题，以唱片、留白和双来源配色突出音乐时光。 */
+.listening-head { align-items: center }
+.listening-filters { display: flex; align-items: flex-end; gap: 10px }
+.listening-filters label { margin: 0; font-size: 11px; color: var(--muted); display: grid; gap: 5px }
+.listening-filters select { max-width: 200px; min-width: 110px; background-color: var(--card) }
+.listening-filters button { min-height: 39px }
+.listening-hero.card { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 24px; overflow: hidden; padding: 32px 40px; background: radial-gradient(ellipse at 94% 0%, color-mix(in srgb,var(--pri) 14%,transparent),transparent 60%),linear-gradient(110deg,var(--card),var(--pri-soft)); border-color: color-mix(in srgb,var(--pri) 18%,var(--line)) }
+.listening-hero-copy { position: relative; z-index: 1; min-width: 0; flex: 1 }
+.listening-eyebrow { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--pri); font-size: 12px; letter-spacing: .1em }
+.listening-eyebrow>i { width: 6px; height: 6px; border-radius: 50%; background: var(--pri) }
+.listening-hero h3 { font-size: 19px; font-weight: 500; margin: 17px 0 0; color: var(--fg-2) }
+.listening-total { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin: 2px 0 0; font-variant-numeric: tabular-nums }
+.listening-total b { font-size: clamp(44px,5vw,68px); line-height: 1.35; letter-spacing: -.055em; font-weight: 650 }
+.listening-total span { font-size: 15px; color: var(--muted); margin-right: 12px }
+.listening-hero p { font-size: 12px; color: var(--muted); margin: 3px 0 22px }
+.listening-source { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 12px; color: var(--fg-2) }
+.listening-source span,.listening-legend span { display: inline-flex; align-items: center; gap: 6px }
+.listening-source b { font-weight: 600; color: var(--fg) }
+.listening-source i,.listening-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none }
+.listening-source .web,.listening-legend .web { background: var(--ok) }
+.listening-source .client,.listening-legend .client { background: var(--pri) }
+.listening-source-meter { width: min(100%,380px); height: 4px; border-radius: 3px; background: color-mix(in srgb,var(--pri) 45%,var(--line)); margin-top: 12px; overflow: hidden }
+.listening-source-meter i { height: 100%; display: block; background: var(--ok) }
+.listening-record { position: relative; width: 210px; height: 210px; border-radius: 50%; flex: none; background: repeating-radial-gradient(circle,#222333 0,#222333 2px,#303144 3px,#222333 4px); box-shadow: 0 18px 35px #18182b33; border: 6px solid #303043; transform: rotate(-18deg); margin-right: 16px }
+.listening-record:before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(transparent 35deg,#ffffff24 65deg,transparent 100deg,transparent 200deg,#ffffff24 245deg,transparent 275deg) }
+.listening-record-label { position: absolute; inset: 30%; background: linear-gradient(135deg,#9690f5,#5146b9); border: 3px solid #464158; border-radius: 50%; color: white; display: grid; place-content: center; justify-items: center; gap: 4px }
+.listening-record-label svg { width: 23px; height: 23px }
+.listening-record-label span { font-size: 9px; letter-spacing: .15em }
+.listening-record>i { position: absolute; width: 8px; height: 8px; background: #262535; border: 2px solid #b4a9f1; border-radius: 50%; left: calc(50% - 4px); top: calc(50% - 4px) }
+.listening-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; margin: 16px 0 24px }
+.listening-metrics>.card { margin: 0; display: flex; align-items: flex-start; gap: 16px; padding: 22px }
+.listening-metric-icon { padding: 10px; display: inline-flex; background: var(--pri-soft); color: var(--pri); border-radius: 12px; flex: none }
+.listening-metric-icon.mint { background: var(--ok-soft); color: var(--ok) }
+.listening-metric-icon.amber { background: var(--warn-soft); color: var(--warn) }
+.listening-metrics strong,.listening-metrics small { display: block }
+.listening-metrics span:not(.listening-metric-icon) { color: var(--muted); font-size: 12px }
+.listening-metrics strong { margin: 4px 0 6px; font-size: 23px; letter-spacing: -.03em }
+.listening-metrics em { font-size: 13px; font-style: normal; font-weight: 400; color: var(--muted) }
+.listening-metrics small { font-size: 11px; color: var(--muted) }
+.listening-main-grid { display: grid; grid-template-columns: minmax(0,1.5fr) minmax(280px,1fr); gap: 20px; align-items: stretch }
+.listening-main-grid>.card { margin: 0; min-width: 0; padding: 24px }
+.listening-main-grid h3,.listening-users h3 { margin: 0; font-size: 15px }
+.listening-main-grid .section-title p,.listening-users .section-title p { font-size: 11px; color: var(--muted); margin: 4px 0 0 }
+.listening-legend { display: flex; gap: 12px; font-size: 11px; color: var(--muted); flex: none }
+.listening-chart { margin-top: 24px }
+.listening-chart svg { display: block; width: 100%; overflow: visible }
+.listening-chart text { font: 11px system-ui,sans-serif; fill: var(--muted) }
+.listening-gridline { stroke: var(--line); stroke-dasharray: 3 4 }
+.listening-client-line,.listening-web-line { fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke }
+.listening-client-line { stroke: var(--pri) }
+.listening-web-line { stroke: var(--ok) }
+.listening-chart-point { fill: var(--ok); stroke: var(--card); stroke-width: 2 }
+.listening-date-control { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); margin: 10px 0 14px }
+.listening-date-control input { flex: 1; min-width: 0; width: auto; accent-color: var(--ok); padding: 0; box-shadow: none }
+.listening-day-detail { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 12px 14px; border-radius: 9px; background: var(--card-2); font-size: 11px; color: var(--muted) }
+.listening-day-detail strong,.listening-day-detail b { color: var(--fg-2); font-weight: 600 }
+.listening-top { grid-column: 2; grid-row: 1 / 3 }
+.listening-top-label { color: var(--pri); font-size: 10px; font-weight: 650; letter-spacing: .08em; white-space: nowrap }
+.listening-rank { list-style: none; padding: 0; margin: 14px 0 0 }
+.listening-rank li { display: flex; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line) }
+.listening-rank li:last-child { border: 0 }
+.listening-position { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums }
+.listening-position.top { color: var(--pri); font-weight: 700 }
+.listening-rank-main { flex: 1; min-width: 0 }
+.listening-rank-main strong,.listening-rank-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.listening-rank-main strong { font-size: 12px; font-weight: 600 }
+.listening-rank-main small { font-size: 10px; color: var(--muted); margin: 2px 0 7px }
+.listening-rank-meter { height: 3px; background: var(--card-2); border-radius: 2px; overflow: hidden }
+.listening-rank-meter i { display: block; height: 100%; background: color-mix(in srgb,var(--pri) 50%,var(--card)); border-radius: 2px }
+.listening-rank-time { flex: none; font-size: 10px; color: var(--fg-2); white-space: nowrap }
+.listening-rank-empty { text-align: center; color: var(--muted); padding: 55px 10px; font-size: 12px }
+.listening-rank-empty svg { width: 40px; height: 40px; color: var(--pri); opacity: .45 }
+.listening-calendar-scroll { overflow-x: auto; padding: 5px 3px 10px; margin: 20px -3px 0 }
+.listening-calendar { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7,16px); grid-auto-columns: 16px; gap: 5px; width: max-content; min-width: min(100%,180px) }
+.listening-day { padding: 0; border: 0; border-radius: 4px; min-width: 0; min-height: 0; width: 16px; height: 16px; box-shadow: none }
+.listening-day:hover { transform: none; filter: brightness(1.1) }
+.listening-day.selected { outline: 2px solid var(--pri); outline-offset: 1px }
+.listening-calendar-scroll.detailed { margin-top: 16px }
+.listening-weekdays { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 6px; margin-bottom: 8px; color: var(--muted); font-size: 10px; text-align: center }
+.detailed .listening-calendar { width: 100%; grid-auto-flow: row; grid-template-columns: repeat(7,minmax(0,1fr)); grid-template-rows: none; grid-auto-columns: auto; grid-auto-rows: 30px; gap: 6px }
+.detailed .listening-day { width: 100%; height: 30px; font-size: 10px; font-weight: 500; color: var(--fg); border-radius: 5px }
+.detailed .listening-day.level-4 { color: var(--card) }
+.listening-day.level-0,.level-0 { background: var(--bg-2) }
+.listening-day.level-1,.level-1 { background: color-mix(in srgb,var(--ok) 28%,var(--card)) }
+.listening-day.level-2,.level-2 { background: color-mix(in srgb,var(--ok) 48%,var(--card)) }
+.listening-day.level-3,.level-3 { background: color-mix(in srgb,var(--ok) 72%,var(--card)) }
+.listening-day.level-4,.level-4 { background: var(--ok) }
+.listening-calendar-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 12px; font-size: 10px; color: var(--muted) }
+.listening-intensity { display: inline-flex; align-items: center; gap: 4px }
+.listening-intensity i { width: 10px; height: 10px; border-radius: 2px }
+.listening-users { margin-top: 20px; padding: 24px }
+.listening-users .listening-rank { display: grid; grid-template-columns: 1fr 1fr; column-gap: 32px }
+.listening-user { display: block; text-align: left; padding: 0; color: var(--pri); background: none; box-shadow: none; border: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px }
+.listening-user:hover { background: none; text-decoration: underline }
+.listening-empty { display: flex; justify-content: space-between; gap: 15px; align-items: center; padding: 20px 24px; border: 1px dashed var(--line-2); box-shadow: none }
+.listening-empty p { margin: 4px 0 0; color: var(--muted); font-size: 12px }
+.listening-empty a { white-space: nowrap }
+.listening-footnote { padding: 22px 0 0; font-size: 11px; color: var(--muted); line-height: 1.8 }
+.listening-footnote p { margin: 5px 0 }
+.listening-error { display: flex; justify-content: space-between; align-items: center; gap: 12px; background: var(--err-soft); color: var(--err); padding: 14px; border-radius: 10px; margin-bottom: 16px }
+.listening-skeleton { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px }
+.listening-skeleton div { min-height: 125px; border-radius: 14px; background: linear-gradient(110deg,var(--card) 25%,var(--bg-2) 45%,var(--card) 65%); background-size: 200% 100%; animation: listening-shimmer 1.5s linear infinite }
+.listening-skeleton div:first-child { grid-column: 1/-1; min-height: 290px }
+@keyframes listening-shimmer { to { background-position: -200% 0 } }
+@media(max-width:1100px) { .listening-hero.card { padding: 28px }.listening-record { width: 165px; height: 165px; margin-right: 0 }.listening-metrics>.card { gap: 10px; padding: 18px 14px }.listening-metrics strong { font-size: 20px }.listening-main-grid { grid-template-columns: minmax(0,1.3fr) minmax(250px,1fr) }.listening-main-grid>.card { padding: 20px } }
+@media(max-width:850px) { .listening-main-grid { grid-template-columns: minmax(0,1fr) }.listening-top { grid-column: auto; grid-row: auto }.listening-calendar-card { grid-row: 2 }.listening-head { flex-wrap: wrap }.listening-metric-icon { padding: 7px }.listening-metrics>.card { display: block }.listening-metric-icon { margin-bottom: 8px } }
+@media(max-width:520px) { .listening-head { gap: 18px }.listening-filters { width: 100%; gap: 8px }.listening-filters label { flex: 1; min-width: 0 }.listening-filters select { width: 100%; min-width: 0; max-width: none }.listening-hero.card { padding: 24px 20px }.listening-record { position: absolute; right: -48px; top: 26px; width: 155px; height: 155px; opacity: .14 }.listening-total b { font-size: 49px }.listening-total { gap: 7px }.listening-total span { margin-right: 4px; font-size: 12px }.listening-hero h3 { font-size: 16px }.listening-source { font-size: 11px; gap: 7px 15px }.listening-metrics { gap: 8px; margin: 12px 0 16px }.listening-metrics>.card { padding: 14px 10px }.listening-metrics strong { font-size: 17px }.listening-metrics small { font-size: 10px }.listening-metrics em { font-size: 11px }.listening-main-grid { gap: 16px }.listening-main-grid>.card { padding: 20px 16px }.listening-empty { flex-direction: column; align-items: flex-start; padding: 20px }.listening-users .listening-rank { grid-template-columns: 1fr }.listening-calendar-card .section-title { flex-wrap: wrap; gap: 6px } }
+@media(prefers-reduced-motion:reduce) { .listening-skeleton div { animation: none } #tab-listening { animation: none } }
