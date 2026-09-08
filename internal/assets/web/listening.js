@@ -1,6 +1,7 @@
 // 听歌看板复用统一会话、路由与主题，图表使用原生 SVG。
 const listeningGate = new LXSCMusic.RequestGate()
 const listeningState = { data: null, usersLoaded: false, selected: '', loading: false }
+const listeningChartSize = { width: 700, height: 200, left: 48, right: 16, top: 18, bottom: 28 }
 const listeningTime = ms => {
   const seconds = Math.floor(Math.max(0, ms) / 1000)
   if (seconds < 60) return `${seconds} 秒`
@@ -17,8 +18,12 @@ function resetListeningSession() {
   $('#listeningRange').value = '30'
   $('#listeningScopeWrap').classList.add('hidden')
 }
+function listeningDateEditing() {
+  return document.activeElement?.id === 'listeningDayPicker' || $('#listeningDaySlider')?.matches(':active')
+}
 async function loadListening(silent = false) {
-  if (!sessionState.me) return
+  // 原生日期面板和滑块操作期间暂缓刷新，避免重建 DOM 打断正在进行的选择。
+  if (!sessionState.me || (silent && listeningDateEditing())) return
   const request = listeningGate.begin()
   listeningState.loading = true
   const content = $('#listeningContent'), scope = $('#listeningScope').value
@@ -32,7 +37,7 @@ async function loadListening(silent = false) {
   }
   try {
     const stats = await playlistAPI('/listening/stats?' + params, { signal: request.signal })
-    if (!request.current()) return
+    if (!request.current() || (silent && listeningDateEditing())) return
     listeningState.data = stats
     renderListening(stats)
     if (sessionState.me.isAdmin && !listeningState.usersLoaded) {
@@ -59,13 +64,25 @@ function listeningRank(items, users = false) {
   return `<ol class="listening-rank">${items.map((item, i) => `<li><span class="listening-position ${i < 3 ? 'top' : ''}">${String(i + 1).padStart(2, '0')}</span><div class="listening-rank-main">${users ? `<button type="button" class="listening-user" data-listening-user="${esc(item.id)}">${esc(item.name)}</button>` : `<strong title="${esc(item.name)}">${esc(item.name || '未知歌曲')}</strong>`}<small>${users ? `${item.plays} 次收听` : esc(item.singer || '未知歌手')}</small><div class="listening-rank-meter"><i style="width:${item.totalMs / maxMS * 100}%"></i></div></div><span class="listening-rank-time">${listeningTime(item.totalMs)}</span></li>`).join('')}</ol>`
 }
 function listeningChart(stats) {
-  const daily = stats.daily, width = 700, height = 200, left = 48, right = 16, top = 18, bottom = 28
+  const daily = stats.daily, { width, height, left, right, top, bottom } = listeningChartSize
   const maximum = Math.max(60000, ...daily.map(day => day.totalMs))
-  const x = i => left + i / Math.max(1, daily.length - 1) * (width - left - right)
+  const step = (width - left - right) / Math.max(1, daily.length - 1)
+  const x = i => left + i * step
   const y = ms => height - bottom - ms / maximum * (height - top - bottom)
   const line = key => daily.map((day, i) => `${i ? 'L' : 'M'}${x(i).toFixed(2)},${y(day[key]).toFixed(2)}`).join(' ')
   const ticks = [0, .5, 1].map(r => `<line x1="${left}" y1="${y(maximum * r)}" x2="${width - right}" y2="${y(maximum * r)}" class="listening-gridline"/><text x="${left - 10}" y="${y(maximum * r) + 4}" text-anchor="end">${Math.round(maximum * r / 60000)}</text>`).join('')
-  return `<div class="listening-chart"><span class="muted hint">分钟</span><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="每日听歌时长趋势，可使用下方日期滑块查看准确数值"><defs><linearGradient id="listeningArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--pri)" stop-opacity=".18"/><stop offset="100%" stop-color="var(--pri)" stop-opacity="0"/></linearGradient></defs>${ticks}<path d="${line('totalMs')} L${x(daily.length - 1)},${y(0)} L${x(0)},${y(0)} Z" fill="url(#listeningArea)"/><path d="${line('clientMs')}" class="listening-client-line"/><path d="${line('webMs')}" class="listening-web-line"/>${[0, Math.floor((daily.length - 1) / 2), daily.length - 1].map(i => `<text x="${x(i)}" y="${height - 4}" text-anchor="${i === 0 ? 'start' : i === daily.length - 1 ? 'end' : 'middle'}">${daily[i].day.slice(5).replace('-', '/')}</text>`).join('')}<circle id="listeningChartPoint" r="4" class="listening-chart-point"/>${daily.map((day, i) => `<rect x="${x(i) - (width - left - right) / daily.length / 2}" y="${top}" width="${Math.max(2, (width - left - right) / daily.length)}" height="${height - top - bottom}" fill="transparent" data-listening-day="${day.day}"/>`).join('')}</svg><label class="listening-date-control"><span>查看日期</span><input type="range" id="listeningDaySlider" aria-label="查看每日听歌时长" min="0" max="${daily.length - 1}" value="${daily.length - 1}"></label></div>`
+  const hitAreas = daily.map((day, i) => {
+    const start = i === 0 ? left : x(i) - step / 2
+    const end = i === daily.length - 1 ? width - right : x(i) + step / 2
+    return `<rect x="${start}" y="${top}" width="${end - start}" height="${height - top - bottom}" fill="transparent" data-listening-day="${day.day}"/>`
+  }).join('')
+  return `<div class="listening-chart"><span class="muted hint">分钟</span><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="每日听歌时长趋势，点击图表或使用下方日期控件查看准确数值"><defs><linearGradient id="listeningArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--pri)" stop-opacity=".18"/><stop offset="100%" stop-color="var(--pri)" stop-opacity="0"/></linearGradient></defs>${ticks}<path d="${line('totalMs')} L${x(daily.length - 1)},${y(0)} L${x(0)},${y(0)} Z" fill="url(#listeningArea)"/><path d="${line('clientMs')}" class="listening-client-line"/><path d="${line('webMs')}" class="listening-web-line"/>${[0, Math.floor((daily.length - 1) / 2), daily.length - 1].map(i => `<text x="${x(i)}" y="${height - 4}" text-anchor="${i === 0 ? 'start' : i === daily.length - 1 ? 'end' : 'middle'}">${daily[i].day.slice(5).replace('-', '/')}</text>`).join('')}<line id="listeningChartCursor" y1="${top}" y2="${y(0)}" class="listening-chart-cursor"/><circle id="listeningChartClientPoint" r="4" class="listening-chart-point client"/><circle id="listeningChartPoint" r="4" class="listening-chart-point"/>${hitAreas}</svg>
+    <div class="listening-date-control" role="group" aria-label="选择收听日期">
+      <div class="listening-date-heading"><label for="listeningDayPicker">查看日期</label><button type="button" class="ghost sm" id="listeningDayToday">回到今天</button></div>
+      <div class="listening-date-picker"><button type="button" class="sec" id="listeningDayPrevious" aria-label="前一天" title="前一天">‹</button><input type="date" id="listeningDayPicker" min="${stats.from}" max="${stats.to}" value="${stats.to}" required aria-controls="listeningDayDetail" aria-describedby="listeningDateHint listeningDateError"><button type="button" class="sec" id="listeningDayNext" aria-label="后一天" title="后一天">›</button></div>
+      <div class="listening-date-slider"><span>${stats.from.replaceAll('-', '/')}</span><input type="range" id="listeningDaySlider" aria-label="拖动查看每日听歌时长" aria-controls="listeningDayDetail" min="0" max="${daily.length - 1}" step="1" value="${daily.length - 1}"><span>${stats.to.replaceAll('-', '/')}</span></div>
+      <p id="listeningDateHint" class="listening-date-hint">点击图表或日历选定日期，鼠标移过不会切换。</p><p id="listeningDateError" class="listening-date-error" role="alert"></p>
+    </div></div>`
 }
 function listeningCalendar(stats) {
   const maxMS = Math.max(1, ...stats.daily.map(day => day.totalMs))
@@ -79,7 +96,8 @@ function listeningCalendar(stats) {
 }
 function renderListening(stats) {
   const focused = document.activeElement?.dataset.listeningDay
-  const sliderFocused = document.activeElement?.id === 'listeningDaySlider'
+  const focusedControl = document.activeElement?.id
+  const calendarScroll = $('.listening-calendar-scroll')?.scrollLeft || 0
   const scope = $('#listeningScope').value
   const hours = Math.floor(stats.totalMs / 3600000), minutes = Math.floor(stats.totalMs / 60000) % 60
   const share = stats.totalMs ? stats.webMs / stats.totalMs * 100 : 0
@@ -96,24 +114,43 @@ function renderListening(stats) {
   const daily = stats.daily
   if (!daily.some(day => day.day === listeningState.selected)) listeningState.selected = stats.to
   selectListeningDay(listeningState.selected)
-  $('#listeningDaySlider').oninput = event => selectListeningDay(daily[Number(event.target.value)].day)
+  $('#listeningDaySlider').oninput = event => selectListeningDay(daily[Number(event.target.value)]?.day)
+  $('#listeningDayPicker').onchange = event => {
+    const day = event.target.value
+    if (!daily.some(item => item.day === day)) {
+      event.target.setAttribute('aria-invalid', 'true')
+      $('#listeningDateError').textContent = `请选择 ${stats.from} 至 ${stats.to} 之间的日期，仍显示上次选择的结果。`
+      return
+    }
+    selectListeningDay(day)
+  }
+  $('#listeningDayPrevious').onclick = () => moveListeningDay(-1)
+  $('#listeningDayNext').onclick = () => moveListeningDay(1)
+  $('#listeningDayToday').onclick = () => selectListeningDay(stats.to)
   document.querySelectorAll('[data-listening-user]').forEach(button => button.onclick = () => { $('#listeningScope').value = 'user:' + button.dataset.listeningUser; loadListening() })
   document.querySelectorAll('[data-listening-day]').forEach(element => {
-    const select = () => selectListeningDay(element.dataset.listeningDay)
-    element.onclick = select
-    element.onpointerenter = event => { if (event.pointerType === 'mouse') select() }
-    element.onfocus = select
+    // 悬停和焦点本身不改变选择，只接受点击或明确的键盘导航。
+    element.onclick = () => selectListeningDay(element.dataset.listeningDay)
     if (element.tagName === 'BUTTON') element.onkeydown = event => {
       const detailed = daily.length <= 30
       const delta = { ArrowLeft: detailed ? -1 : -7, ArrowRight: detailed ? 1 : 7, ArrowUp: detailed ? -7 : -1, ArrowDown: detailed ? 7 : 1, Home: -365, End: 365 }[event.key]
       if (delta === undefined) return
       event.preventDefault()
       const i = daily.findIndex(day => day.day === element.dataset.listeningDay)
-      document.querySelector(`button[data-listening-day="${daily[Math.max(0, Math.min(daily.length - 1, i + delta))].day}"]`).focus()
+      const day = daily[Math.max(0, Math.min(daily.length - 1, i + delta))].day
+      selectListeningDay(day)
+      document.querySelector(`button[data-listening-day="${day}"]`).focus()
     }
   })
-  if (sliderFocused) $('#listeningDaySlider').focus()
-  else if (focused) document.querySelector(`button[data-listening-day="${focused}"]`)?.focus()
+  if (['listeningDaySlider', 'listeningDayPicker', 'listeningDayPrevious', 'listeningDayNext', 'listeningDayToday'].includes(focusedControl)) $('#' + focusedControl).focus({ preventScroll: true })
+  else if (focused) document.querySelector(`button[data-listening-day="${daily.some(day => day.day === focused) ? focused : listeningState.selected}"]`)?.focus({ preventScroll: true })
+  $('.listening-calendar-scroll').scrollLeft = calendarScroll
+}
+function moveListeningDay(delta) {
+  const daily = listeningState.data?.daily
+  if (!daily?.length) return
+  const index = daily.findIndex(item => item.day === listeningState.selected)
+  selectListeningDay(daily[Math.max(0, Math.min(daily.length - 1, index + delta))].day)
 }
 function selectListeningDay(day) {
   const stats = listeningState.data
@@ -121,12 +158,26 @@ function selectListeningDay(day) {
   const index = stats.daily.findIndex(item => item.day === day), item = stats.daily[index]
   if (!item) return
   listeningState.selected = day
+  const dateLabel = new Date(day + 'T00:00:00Z').toLocaleDateString('zh-CN', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
+  $('#listeningDayPicker').value = day
+  $('#listeningDayPicker').setAttribute('aria-invalid', 'false')
+  $('#listeningDateError').textContent = ''
+  $('#listeningDayPrevious').disabled = index === 0
+  $('#listeningDayNext').disabled = index === stats.daily.length - 1
+  $('#listeningDayToday').disabled = day === stats.to
   $('#listeningDaySlider').value = String(index)
-  $('#listeningDaySlider').setAttribute('aria-valuetext', `${day}，${listeningTime(item.totalMs)}`)
-  $('#listeningDayDetail').innerHTML = `<strong>${day.slice(5).replace('-', ' 月 ')} 日</strong><span>实听 <b>${listeningTime(item.webMs)}</b></span><span>估算 <b>${listeningTime(item.clientMs)}</b></span><span>${item.plays} 次收听</span>`
+  $('#listeningDaySlider').setAttribute('aria-valuetext', `${dateLabel}，合计 ${listeningTime(item.totalMs)}`)
+  $('#listeningDayDetail').innerHTML = `<strong><time datetime="${day}">${dateLabel}</time>${day === stats.to ? '<span class="listening-today-badge">今天</span>' : ''}</strong><div class="listening-day-values"><span>合计 <b>${listeningTime(item.totalMs)}</b></span><span>实听 <b>${listeningTime(item.webMs)}</b></span><span>估算 <b>${listeningTime(item.clientMs)}</b></span><span>${item.plays} 次收听</span></div>`
   const max = Math.max(60000, ...stats.daily.map(d => d.totalMs))
-  $('#listeningChartPoint').setAttribute('cx', 48 + index / Math.max(1, stats.daily.length - 1) * 636)
-  $('#listeningChartPoint').setAttribute('cy', 172 - item.webMs / max * 154)
+  const { width, height, left, right, top, bottom } = listeningChartSize
+  const x = left + index / Math.max(1, stats.daily.length - 1) * (width - left - right)
+  const y = ms => height - bottom - ms / max * (height - top - bottom)
+  $('#listeningChartCursor').setAttribute('x1', x)
+  $('#listeningChartCursor').setAttribute('x2', x)
+  $('#listeningChartPoint').setAttribute('cx', x)
+  $('#listeningChartPoint').setAttribute('cy', y(item.webMs))
+  $('#listeningChartClientPoint').setAttribute('cx', x)
+  $('#listeningChartClientPoint').setAttribute('cy', y(item.clientMs))
   document.querySelectorAll('button[data-listening-day]').forEach(button => {
     const selected = button.dataset.listeningDay === day
     button.classList.toggle('selected', selected); button.tabIndex = selected ? 0 : -1

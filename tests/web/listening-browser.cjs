@@ -85,33 +85,209 @@ module.exports = async function ({ check, url, artifacts, login, search, playSea
     const footer = await page.locator('.listening-footnote').boundingBox(), player = await page.locator('#playerBar').boundingBox()
     assert.ok(footer.y + footer.height <= player.y + 1, '底部播放器不能遮挡统计说明')
   }, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', isMobile: true, hasTouch: true })
-  const demo = () => {
-    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)
+  const demo = (days = 30, today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10)) => {
     const end = Date.parse(today + 'T00:00:00+08:00')
-    const daily = Array.from({ length: 30 }, (_, i) => {
+    const daily = Array.from({ length: days }, (_, i) => {
       const webMs = i % 8 === 0 ? 0 : Math.round((Math.sin(i * 1.7) + 1.3) * 1300000)
       const clientMs = i % 6 === 0 ? 0 : Math.round((Math.cos(i * .9) + 1.2) * 900000)
-      return { day: new Date(end - (29 - i) * 86400000 + 8 * 3600000).toISOString().slice(0, 10), webMs, clientMs, totalMs: webMs + clientMs, plays: i % 8 === 0 ? 0 : 12, unknownDuration: 0 }
+      return { day: new Date(end - (days - 1 - i) * 86400000 + 8 * 3600000).toISOString().slice(0, 10), webMs, clientMs, totalMs: webMs + clientMs, plays: i % 8 === 0 ? 0 : 12, unknownDuration: 0 }
     })
     const names = ['晴天', '夜曲', '这世界那么多人', '起风了', '如愿', '七里香', '慢冷', '平凡之路', '日落大道', '<img src=x onerror=alert(1)>']
     const topTracks = names.map((name, i) => ({ id: 'tr-wy-' + i, name, singer: ['周杰伦', '周杰伦', '莫文蔚', '买辣椒也用券', '王菲', '周杰伦', '梁静茹', '朴树', '梁博', '测试歌手'][i], totalMs: 4000000 - i * 320000, plays: 22 - i }))
     const webMs = daily.reduce((sum, d) => sum + d.webMs, 0), clientMs = daily.reduce((sum, d) => sum + d.clientMs, 0)
-    return { enabledAt: end - 60 * 86400000, from: daily[0].day, to: today, timezone: 'Asia/Shanghai', daily, webMs, clientMs, totalMs: webMs + clientMs, plays: 312, tracks: 87, activeDays: 29, countedDays: 30, averageMs: Math.round((webMs + clientMs) / 30), unknownDuration: 2, topTracks, topUsers: [] }
+    return { enabledAt: end - (days + 30) * 86400000, from: daily[0].day, to: today, timezone: 'Asia/Shanghai', daily, webMs, clientMs, totalMs: webMs + clientMs, plays: daily.reduce((sum, d) => sum + d.plays, 0), tracks: 87, activeDays: daily.filter(d => d.totalMs > 0).length, countedDays: days, averageMs: Math.round((webMs + clientMs) / days), unknownDuration: 2, topTracks, topUsers: [] }
   }
-  for (const [label, width, height] of [['desktop', 1440, 1080], ['tablet', 820, 1180], ['mobile', 390, 844]]) {
+  async function showDemo(page, read = () => demo()) {
+    await page.route('**/api/app/listening/stats?*', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(read()) }))
+    await page.locator('nav [data-tab=listening]').click()
+    await page.waitForFunction(() => !listeningState.loading && document.querySelector('#listeningDayPicker'))
+  }
+  async function selected(page, sample, index) {
+    const day = sample.daily[index].day, picker = page.locator('#listeningDayPicker')
+    assert.equal(await page.evaluate(() => listeningState.selected), day)
+    assert.equal(await picker.inputValue(), day)
+    assert.equal(await picker.getAttribute('min'), sample.from)
+    assert.equal(await picker.getAttribute('max'), sample.to)
+    assert.equal(await page.locator('#listeningDaySlider').inputValue(), String(index))
+    assert.equal(await page.locator('#listeningDayDetail time').getAttribute('datetime'), day)
+    assert.equal(await page.locator('.listening-day.selected').count(), 1)
+    assert.equal(await page.locator('.listening-day.selected').getAttribute('data-listening-day'), day)
+    assert.equal(await page.locator('.listening-day.selected').getAttribute('aria-pressed'), 'true')
+    assert.equal(await page.locator('#listeningDayPrevious').isDisabled(), index === 0)
+    assert.equal(await page.locator('#listeningDayNext').isDisabled(), index === sample.daily.length - 1)
+    assert.equal(await page.locator('#listeningDayToday').isDisabled(), day === sample.to)
+    const x = 48 + index / (sample.daily.length - 1) * 636
+    for (const [id, attr] of [['listeningChartCursor', 'x1'], ['listeningChartCursor', 'x2'], ['listeningChartPoint', 'cx'], ['listeningChartClientPoint', 'cx']]) {
+      assert.ok(Math.abs(Number(await page.locator('#' + id).getAttribute(attr)) - x) < .001)
+    }
+    const maximum = Math.max(60000, ...sample.daily.map(day => day.totalMs))
+    for (const [id, key] of [['listeningChartPoint', 'webMs'], ['listeningChartClientPoint', 'clientMs']]) {
+      assert.ok(Math.abs(Number(await page.locator('#' + id).getAttribute('cy')) - (172 - sample.daily[index][key] / maximum * 154)) < .001)
+    }
+  }
+  await check('收听趋势和日历移过不切换，点击后同步日期和图表标记', async page => {
+    const sample = demo()
+    await showDemo(page, () => sample)
+    await selected(page, sample, 29)
+    const chart = page.locator('.listening-chart [data-listening-day]'), calendar = page.locator('button.listening-day')
+    await chart.nth(3).hover()
+    await selected(page, sample, 29)
+    await calendar.nth(8).hover()
+    await selected(page, sample, 29)
+    await chart.nth(3).click()
+    await selected(page, sample, 3)
+    await chart.nth(20).hover()
+    await calendar.nth(8).hover()
+    await selected(page, sample, 3)
+    await calendar.nth(8).click()
+    await selected(page, sample, 8)
+    await calendar.nth(15).focus()
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, 8)
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.listeningDay), sample.daily[15].day, '刷新恢复焦点不能顺带改变选中日期')
+    await page.keyboard.press('Enter')
+    await selected(page, sample, 15)
+    await calendar.nth(16).focus()
+    await page.keyboard.press('Space')
+    await selected(page, sample, 16)
+  })
+  await check('日期精确选择、跨年星期、前后一天、今天及越界校验', async page => {
+    const sample = demo(365, '2026-01-03')
+    await showDemo(page, () => sample)
+    const picker = page.locator('#listeningDayPicker')
+    await picker.fill('2025-12-31')
+    await selected(page, sample, 361)
+    assert.match(await page.locator('#listeningDayDetail').innerText(), /2025年12月31日星期三/)
+    await page.locator('#listeningDayPrevious').click()
+    await selected(page, sample, 360)
+    await page.locator('#listeningDayNext').click()
+    await page.locator('#listeningDayNext').click()
+    await selected(page, sample, 362)
+    assert.match(await page.locator('#listeningDaySlider').getAttribute('aria-valuetext'), /2026年1月1日星期四/)
+    await page.locator('#listeningDayToday').click()
+    await selected(page, sample, 364)
+    await picker.fill(sample.from)
+    await selected(page, sample, 0)
+    await page.locator('#listeningDaySlider').focus()
+    await page.keyboard.press('End')
+    await selected(page, sample, 364)
+    for (const value of ['2024-01-01', '2026-01-04', '']) {
+      await picker.fill(value)
+      assert.equal(await page.evaluate(() => listeningState.selected), sample.to)
+      assert.equal(await picker.getAttribute('aria-invalid'), 'true')
+      assert.match(await page.locator('#listeningDateError').innerText(), /2025-01-04.*2026-01-03/)
+    }
+    await picker.fill('2026-01-02')
+    await selected(page, sample, 363)
+    assert.equal(await picker.getAttribute('aria-invalid'), 'false')
+    assert.equal(await page.locator('#listeningDateError').isVisible(), false)
+  }, { timezoneId: 'America/Los_Angeles' })
+  await check('刷新保留日期、键盘焦点和日历滚动，跨日更新边界', async page => {
+    let sample = demo(365, '2026-01-03')
+    await showDemo(page, () => sample)
+    await page.locator('#listeningDayPicker').fill(sample.daily[200].day)
+    await page.locator('button.listening-day.selected').focus()
+    const scroll = await page.locator('.listening-calendar-scroll').evaluate(element => element.scrollLeft)
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, 200)
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.listeningDay), sample.daily[200].day)
+    assert.equal(await page.locator('.listening-calendar-scroll').evaluate(element => element.scrollLeft), scroll)
+    await page.locator('#listeningDaySlider').focus()
+    await page.keyboard.press('ArrowLeft')
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, 199)
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'listeningDaySlider')
+    await page.locator('#listeningRefresh').click()
+    await page.waitForFunction(() => !listeningState.loading)
+    await selected(page, sample, 199)
+    sample = demo(365, '2026-01-04')
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, 198)
+    await page.locator('#listeningDayPicker').fill(sample.from)
+    await page.locator('#listeningDaySlider').focus()
+    sample = demo(365, '2026-01-05')
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, 364)
+  })
+  await check('编辑日期及拖动滑块期间，后台刷新不会重建控件', async page => {
+    const sample = demo()
+    let reads = 0
+    await showDemo(page, () => { reads++; return sample })
+    const picker = page.locator('#listeningDayPicker'), slider = page.locator('#listeningDaySlider')
+    await picker.fill('')
+    await page.evaluate(() => { window.editingDate = document.querySelector('#listeningDayPicker') })
+    const before = reads
+    await page.evaluate(() => loadListening(true))
+    assert.equal(reads, before)
+    assert.equal(await picker.inputValue(), '')
+    assert.equal(await page.evaluate(() => editingDate === document.querySelector('#listeningDayPicker')), true)
+    await slider.focus()
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, 29)
+    await slider.scrollIntoViewIfNeeded()
+    const box = await slider.boundingBox()
+    await page.mouse.move(box.x + box.width * .4, box.y + box.height / 2)
+    await page.mouse.down()
+    try {
+      assert.equal(await slider.evaluate(element => element.matches(':active')), true)
+      await page.evaluate(() => { window.editingSlider = document.querySelector('#listeningDaySlider') })
+      await page.evaluate(() => loadListening(true))
+      assert.equal(await page.evaluate(() => editingSlider === document.querySelector('#listeningDaySlider')), true)
+      await page.mouse.move(box.x + box.width * .7, box.y + box.height / 2, { steps: 8 })
+    } finally { await page.mouse.up() }
+    const index = Number(await slider.inputValue())
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, index)
+
+    // 请求先发出、后进入日期编辑时，迟到响应同样不能关闭或清空控件。
+    let release, started
+    const held = new Promise(resolve => { release = resolve }), ready = new Promise(resolve => { started = resolve })
+    const delayed = async route => {
+      started()
+      await held
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sample) })
+    }
+    await page.route('**/api/app/listening/stats?*', delayed)
+    const refresh = page.evaluate(() => loadListening(true))
+    try {
+      await ready
+      await picker.fill('')
+      await page.evaluate(() => { window.editingDate = document.querySelector('#listeningDayPicker') })
+    } finally { release(); await refresh }
+    assert.equal(await picker.inputValue(), '')
+    assert.equal(await page.evaluate(() => editingDate === document.querySelector('#listeningDayPicker')), true)
+    assert.equal(await page.evaluate(() => listeningState.loading), false)
+    await page.unroute('**/api/app/listening/stats?*', delayed)
+    await slider.focus()
+    await page.evaluate(() => loadListening(true))
+    await selected(page, sample, index)
+  })
+  for (const [label, width, height] of [['desktop', 1440, 1080], ['tablet', 820, 1180], ['mobile', 390, 844], ['compact', 320, 740]]) {
     for (const theme of ['light', 'dark']) {
       await check(`听歌看板 ${label} ${theme} 布局与图表交互`, async page => {
-        await page.route('**/api/app/listening/stats?*', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(demo()) }))
-        await page.locator('nav [data-tab=listening]').click(); await page.locator('.listening-hero').waitFor()
+        const sample = demo()
+        await showDemo(page, () => sample)
         assert.equal(await page.locator('#listeningContent img').count(), 0)
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
         await page.locator('#listeningDaySlider').focus(); await page.keyboard.press('ArrowLeft')
-        assert.match(await page.locator('#listeningDayDetail').innerText(), /实听/)
+        await selected(page, sample, 28)
         await page.locator('button.listening-day').last().click(); await page.keyboard.press('ArrowLeft')
-        assert.equal(await page.locator('.listening-day.selected').count(), 1)
+        await selected(page, sample, 28)
+        if (width <= 390) {
+          await page.locator('.listening-chart [data-listening-day]').nth(10).tap()
+          await selected(page, sample, 10)
+          await page.locator('#listeningDayNext').tap()
+          await selected(page, sample, 11)
+          await page.locator('#listeningDayPicker').fill(sample.daily[12].day)
+          await selected(page, sample, 12)
+        }
+        const control = await page.locator('.listening-date-picker').boundingBox(), trend = await page.locator('.listening-trend').boundingBox()
+        assert.ok(control.x >= trend.x && control.x + control.width <= trend.x + trend.width, '日期控件不能超出卡片')
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
         await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0) })
         await page.screenshot({ path: path.join(artifacts, `listening-${label}-${theme}.png`), fullPage: true, animations: 'disabled' })
-      }, { viewport: { width, height }, colorScheme: theme, isMobile: label === 'mobile', hasTouch: label !== 'desktop' })
+        await page.locator('.listening-trend').screenshot({ path: path.join(artifacts, `listening-trend-${label}-${theme}.png`), animations: 'disabled' })
+      }, { viewport: { width, height }, colorScheme: theme, isMobile: width <= 390, hasTouch: label !== 'desktop' })
     }
   }
 }
