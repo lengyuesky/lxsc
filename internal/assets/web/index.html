@@ -66,6 +66,7 @@
       <a href="#users" data-tab="users" class="admin-only hidden"><svg class="icon"><use href="#i-users"/></svg><span>用户</span></a>
       <a href="#backups" data-tab="backups" class="admin-only hidden"><svg class="icon"><use href="#i-backup"/></svg><span>备份</span></a>
       <a href="#settings" data-tab="settings" class="admin-only hidden"><svg class="icon"><use href="#i-sliders"/></svg><span>设置</span></a>
+      <a href="#debug" data-tab="debug" class="admin-only hidden"><svg class="icon"><use href="#i-zap"/></svg><span>限时调试</span></a>
       <a href="#logs" data-tab="logs" class="admin-only hidden"><svg class="icon"><use href="#i-file"/></svg><span>日志</span></a>
     </nav>
     <div class="sidebar-foot">
@@ -228,6 +229,26 @@
       <div class="table-wrap"><table id="searchTable"><thead><tr><th>歌曲</th><th>歌手</th><th class="song-album">专辑</th><th>平台</th><th class="song-duration">时长</th><th class="song-quality">音质</th><th class="right">操作</th></tr></thead><tbody><tr><td colspan="7" class="muted center">输入关键词开始搜索</td></tr></tbody></table></div>
     </section>
 
+    <section id="tab-debug" class="tab admin-only">
+      <div class="section-head"><h2>限时安全调试</h2><button id="debugRefresh" class="sec">刷新列表</button></div>
+      <p class="note">仅私下分享给受信任的排查者，不等于公开访问。默认只读状态与结构化播放诊断，不提供原始日志、配置或用户内容。凭据固定绝对到期，不可续期；进程重启全部失效，用完请撤销。</p>
+      <p id="debugHTTPSWarning" class="note warn">当前不是 HTTPS。公网分享或调用务必先启用 HTTPS，否则凭据可能被窃取。</p>
+      <form id="debugCreateForm" class="card form-card">
+        <label>有效期<select id="debugTTL"><option value="900">15 分钟（默认）</option><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="86400">24 小时</option></select></label>
+        <p>固定权限：read（状态 + 最近诊断事件）</p>
+        <label><input type="checkbox" id="debugProbeScope">额外允许 probe 主动探测：会向音源发送请求和少量流量，可能填充元数据/直链缓存；不修改配置或记录播放/收听统计。</label>
+        <button id="debugCreateButton" type="submit">创建临时凭据</button>
+      </form>
+      <div id="debugSecret" class="card hidden">
+        <h3>仅此次显示，离开页面即清除</h3>
+        <label>临时密钥（可手工复制）<input id="debugTokenValue" readonly autocomplete="off" spellcheck="false"></label>
+        <button id="debugCopyToken" class="sec">复制密钥</button>
+        <label>私下分享说明（可手工复制）<textarea id="debugShareValue" rows="10" readonly autocomplete="off" spellcheck="false"></textarea></label>
+        <div class="actions"><button id="debugCopyShare">复制分享说明</button><button id="debugClear" class="sec">清除展示</button></div>
+        <p class="muted">清除展示不会撤销凭据；列表不会再次显示密钥。丢失后请撤销并新建。探测仅为服务端视角，不证明音流能播。</p>
+      </div>
+      <div id="debugTokenList"></div>
+    </section>
     <section id="tab-logs" class="tab admin-only">
       <div class="page-head"><div><h2>日志</h2><p>最近 300 条服务日志</p></div><button class="sec" onclick="loadLogs()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
       <div id="logBox" class="logbox"></div>
@@ -251,6 +272,7 @@
 <script src="listening-tracker.js"></script>
 <script src="board-settings.js"></script>
 <script src="app.js"></script>
+<script src="debug.js"></script>
 <script src="listening.js"></script>
 <script src="music-ui.js"></script>
 </body>

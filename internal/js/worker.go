@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,12 +36,16 @@ type Options struct {
 
 // Worker 是单个 goja 运行时 + 事件循环，所有 JS 执行都在事件循环 goroutine 内进行
 type Worker struct {
-	opts    Options
-	loop    *eventloop.EventLoop
-	log     *slog.Logger
-	running atomic.Bool
-	stopped atomic.Bool
-	vmRef   atomic.Pointer[goja.Runtime]
+	opts            Options
+	loop            *eventloop.EventLoop
+	log             *slog.Logger
+	running         atomic.Bool
+	stopped         atomic.Bool
+	vmRef           atomic.Pointer[goja.Runtime]
+	activeCall      atomic.Pointer[callScope]
+	callMu          sync.Mutex
+	callInterrupted bool
+	calls           callTracker
 	// 由事件循环初始化后写入，只在循环内读取
 	jsonParse goja.Callable
 	await     goja.Callable
@@ -86,6 +91,7 @@ func New(opts Options) (*Worker, error) {
 	err := w.runSync(context.Background(), func(vm *goja.Runtime) error {
 		w.vmRef.Store(vm)
 		vm.SetMaxCallStackSize(4096)
+		w.installCallContext(vm)
 		buffer.Enable(vm)
 		url.Enable(vm)
 		process.Enable(vm)
@@ -229,6 +235,10 @@ func (w *Worker) callInternal(ctx context.Context, produce func(vm *goja.Runtime
 		ctx, cancel = context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 	}
+	// 调用完成也取消无人等待的子请求；共享 Catalog 工作传入的是共享 context。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	scope := &callScope{ctx: ctx}
 	res := make(chan jsResult, 1)
 	var finished atomic.Bool
 	deliver := func(r jsResult) {
@@ -237,6 +247,11 @@ func (w *Worker) callInternal(ctx context.Context, produce func(vm *goja.Runtime
 		}
 	}
 	ok := w.run(func(vm *goja.Runtime) {
+		if ctx.Err() != nil {
+			deliver(jsResult{err: ctx.Err()})
+			return
+		}
+		defer w.enterCall(scope)()
 		defer func() {
 			if r := recover(); r != nil {
 				deliver(jsResult{err: fmt.Errorf("js panic: %v", r)})
@@ -267,7 +282,8 @@ func (w *Worker) callInternal(ctx context.Context, produce func(vm *goja.Runtime
 		return r.data, r.err
 	case <-ctx.Done():
 		finished.Store(true)
-		w.interruptIfBusy()
+		// 不能中断同一 Worker 上另一个仍有效的调用。
+		w.interruptCall(scope)
 		return nil, fmt.Errorf("js call timeout: %w", ctx.Err())
 	}
 }

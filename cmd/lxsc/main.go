@@ -25,6 +25,7 @@ import (
 	"lxsc/internal/backup"
 	"lxsc/internal/config"
 	"lxsc/internal/db"
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/js"
 	"lxsc/internal/logbuf"
 	"lxsc/internal/music"
@@ -158,14 +159,16 @@ func run(cfgPath string) error {
 	defer stopBackups()
 	backupSrv.StartScheduler(backupCtx)
 	defer backupSrv.StopScheduler()
-	adminSrv := &admin.Server{DB: database, Sources: sources, Catalog: catalog, Settings: st, Secret: box, Logs: logBuf, Log: log, HTTP: httpSecure, Version: version, StartAt: time.Now(), Auth: authManager, Backup: backupSrv}
+	debugSrv := diagnostics.New(database, authManager, catalog, sources, st, version, time.Now())
+	defer debugSrv.Tokens.Close()
+	adminSrv := &admin.Server{DB: database, Sources: sources, Catalog: catalog, Settings: st, Secret: box, Logs: logBuf, Log: log, HTTP: httpSecure, Version: version, StartAt: time.Now(), Auth: authManager, Backup: backupSrv, Debug: debugSrv}
 	importDir(ctx, adminSrv, srcs, filepath.Join(cfg.DataDir, "sources"), log)
 	if err := catalog.EnableURLCache(cfg.DataDir, cfg.Proxy); err != nil {
 		log.Warn("直链持久缓存初始化失败，改用内存缓存", "err", err)
 	}
 	defer catalog.CloseURLCache()
 
-	sub := &subsonic.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
+	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
 	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}
 	webFS, err := fs.Sub(assets.Web, "web")
 	if err != nil {
@@ -182,6 +185,7 @@ func run(cfgPath string) error {
 	r.Mount("/api/auth", authSrv.Routes())
 	r.Mount("/api/app", portalSrv.Routes())
 	r.Mount("/api/admin", adminSrv.Routes())
+	r.Mount("/api/debug", debugSrv.Routes())
 	r.Handle("/app", http.NotFoundHandler())
 	r.Handle("/app/*", http.NotFoundHandler())
 	r.Handle("/admin", http.NotFoundHandler())
@@ -267,7 +271,16 @@ func requestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 }
 
 func cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return diagnostics.SensitiveIO(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if diagnostics.SensitivePath(r.URL.Path) {
+			diagnostics.SecurityHeaders(w)
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
@@ -276,5 +289,5 @@ func cors(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
-	})
+	}))
 }

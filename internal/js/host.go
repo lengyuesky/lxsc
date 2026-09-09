@@ -432,7 +432,12 @@ func hostFetch(w *Worker, vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 	follow := int(getInt("follow"))
 	insecure := getBool("insecure")
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	scope := w.calls.current
+	parent := context.Background()
+	if scope != nil {
+		parent = scope.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	handle := vm.NewObject()
 	_ = handle.Set("abort", func(goja.FunctionCall) goja.Value { cancel(); return goja.Undefined() })
 
@@ -440,6 +445,10 @@ func hostFetch(w *Worker, vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 		defer cancel()
 		resp, data, err := w.doFetch(ctx, method, rawURL, headers, body, follow, insecure)
 		w.run(func(vm *goja.Runtime) {
+			if parent.Err() != nil {
+				return
+			}
+			defer w.enterCall(scope)()
 			if err != nil {
 				eo := vm.NewObject()
 				_ = eo.Set("message", err.Error())

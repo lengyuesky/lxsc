@@ -43,6 +43,7 @@ async function copyText(text) {
 }
 
 function showLogin() {
+  resetDebugSession()
   $('#login').classList.remove('hidden')
   $('#app').classList.add('hidden')
   sessionState.me = null
@@ -56,6 +57,7 @@ function showApp() {
   $('#app').classList.remove('hidden')
 }
 async function initializeSession(data) {
+  resetDebugSession()
   resetMusicSession()
   resetSettingsSession()
   sessionState.me = data.user
@@ -83,6 +85,7 @@ $('#loginForm').addEventListener('submit', async event => {
 $('#logoutButton').addEventListener('click', async event => {
   event.preventDefault()
   if (!confirmDiscard()) return
+  resetDebugSession()
   webPlayer.audio.pause()
   await listeningTracker.flush()
   await authAPI('/logout', { method: 'POST' })
@@ -92,12 +95,13 @@ $('#logoutButton').addEventListener('click', async event => {
 })
 
 // ---- 路由 ----
-const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), dashboard: loadDashboard, sources: loadSources, users: loadUsers, backups: loadBackups, settings: loadSettings, search: () => {}, logs: loadLogs }
+const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), dashboard: loadDashboard, sources: loadSources, users: loadUsers, backups: loadBackups, settings: loadSettings, search: () => {}, logs: loadLogs, debug: () => loadDebug() }
 function route() {
   if (!sessionState.me) return
   const fallback = sessionState.me.isAdmin ? 'dashboard' : 'playlists'
   let tab = (location.hash || '#' + fallback).slice(1)
   if (!loaders[tab] || (!sessionState.me.isAdmin && !['playlists', 'search', 'listening'].includes(tab))) tab = fallback
+  if (tab !== 'debug') clearDebugSecret()
   if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab)
   document.querySelectorAll('nav a[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === tab))
   document.querySelectorAll('.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + tab))

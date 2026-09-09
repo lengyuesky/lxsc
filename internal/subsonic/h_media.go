@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
 )
 
@@ -54,19 +55,26 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
 	id := param(r, "id")
+	metadataStarted := time.Now()
 	in, err := s.Catalog.Track(rc.ctx, id)
+	s.mediaEvent("metadata", id, "", "", false, 0, metadataStarted, err)
 	if err != nil {
 		fail(w, r, ErrNotFound, err.Error())
 		return
 	}
 	quality := pickQuality(r, u.Quality)
 	remaining := 45 * time.Second
-	resolve := func(failed *music.URLResolution) (music.URLResolution, error) {
+	resolve := func(failed *music.URLResolution) (result music.URLResolution, resolveErr error) {
 		started := time.Now()
 		ctx, cancel := context.WithTimeout(rc.ctx, remaining)
 		defer func() {
 			cancel()
 			remaining -= time.Since(started)
+			stage := "resolve"
+			if failed != nil {
+				stage = "refresh"
+			}
+			s.mediaEvent(stage, id, in.Source(), quality, result.Cached, 0, started, resolveErr)
 		}()
 		if failed != nil {
 			return s.Catalog.RefreshPlaybackURL(ctx, in, *failed)
@@ -98,9 +106,11 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 		return
 	}
 	if res.Cached {
+		checkStarted := time.Now()
 		status, checkErr := s.Catalog.CheckPlaybackURL(rc.ctx, res, func(ctx context.Context) (int, error) {
 			return s.checkMedia(ctx, in, res.Result.URL)
 		})
+		s.mediaEvent("cache_check", id, in.Source(), res.Result.Quality, true, status, checkStarted, checkErr)
 		if rc.ctx.Err() != nil {
 			return
 		}
@@ -128,7 +138,13 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	s.Log.Info("播放", "user", u.Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", res.Result.Quality, "via", res.Result.Source)
 	persist()
 	w.Header().Set("Cache-Control", "no-store")
+	s.mediaEvent("redirect", id, in.Source(), res.Result.Quality, res.Cached, http.StatusFound, time.Now(), nil)
 	http.Redirect(w, r, res.Result.URL, http.StatusFound)
+}
+
+// mediaEvent 只向独立结构化缓冲写入白名单，不影响播放/强制302分支。
+func (s *Server) mediaEvent(stage, id, platform, quality string, cached bool, status int, started time.Time, err error) {
+	s.Diagnostics.Add(diagnostics.Event{Stage: stage, TrackID: id, Platform: platform, Quality: quality, Mode: s.Settings.Get().StreamMode, Cached: cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds()})
 }
 
 // refererFor 为部分平台的 CDN 添加 Referer/UA
@@ -200,7 +216,13 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 			return false
 		}
 		var err error
+		started := time.Now()
 		resp, err = s.openMedia(r, in, resolution.Result.URL)
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		s.mediaEvent("proxy_response", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, status, started, err)
 		if err != nil {
 			// http 错误可能包含签名 URL，只记录阶段，不输出原始错误。
 			s.Log.Warn("代理上游请求失败", "id", in.TrackID(), "attempt", attempt+1)
@@ -244,7 +266,9 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
+	copyStarted := time.Now()
 	_, err := io.Copy(w, resp.Body)
+	s.mediaEvent("proxy_copy", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, resp.StatusCode, copyStarted, err)
 	if err != nil || r.Context().Err() != nil {
 		s.Log.Info("代理传输中断", "id", in.TrackID())
 		return false

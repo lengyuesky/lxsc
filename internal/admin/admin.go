@@ -18,6 +18,7 @@ import (
 
 	"lxsc/internal/backup"
 	"lxsc/internal/db"
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/js"
 	"lxsc/internal/logbuf"
 	"lxsc/internal/music"
@@ -40,6 +41,7 @@ type Server struct {
 	StartAt  time.Time
 	Auth     *webauth.Manager
 	Backup   *backup.Service
+	Debug    *diagnostics.Server
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -55,7 +57,11 @@ func fail(w http.ResponseWriter, code int, msg string) {
 // Routes 挂载
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
+	r.Use(diagnostics.SensitiveIO)
 	r.Use(s.requireAdmin)
+	if s.Debug != nil {
+		r.Mount("/debug-tokens", s.Debug.ManagementRoutes())
+	}
 	r.Get("/status", s.status)
 	r.Get("/logs", s.logs)
 	r.Get("/backups/status", s.backupStatus)
@@ -96,6 +102,9 @@ func (s *Server) Routes() http.Handler {
 
 func (s *Server) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if diagnostics.SensitivePath(r.URL.Path) {
+			diagnostics.SecurityHeaders(w)
+		}
 		u := s.Auth.User(r)
 		if u == nil {
 			fail(w, http.StatusUnauthorized, "未登录或会话已过期")
@@ -267,6 +276,9 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
+	if s.Debug != nil && !b.IsAdmin {
+		s.Debug.Tokens.RevokeOwner(id)
+	}
 	u, _ := s.DB.GetUserByID(r.Context(), id)
 	writeJSON(w, 200, u)
 }
@@ -281,6 +293,9 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if err := s.DB.DeleteUser(r.Context(), id); err != nil {
 		fail(w, 500, err.Error())
 		return
+	}
+	if s.Debug != nil {
+		s.Debug.Tokens.RevokeOwner(id)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

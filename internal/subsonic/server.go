@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"lxsc/internal/db"
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
 	"lxsc/internal/secret"
 	"lxsc/internal/settings"
@@ -15,12 +16,13 @@ import (
 
 // Server Subsonic API 服务
 type Server struct {
-	DB       *db.DB
-	Catalog  *music.Catalog
-	Settings *settings.Store
-	Secret   *secret.Box
-	Log      *slog.Logger
-	HTTP     *http.Client // 代理拉流用
+	Diagnostics *diagnostics.Events
+	DB          *db.DB
+	Catalog     *music.Catalog
+	Settings    *settings.Store
+	Secret      *secret.Box
+	Log         *slog.Logger
+	HTTP        *http.Client // 代理拉流用
 }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request)
