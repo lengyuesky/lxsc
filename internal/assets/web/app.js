@@ -576,7 +576,7 @@ async function saveSettings(e) {
   for (const el of f.elements) {
     if (!el.name) continue
     if (el.type === 'checkbox') body[el.name] = el.checked
-    else if (el.type === 'number') body[el.name] = Number(el.value)
+    else if (el.type === 'number' || el.name === 'urlCacheTTL') body[el.name] = Number(el.value)
     else if (el.name.endsWith('Sources')) body[el.name] = el.value.split(/[,，\s]+/).filter(Boolean)
     else body[el.name] = el.value
   }

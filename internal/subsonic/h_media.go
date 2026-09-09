@@ -97,6 +97,33 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 		}
 		return
 	}
+	if res.Cached {
+		status, checkErr := s.Catalog.CheckPlaybackURL(rc.ctx, res, func(ctx context.Context) (int, error) {
+			return s.checkMedia(ctx, in, res.Result.URL)
+		})
+		if rc.ctx.Err() != nil {
+			return
+		}
+		if checkErr == nil && expiredMediaStatus(status) {
+			s.Log.Info("缓存直链失效，尝试刷新", "id", id, "status", status)
+			res, err = resolve(&res)
+			if err != nil {
+				s.Log.Warn("直链刷新失败", "id", id)
+				if rc.ctx.Err() == nil {
+					fail(w, r, ErrGeneric, "重新获取播放地址失败")
+				}
+				return
+			}
+		} else if checkErr != nil || (status != http.StatusOK && status != http.StatusPartialContent) {
+			// 校验网络与客户端网络可能不同，不能据此删除直链或阻止客户端尝试。
+			s.Log.Info("直链校验结果不确定，继续客户端直连", "id", id, "status", status)
+		} else {
+			s.Log.Debug("缓存直链校验成功", "id", id, "status", status)
+		}
+	}
+	if rc.ctx.Err() != nil {
+		return
+	}
 	// 重定向成功即可交由客户端直连上游，此时记录播放。
 	s.Log.Info("播放", "user", u.Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", res.Result.Quality, "via", res.Result.Source)
 	persist()
@@ -120,6 +147,31 @@ func refererFor(source string) (referer, ua string) {
 		referer = "https://music.migu.cn/"
 	}
 	return
+}
+
+func expiredMediaStatus(status int) bool {
+	return status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusGone
+}
+
+// checkMedia 使用最小 Range 校验，不读取或转发音频正文，也不继承客户端凭据。
+func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return 0, err
+	}
+	ref, ua := refererFor(in.Source())
+	req.Header.Set("User-Agent", ua)
+	if ref != "" {
+		req.Header.Set("Referer", ref)
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := s.HTTP.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
 }
 
 // openMedia 只请求响应头，不向客户端提交内容，为限次恢复保留空间。
@@ -157,7 +209,7 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 			}
 			return false
 		}
-		if attempt == 0 && (resp.StatusCode == 403 || resp.StatusCode == 404 || resp.StatusCode == 410) {
+		if attempt == 0 && expiredMediaStatus(resp.StatusCode) {
 			_ = resp.Body.Close()
 			s.Log.Info("直链失效，尝试刷新", "id", in.TrackID(), "status", resp.StatusCode)
 			resolution, err = refresh(resolution)

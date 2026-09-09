@@ -17,6 +17,18 @@ import (
 // ErrInvalidSetting 表示设置值不合法，可由 HTTP 层映射为 400。
 var ErrInvalidSetting = errors.New("设置值不合法")
 
+const DefaultURLCacheTTL = 7 * 24 * 60 * 60
+
+// parseURLCacheTTL 只接受管理页提供的五档，-1 表示永久。
+func parseURLCacheTTL(value string) (int, error) {
+	switch value {
+	case "-1", "0", "86400", "604800", "2592000":
+		return strconv.Atoi(value)
+	default:
+		return 0, ErrInvalidSetting
+	}
+}
+
 // parseTTL 同时限制 Duration 和当前平台 int 的范围，不截断小数。
 func parseTTL(value string) (int, error) {
 	n, err := strconv.ParseUint(value, 10, 64)
@@ -31,7 +43,7 @@ type Values struct {
 	SearchSources    []string            `json:"searchSources"`    // 聚合搜索的平台及顺序
 	StreamMode       string              `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
 	CoverMode        string              `json:"coverMode"`        // redirect / proxy
-	URLCacheTTL      int                 `json:"urlCacheTTL"`      // 直链缓存秒数
+	URLCacheTTL      int                 `json:"urlCacheTTL"`      // 直链缓存秒数，0 关闭，-1 永久
 	SearchCacheTTL   int                 `json:"searchCacheTTL"`   // 搜索缓存秒数
 	DefaultQuality   string              `json:"defaultQuality"`   // 新用户默认音质
 	ShowBoards       bool                `json:"showBoards"`       // 是否在在线音乐目录和歌单中展示榜单
@@ -52,7 +64,7 @@ func Defaults() Values {
 		SearchSources:    []string{"wy", "tx", "kw", "kg", "mg"},
 		StreamMode:       "redirect",
 		CoverMode:        "redirect",
-		URLCacheTTL:      900,
+		URLCacheTTL:      DefaultURLCacheTTL,
 		SearchCacheTTL:   600,
 		DefaultQuality:   "320k",
 		ShowBoards:       true,
@@ -81,6 +93,15 @@ func New(ctx context.Context, d *db.DB) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if old, ok := all["urlCacheTTL"]; ok {
+		if _, err := parseURLCacheTTL(old); err != nil {
+			// 旧版自定义秒数统一迁移为一周，写入成功后才发布设置。
+			all["urlCacheTTL"] = strconv.Itoa(DefaultURLCacheTTL)
+			if err := d.SetSettings(ctx, map[string]string{"urlCacheTTL": all["urlCacheTTL"]}); err != nil {
+				return nil, fmt.Errorf("迁移直链缓存设置失败: %w", err)
+			}
+		}
+	}
 	s.cur = apply(s.cur, all)
 	return s, nil
 }
@@ -99,7 +120,7 @@ func apply(v Values, m map[string]string) Values {
 				v.CoverMode = val
 			}
 		case "urlCacheTTL":
-			if n, err := parseTTL(val); err == nil {
+			if n, err := parseURLCacheTTL(val); err == nil {
 				v.URLCacheTTL = n
 			}
 		case "searchCacheTTL":
@@ -198,8 +219,15 @@ func (s *Store) Update(ctx context.Context, patch map[string]json.RawMessage) (V
 			if json.Unmarshal(raw, &str) == nil {
 				value = str
 			}
-			n, err := parseTTL(value)
+			parse := parseTTL
+			if k == "urlCacheTTL" {
+				parse = parseURLCacheTTL
+			}
+			n, err := parse(value)
 			if err != nil {
+				if k == "urlCacheTTL" {
+					return s.Get(), fmt.Errorf("%w: 直链缓存必须选择不缓存、1 天、1 周、1 个月或永久", ErrInvalidSetting)
+				}
 				return s.Get(), fmt.Errorf("%w: %s 必须是范围内的非负整数秒数", ErrInvalidSetting, k)
 			}
 			m[k] = strconv.Itoa(n)

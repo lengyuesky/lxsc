@@ -206,7 +206,7 @@ func TestRefreshTTLIsSelective(t *testing.T) {
 	if searches.Load() != 1 || urls.Load() != 1 {
 		t.Fatal("无关设置不应清空缓存")
 	}
-	update("urlCacheTTL", `900`)
+	update("urlCacheTTL", `604800`)
 	load()
 	if searches.Load() != 1 || urls.Load() != 1 {
 		t.Fatal("相同 TTL 不应清空缓存")
@@ -276,7 +276,8 @@ func TestConcurrentCacheSettingsAndRequests(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
 				if worker == 0 {
-					_, err := c.Settings.Update(context.Background(), map[string]json.RawMessage{"urlCacheTTL": json.RawMessage(fmt.Sprint(i % 3)), "searchCacheTTL": json.RawMessage(fmt.Sprint(i % 3))})
+					ttl := []int{0, 86400, -1}[i%3]
+					_, err := c.Settings.Update(context.Background(), map[string]json.RawMessage{"urlCacheTTL": json.RawMessage(fmt.Sprint(ttl)), "searchCacheTTL": json.RawMessage(fmt.Sprint(i % 3))})
 					if err != nil {
 						errs <- err
 					}

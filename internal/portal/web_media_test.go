@@ -47,9 +47,12 @@ lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{wy:{name:'测试',type:'mus
 func TestWebStreamCookieAndRedirectContract(t *testing.T) {
 	f, media := webMediaFixture(t)
 	var calls atomic.Int32
-	media.HTTP = &http.Client{Transport: webMediaTransport(func(*http.Request) (*http.Response, error) {
+	media.HTTP = &http.Client{Transport: webMediaTransport(func(req *http.Request) (*http.Response, error) {
 		calls.Add(1)
-		return nil, errors.New("不应请求音频上游")
+		if req.Method != http.MethodGet || req.Header.Get("Range") != "bytes=0-0" || req.Header.Get("Cookie") != "" || req.Header.Get("Authorization") != "" {
+			t.Error("网页直连只允许最小 Range 校验，不能转发用户凭据")
+		}
+		return &http.Response{StatusCode: 206, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})}
 	url := f.server.URL + "/stream?id=tr-wy-1"
 	if status := requestStatus(t, http.DefaultClient, http.MethodGet, url+"&u=alice&p=pw-alice"); status != 401 {
@@ -57,6 +60,8 @@ func TestWebStreamCookieAndRedirectContract(t *testing.T) {
 	}
 	alice := f.client(t, "alice")
 	alice.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	seen := map[string]bool{}
+	var wantChecks int32
 	for _, mode := range []string{"redirect", "force_redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			raw, err := json.Marshal(mode)
@@ -67,13 +72,17 @@ func TestWebStreamCookieAndRedirectContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, tc := range []struct{ query, quality string }{{"", "320k"}, {"&quality=flac", "flac"}, {"&proxy=1", "320k"}} {
+				if seen[tc.quality] {
+					wantChecks++
+				}
+				seen[tc.quality] = true
 				resp, err := alice.Get(url + tc.query)
 				if err != nil {
 					t.Fatal(err)
 				}
 				resp.Body.Close()
-				if resp.StatusCode != 302 || !strings.HasPrefix(resp.Header.Get("Location"), "https://media.invalid/"+tc.quality+"/") || resp.Header.Get("Cache-Control") != "no-store" || calls.Load() != 0 {
-					t.Fatalf("应遵循直连配置和默认音质，且不接受 proxy 覆盖或请求音频上游: %d %v calls=%d", resp.StatusCode, resp.Header, calls.Load())
+				if resp.StatusCode != 302 || !strings.HasPrefix(resp.Header.Get("Location"), "https://media.invalid/"+tc.quality+"/") || resp.Header.Get("Cache-Control") != "no-store" || calls.Load() != wantChecks {
+					t.Fatalf("应遵循直连配置和音质，只校验缓存且不接受 proxy 覆盖: %d %v calls=%d", resp.StatusCode, resp.Header, calls.Load())
 				}
 			}
 		})

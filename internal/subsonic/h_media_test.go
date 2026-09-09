@@ -98,6 +98,9 @@ send(EVENT_NAMES.inited, { status: true, sources: { wy: { name: '测试', type: 
 	info := music.FromMap(map[string]any{"source": "wy", "songmid": "temporary", "name": "临时歌曲", "singer": "歌手", "albumName": "专辑", "types": []any{map[string]any{"type": "320k"}}})
 	catalog.Cache([]*music.Info{info})
 	server := &Server{DB: database, Catalog: catalog, Settings: store, Log: log, HTTP: client}
+	server.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 206, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})}
 
 	request := func(handler func(http.ResponseWriter, *http.Request)) {
 		req := httptest.NewRequest(http.MethodGet, "/rest/media.view?id="+info.TrackID()+"&f=json", nil)

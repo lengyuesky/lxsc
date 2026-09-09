@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"lxsc/internal/urlcache"
 )
 
 // AppliedRestore 保存启动期恢复的回滚信息。
@@ -109,6 +111,9 @@ func ensureRollback(dataDir, rollback, restoreID string) error {
 }
 
 func (a *AppliedRestore) install(stage string) error {
+	if err := urlcache.ResetFiles(a.dataDir); err != nil {
+		return fmt.Errorf("清理恢复前的直链缓存失败: %w", err)
+	}
 	// 先完整写入临时文件，再原子替换主数据库；旧 WAL 会在替换后清理。
 	if err := copyFileAtomic(filepath.Join(stage, "lxsc.db"), filepath.Join(a.dataDir, "lxsc.db")); err != nil {
 		return err
@@ -149,6 +154,9 @@ func (a *AppliedRestore) Rollback() error {
 		}
 	} else {
 		_ = os.RemoveAll(filepath.Join(a.dataDir, "sources"))
+	}
+	if err := urlcache.ResetFiles(a.dataDir); err != nil {
+		return fmt.Errorf("清理回滚后的直链缓存失败: %w", err)
 	}
 	base := filepath.Join(a.dataDir, ".restore")
 	_ = os.Remove(filepath.Join(base, "failed.json"))

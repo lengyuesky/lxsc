@@ -42,6 +42,10 @@ func newAdminStabilityServer(t *testing.T) *Server {
 	sources := js.NewSourceManager(string(prelude), client, client, log)
 	t.Cleanup(sources.UnloadAll)
 	catalog := music.NewCatalog(database, nil, sources, store, log)
+	if err := catalog.EnableURLCache(t.TempDir(), ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = catalog.CloseURLCache() })
 	return &Server{DB: database, Catalog: catalog, Sources: sources, Settings: store, Log: log, HTTP: client}
 }
 
@@ -159,7 +163,7 @@ func TestSettingsInvalidTTLReturns400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(`{"urlCacheTTL":1.5,"serverName":"不应生效"}`))
 	rec := httptest.NewRecorder()
 	s.putSettings(rec, req)
-	if rec.Code != 400 || s.Settings.Get().URLCacheTTL != 900 || s.Settings.Get().ServerName != "lxsc" {
+	if rec.Code != 400 || s.Settings.Get().URLCacheTTL != settings.DefaultURLCacheTTL || s.Settings.Get().ServerName != "lxsc" {
 		t.Fatalf("非法更新应原子拒绝: %d %s", rec.Code, rec.Body.String())
 	}
 }

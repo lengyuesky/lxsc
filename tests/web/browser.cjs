@@ -559,6 +559,39 @@ async function main() {
       assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: ['hot'] })
     })
 
+    await check('直链缓存五档保存、刷新回显与保存失败保留选择', async page => {
+      await adminSettings(page, url)
+      const select = page.locator('#settingsForm [name=urlCacheTTL]')
+      assert.equal(await select.evaluate(element => element.tagName), 'SELECT')
+      assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(option => [option.value, option.textContent])), [
+        ['0', '不缓存'], ['86400', '1 天'], ['604800', '1 周'], ['2592000', '1 个月（30 天）'], ['-1', '永久'],
+      ])
+      for (const value of ['0', '86400', '604800', '2592000', '-1']) {
+        await select.selectOption(value)
+        assert.equal((await saveSettingsUI(page)).urlCacheTTL, Number(value))
+        await page.reload()
+        await page.locator('#settingsForm:not([inert])').waitFor()
+        assert.equal(await select.inputValue(), value)
+      }
+      await page.screenshot({ path: path.join(artifacts, 'url-cache-settings.png'), fullPage: true, animations: 'disabled' })
+      const failSave = route => route.request().method() === 'PUT'
+        ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '模拟保存失败' }) })
+        : route.continue()
+      await page.route('**/api/admin/settings', failSave)
+      await select.selectOption('86400')
+      await saveSettingsUI(page, 503)
+      assert.equal(await select.inputValue(), '86400')
+      assert.equal(await page.evaluate(() => settingsState.dirty), true)
+      await page.unroute('**/api/admin/settings', failSave)
+      assert.equal((await saveSettingsUI(page)).urlCacheTTL, 86400)
+      await select.selectOption('604800')
+      assert.equal((await saveSettingsUI(page)).urlCacheTTL, 604800)
+      await page.setViewportSize({ width: 390, height: 844 })
+      await page.emulateMedia({ colorScheme: 'dark' })
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
+      await page.screenshot({ path: path.join(artifacts, 'url-cache-settings-mobile.png'), fullPage: true, animations: 'disabled' })
+    })
+
     await check('强制302设置保存、直连播放与禁止代理覆盖', async page => {
       await page.locator('#logoutButton').click()
       await page.locator('#login:not(.hidden)').waitFor()

@@ -137,6 +137,10 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 		return err
 	}
 	catalog := music.NewCatalog(database, pool, sources, store, log)
+	if err := catalog.EnableURLCache(dir, ""); err != nil {
+		return err
+	}
+	defer catalog.CloseURLCache()
 	infos := catalog.Search(ctx, "初始", music.SearchOptions{Sources: []string{"wy"}, Limit: 3})
 	if len(infos) != 3 {
 		return fmt.Errorf("测试 SDK 未返回歌曲")

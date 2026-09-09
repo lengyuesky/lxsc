@@ -248,7 +248,7 @@ func TestRecoveryDownloadAndRedirectBoundaries(t *testing.T) {
 				}
 			} else {
 				if gets.Load() != 0 || rec.Code != 302 {
-					t.Fatal("302 不得探测或重试")
+					t.Fatal("首次取链应直接返回 302，不额外校验")
 				}
 				s.stream(httptest.NewRecorder(), mediaStabilityRequest(user, info, ""))
 				if _, err := s.DB.GetTrack(context.Background(), info.TrackID()); err != nil {

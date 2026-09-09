@@ -59,7 +59,7 @@ func TestStreamModeProxyOverrideMatrix(t *testing.T) {
 								t.Fatalf("应保留原有代理行为: calls=%d status=%d body=%s", calls.Load(), rec.Code, rec.Body.String())
 							}
 						} else if calls.Load() != 0 || rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://cdn.example/1" {
-							t.Fatalf("应只返回 302，禁止探测或转发音频: calls=%d status=%d headers=%v", calls.Load(), rec.Code, rec.Header())
+							t.Fatalf("首次取链应直接返回 302，不额外校验或转发音频: calls=%d status=%d headers=%v", calls.Load(), rec.Code, rec.Header())
 						}
 						if rec.Header().Get("Cache-Control") != "no-store" {
 							t.Fatal("媒体响应不应被缓存")

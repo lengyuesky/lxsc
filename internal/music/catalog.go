@@ -42,6 +42,7 @@ type Catalog struct {
 	remoteCall      func(context.Context, string, ...any) (json.RawMessage, error)
 	configMu        sync.Mutex
 	urls            *requestCache[urlKey, js.MusicURLResult]
+	urlChecks       *requestCache[urlCheckKey, int]
 	search          *requestCache[searchKey, []*Info]
 	searchCall      func(context.Context, string, ...any) (json.RawMessage, error)
 	urlCall         func(context.Context, string, any, string) (*js.MusicURLResult, error)
@@ -66,6 +67,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		boardNames:      lru.NewLRU[string, string](2000, nil, 30*time.Minute),
 		failures:        lru.NewLRU[string, string](500, nil, 30*time.Second),
 		urls:            newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
+		urlChecks:       newRequestCache[urlCheckKey, int](1, 0),
 		search:          newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:          lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
 		generic:         lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
@@ -303,6 +305,7 @@ type urlKey struct {
 // Result 为值拷贝，调用者不能修改缓存内的解析结果。
 type URLResolution struct {
 	Result js.MusicURLResult
+	Cached bool
 	key    urlKey
 	token  cacheToken
 }
@@ -347,7 +350,7 @@ func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, key urlKey, 
 		}
 		return *value, true, nil
 	})
-	return URLResolution{Result: r.value, key: key, token: r.token}, err
+	return URLResolution{Result: r.value, Cached: r.cached, key: key, token: r.token}, err
 }
 
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。

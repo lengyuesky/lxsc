@@ -160,6 +160,10 @@ func run(cfgPath string) error {
 	defer backupSrv.StopScheduler()
 	adminSrv := &admin.Server{DB: database, Sources: sources, Catalog: catalog, Settings: st, Secret: box, Logs: logBuf, Log: log, HTTP: httpSecure, Version: version, StartAt: time.Now(), Auth: authManager, Backup: backupSrv}
 	importDir(ctx, adminSrv, srcs, filepath.Join(cfg.DataDir, "sources"), log)
+	if err := catalog.EnableURLCache(cfg.DataDir, cfg.Proxy); err != nil {
+		log.Warn("直链持久缓存初始化失败，改用内存缓存", "err", err)
+	}
+	defer catalog.CloseURLCache()
 
 	sub := &subsonic.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
 	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}

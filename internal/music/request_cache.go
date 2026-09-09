@@ -16,13 +16,25 @@ type cacheToken struct {
 }
 
 type cachedResult[V any] struct {
-	value V
-	token cacheToken
+	value  V
+	token  cacheToken
+	cached bool
 }
 
 type timedEntry[V any] struct {
 	result  cachedResult[V]
+	created time.Time
 	expires time.Time
+}
+
+// cachePersistence 的操作在缓存锁内执行，保证失效后旧请求不能重新落盘。
+type cachePersistence[K comparable, V any] interface {
+	put(K, timedEntry[V]) error
+	touch(K, time.Time) error
+	remove(K) error
+	clear() error
+	disable(string)
+	close() error
 }
 
 type flightKey[K comparable] struct {
@@ -48,6 +60,8 @@ type requestCache[K comparable, V any] struct {
 	generation uint64
 	serial     uint64
 	now        func() time.Time
+	capacity   int
+	persistent cachePersistence[K, V]
 }
 
 func newRequestCache[K comparable, V any](capacity int, ttl time.Duration) *requestCache[K, V] {
@@ -55,7 +69,38 @@ func newRequestCache[K comparable, V any](capacity int, ttl time.Duration) *requ
 	if err != nil {
 		panic(err)
 	}
-	return &requestCache[K, V]{entries: entries, calls: make(map[flightKey[K]]*cacheCall[V]), ttl: ttl, now: time.Now}
+	return &requestCache[K, V]{entries: entries, calls: make(map[flightKey[K]]*cacheCall[V]), ttl: ttl, now: time.Now, capacity: capacity}
+}
+
+func (c *requestCache[K, V]) persistLocked(stage string, fn func(cachePersistence[K, V]) error) {
+	if c.persistent != nil {
+		if err := fn(c.persistent); err != nil {
+			c.persistent.disable(stage)
+			c.persistent = nil
+		}
+	}
+}
+
+func (c *requestCache[K, V]) removeLocked(key K) {
+	c.entries.Remove(key)
+	c.persistLocked("删除", func(p cachePersistence[K, V]) error { return p.remove(key) })
+}
+
+func (c *requestCache[K, V]) clearLocked() {
+	c.generation++
+	c.entries.Purge()
+	c.persistLocked("清理", func(p cachePersistence[K, V]) error { return p.clear() })
+}
+
+func (c *requestCache[K, V]) close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.persistent == nil {
+		return nil
+	}
+	p := c.persistent
+	c.persistent = nil
+	return p.close()
 }
 
 func (c *requestCache[K, V]) configure(ttl time.Duration) {
@@ -63,16 +108,14 @@ func (c *requestCache[K, V]) configure(ttl time.Duration) {
 	defer c.mu.Unlock()
 	if c.ttl != ttl {
 		c.ttl = ttl
-		c.generation++
-		c.entries.Purge()
+		c.clearLocked()
 	}
 }
 
 func (c *requestCache[K, V]) purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.generation++
-	c.entries.Purge()
+	c.clearLocked()
 }
 
 // load 中 failed 非空表示条件刷新。迟到的失败不能删除新结果。
@@ -82,13 +125,16 @@ func (c *requestCache[K, V]) load(ctx context.Context, key K, failed *cacheToken
 		return cachedResult[V]{}, err
 	}
 	c.mu.Lock()
-	if c.ttl > 0 {
+	if c.ttl != 0 {
 		if entry, ok := c.entries.Get(key); ok {
-			if c.now().Before(entry.expires) && (failed == nil || entry.result.token != *failed) {
+			if (entry.expires.IsZero() || c.now().Before(entry.expires)) && (failed == nil || entry.result.token != *failed) {
+				result := entry.result
+				result.cached = true
+				c.persistLocked("更新使用时间", func(p cachePersistence[K, V]) error { return p.touch(key, c.now()) })
 				c.mu.Unlock()
-				return entry.result, nil
+				return result, nil
 			}
-			c.entries.Remove(key)
+			c.removeLocked(key)
 		}
 	}
 	fk := flightKey[K]{key: key, generation: c.generation}
@@ -134,8 +180,18 @@ func (c *requestCache[K, V]) execute(ctx context.Context, key flightKey[K], call
 		// 全部等待者取消时旧任务已被移除，不能污染后来同键的新任务。
 		if c.calls[key] == call {
 			delete(c.calls, key)
-			if err == nil && cacheable && c.ttl > 0 && key.generation == c.generation {
-				c.entries.Add(key.key, timedEntry[V]{result: call.result, expires: c.now().Add(c.ttl)})
+			if err == nil && cacheable && c.ttl != 0 && key.generation == c.generation {
+				now := c.now()
+				entry := timedEntry[V]{result: call.result, created: now}
+				if c.ttl > 0 {
+					entry.expires = now.Add(c.ttl)
+				}
+				if c.entries.Len() == c.capacity && !c.entries.Contains(key.key) {
+					oldest, _, _ := c.entries.GetOldest()
+					c.removeLocked(oldest)
+				}
+				c.entries.Add(key.key, entry)
+				c.persistLocked("保存", func(p cachePersistence[K, V]) error { return p.put(key.key, entry) })
 			}
 		}
 		close(call.done)
