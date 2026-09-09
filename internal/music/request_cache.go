@@ -40,6 +40,7 @@ type cachePersistence[K comparable, V any] interface {
 type flightKey[K comparable] struct {
 	key        K
 	generation uint64
+	selection  string
 }
 
 type cacheCall[V any] struct {
@@ -118,26 +119,44 @@ func (c *requestCache[K, V]) purge() {
 	c.clearLocked()
 }
 
-// load 中 failed 非空表示条件刷新。迟到的失败不能删除新结果。
+// invalidate 只删除仍与失败请求相同的版本，迟到的失败不能删除新结果。
+func (c *requestCache[K, V]) invalidate(key K, token cacheToken) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry, ok := c.entries.Peek(key); ok && entry.result.token == token {
+		c.removeLocked(key)
+	}
+}
+
+// load 中 failed 非空表示条件刷新。
 // fn 的布尔结果决定是否缓存；即使不缓存，也会把结果交给当前等待者。
 func (c *requestCache[K, V]) load(ctx context.Context, key K, failed *cacheToken, timeout time.Duration, fn func(context.Context) (V, bool, error)) (cachedResult[V], error) {
+	return c.loadSelected(ctx, key, failed, "", nil, timeout, fn)
+}
+
+// loadSelected 仅把相同候选集合的在途请求合并，缓存仍只有每个 key 一项。
+// 被本次选择排除的缓存不等于全局失效；也不能让迟到的普通取链覆盖已切换的结果。
+func (c *requestCache[K, V]) loadSelected(ctx context.Context, key K, failed *cacheToken, selection string, accept func(V) bool, timeout time.Duration, fn func(context.Context) (V, bool, error)) (cachedResult[V], error) {
 	if err := ctx.Err(); err != nil {
 		return cachedResult[V]{}, err
 	}
 	c.mu.Lock()
 	if c.ttl != 0 {
 		if entry, ok := c.entries.Get(key); ok {
-			if (entry.expires.IsZero() || c.now().Before(entry.expires)) && (failed == nil || entry.result.token != *failed) {
-				result := entry.result
-				result.cached = true
-				c.persistLocked("更新使用时间", func(p cachePersistence[K, V]) error { return p.touch(key, c.now()) })
-				c.mu.Unlock()
-				return result, nil
+			if (!entry.expires.IsZero() && !c.now().Before(entry.expires)) || (failed != nil && entry.result.token == *failed) {
+				c.removeLocked(key)
+			} else {
+				if accept == nil || accept(entry.result.value) {
+					result := entry.result
+					result.cached = true
+					c.persistLocked("更新使用时间", func(p cachePersistence[K, V]) error { return p.touch(key, c.now()) })
+					c.mu.Unlock()
+					return result, nil
+				}
 			}
-			c.removeLocked(key)
 		}
 	}
-	fk := flightKey[K]{key: key, generation: c.generation}
+	fk := flightKey[K]{key: key, generation: c.generation, selection: selection}
 	call, ok := c.calls[fk]
 	if !ok {
 		remoteCtx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -180,7 +199,11 @@ func (c *requestCache[K, V]) execute(ctx context.Context, key flightKey[K], call
 		// 全部等待者取消时旧任务已被移除，不能污染后来同键的新任务。
 		if c.calls[key] == call {
 			delete(c.calls, key)
-			if err == nil && cacheable && c.ttl != 0 && key.generation == c.generation {
+			current, exists := c.entries.Peek(key.key)
+			// 候选集合只决定本次请求能拿什么，不得赋予旧请求覆盖新缓存的权限。
+			// 同一代次按取链启动序号发布，较新的备选仍可替换先完成的旧源。
+			replace := !exists || current.result.token.serial < call.result.token.serial
+			if err == nil && cacheable && c.ttl != 0 && key.generation == c.generation && replace {
 				now := c.now()
 				entry := timedEntry[V]{result: call.result, created: now}
 				if c.ttl > 0 {

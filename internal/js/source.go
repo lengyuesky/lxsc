@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -385,19 +386,35 @@ func (m *SourceManager) SupportedPlatforms() []string {
 
 // MusicURLResult 取直链结果
 type MusicURLResult struct {
-	URL     string `json:"url"`
-	Quality string `json:"type"`
-	Source  string `json:"source"` // 使用的脚本名
+	URL      string `json:"url"`
+	Quality  string `json:"type"`
+	Source   string `json:"source"` // 使用的脚本名
+	SourceID int64  `json:"-"`      // 由管理器赋值，脚本输出和对外 JSON 均不能携带该身份
 }
 
-// MusicURL 依次尝试各音源脚本获取直链；quality 不被支持时向下降级
-func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
-	cands := m.candidates(platform, "musicUrl")
-	if len(cands) == 0 {
-		return nil, ErrNoSource
+// MusicURLSourceIDs 按当前优先级返回支持取链的真实脚本 ID，不使用平台代号或脚本名代替。
+func (m *SourceManager) MusicURLSourceIDs(platform string) []int64 {
+	ids := []int64{}
+	for _, source := range m.candidates(platform, "musicUrl") {
+		ids = append(ids, source.id)
 	}
-	var lastErr error = ErrScriptFailed
-	for _, ls := range cands {
+	return ids
+}
+
+// MusicURL 依次尝试各音源脚本获取直链；quality 不被支持时向下降级。
+func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
+	return m.MusicURLForSources(ctx, platform, musicInfo, quality, nil)
+}
+
+// MusicURLForSources 仅在给定脚本集合内按原优先级/音质降级取链；nil 表示不限制。
+// 此处不校验音频响应，播放层独立决定是否刷新或换源，调试解析不会隐式探测媒体。
+func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
+	var lastErr error = ErrNoSource
+	for _, ls := range m.candidates(platform, "musicUrl") {
+		if sourceIDs != nil && !slices.Contains(sourceIDs, ls.id) {
+			continue
+		}
+		lastErr = ErrScriptFailed
 		for _, q := range downgradeChain(quality, ls.platforms[platform].Qualitys) {
 			cctx, cancel := context.WithTimeout(ctx, m.CallTime)
 			out, err := ls.worker.CallJSON(cctx, "__lx_request", map[string]any{
@@ -407,7 +424,8 @@ func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo
 			cancel()
 			if err != nil {
 				lastErr = fmt.Errorf("%s: %w", ls.meta.Name, err)
-				m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q, "err", err)
+				// 脚本错误可能包含签名地址，普通取链日志也不输出错误原文。
+				m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q)
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
@@ -420,6 +438,7 @@ func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo
 			}
 			r.Quality = q
 			r.Source = ls.meta.Name
+			r.SourceID = ls.id
 			return &r, nil
 		}
 	}

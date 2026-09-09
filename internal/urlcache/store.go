@@ -19,6 +19,7 @@ const Filename = "url-cache.db"
 // Record 使用绝对时间，ExpiresAt 为 0 表示不按时间过期。
 type Record struct {
 	TrackID, Quality, URL, ResolvedQuality, Source string
+	SourceID                                       int64
 	CreatedAt, ExpiresAt, LastUsedAt               int64
 }
 
@@ -64,14 +65,25 @@ func Open(dataDir string) (*Store, error) {
 	s := &Store{db: database, path: path}
 	ctx, cancel := ioContext()
 	defer cancel()
-	for _, stmt := range []string{
-		`CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+	var version int
+	if err := database.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		_ = s.Discard()
+		return nil, fmt.Errorf("读取直链缓存版本失败: %w", err)
+	}
+	statements := []string{`CREATE TABLE IF NOT EXISTS cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`}
+	if version != 2 {
+		// 旧格式只有脚本名，不能推断可信 ID；只重建独立缓存，不迁移业务数据库。
+		statements = append(statements, `DROP TABLE IF EXISTS playback_urls`, `DELETE FROM cache_meta`)
+	}
+	statements = append(statements,
 		`CREATE TABLE IF NOT EXISTS playback_urls (
 			track_id TEXT NOT NULL, quality TEXT NOT NULL, url TEXT NOT NULL,
-			resolved_quality TEXT NOT NULL, source TEXT NOT NULL,
+			resolved_quality TEXT NOT NULL, source TEXT NOT NULL, source_id INTEGER NOT NULL,
 			created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL,
 			PRIMARY KEY (track_id, quality))`,
-	} {
+		`PRAGMA user_version = 2`,
+	)
+	for _, stmt := range statements {
 		if _, err := database.ExecContext(ctx, stmt); err != nil {
 			_ = s.Discard()
 			return nil, fmt.Errorf("初始化直链缓存失败: %w", err)
@@ -104,14 +116,14 @@ func (s *Store) Load(fingerprint string, capacity int, now time.Time) ([]Record,
 			return nil, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM playback_urls WHERE expires_at > 0 AND expires_at <= ?`, now.UnixMilli()); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM playback_urls WHERE source_id <= 0 OR (expires_at > 0 AND expires_at <= ?)`, now.UnixMilli()); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM playback_urls WHERE rowid IN (
 		SELECT rowid FROM playback_urls ORDER BY last_used_at DESC, track_id DESC, quality DESC LIMIT -1 OFFSET ?)`, capacity); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT track_id, quality, url, resolved_quality, source, created_at, expires_at, last_used_at
+	rows, err := tx.QueryContext(ctx, `SELECT track_id, quality, url, resolved_quality, source, source_id, created_at, expires_at, last_used_at
 		FROM playback_urls ORDER BY last_used_at, track_id, quality`)
 	if err != nil {
 		return nil, err
@@ -119,7 +131,7 @@ func (s *Store) Load(fingerprint string, capacity int, now time.Time) ([]Record,
 	var records []Record
 	for rows.Next() {
 		var r Record
-		if err := rows.Scan(&r.TrackID, &r.Quality, &r.URL, &r.ResolvedQuality, &r.Source, &r.CreatedAt, &r.ExpiresAt, &r.LastUsedAt); err != nil {
+		if err := rows.Scan(&r.TrackID, &r.Quality, &r.URL, &r.ResolvedQuality, &r.Source, &r.SourceID, &r.CreatedAt, &r.ExpiresAt, &r.LastUsedAt); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -163,10 +175,10 @@ func (s *Store) Put(r Record) error {
 	ctx, cancel := ioContext()
 	defer cancel()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO playback_urls
-		(track_id,quality,url,resolved_quality,source,created_at,expires_at,last_used_at) VALUES(?,?,?,?,?,?,?,?)
+		(track_id,quality,url,resolved_quality,source,source_id,created_at,expires_at,last_used_at) VALUES(?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(track_id,quality) DO UPDATE SET url=excluded.url, resolved_quality=excluded.resolved_quality,
-		source=excluded.source, created_at=excluded.created_at, expires_at=excluded.expires_at, last_used_at=excluded.last_used_at`,
-		r.TrackID, r.Quality, r.URL, r.ResolvedQuality, r.Source, r.CreatedAt, r.ExpiresAt, r.LastUsedAt)
+		source=excluded.source, source_id=excluded.source_id, created_at=excluded.created_at, expires_at=excluded.expires_at, last_used_at=excluded.last_used_at`,
+		r.TrackID, r.Quality, r.URL, r.ResolvedQuality, r.Source, r.SourceID, r.CreatedAt, r.ExpiresAt, r.LastUsedAt)
 	return err
 }
 

@@ -58,8 +58,8 @@ func TestStreamModeProxyOverrideMatrix(t *testing.T) {
 							if calls.Load() != 1 || rec.Code != http.StatusOK || rec.Body.String() != "音频" {
 								t.Fatalf("应保留原有代理行为: calls=%d status=%d body=%s", calls.Load(), rec.Code, rec.Body.String())
 							}
-						} else if calls.Load() != 0 || rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://cdn.example/1" {
-							t.Fatalf("首次取链应直接返回 302，不额外校验或转发音频: calls=%d status=%d headers=%v", calls.Load(), rec.Code, rec.Header())
+						} else if calls.Load() != 1 || rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://cdn.example/1" {
+							t.Fatalf("首次取链应轻量校验后返回302，不转发音频: calls=%d status=%d headers=%v", calls.Load(), rec.Code, rec.Header())
 						}
 						if rec.Header().Get("Cache-Control") != "no-store" {
 							t.Fatal("媒体响应不应被缓存")

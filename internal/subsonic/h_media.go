@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -52,40 +51,30 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, persistPlayb
 }
 
 func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, persistPlayback bool, fail mediaErrorWriter) {
-	rc := s.newReqCtx(r)
+	ctx, cancel := context.WithTimeout(r.Context(), mediaRecoveryTimeout)
+	defer cancel()
 	u := currentUser(r)
 	id := param(r, "id")
 	metadataStarted := time.Now()
-	in, err := s.Catalog.Track(rc.ctx, id)
+	in, err := s.Catalog.Track(ctx, id)
 	s.mediaEvent("metadata", id, "", "", false, 0, metadataStarted, err)
 	if err != nil {
-		fail(w, r, ErrNotFound, err.Error())
+		if r.Context().Err() == nil {
+			fail(w, r, ErrNotFound, err.Error())
+		}
 		return
 	}
 	quality := pickQuality(r, u.Quality)
-	remaining := 45 * time.Second
-	resolve := func(failed *music.URLResolution) (result music.URLResolution, resolveErr error) {
-		started := time.Now()
-		ctx, cancel := context.WithTimeout(rc.ctx, remaining)
-		defer func() {
-			cancel()
-			remaining -= time.Since(started)
-			stage := "resolve"
-			if failed != nil {
-				stage = "refresh"
-			}
-			s.mediaEvent(stage, id, in.Source(), quality, result.Cached, 0, started, resolveErr)
-		}()
-		if failed != nil {
-			return s.Catalog.RefreshPlaybackURL(ctx, in, *failed)
-		}
-		return s.Catalog.ResolvePlaybackURL(ctx, in, quality)
-	}
-	res, err := resolve(nil)
+	mode := s.Settings.Get().StreamMode
+	// 强制 302 优先于客户端的 proxy 参数，播放和下载均禁止服务器转发。
+	proxy := mode != "force_redirect" && (mode == "proxy" || param(r, "proxy") == "1")
+	res, resp, err := s.prepareMedia(ctx, r, in, quality, proxy)
+	// 预算只覆盖取得可用响应头之前的工作，不能截断已经开始的整首音频传输。
+	cancel()
 	if err != nil {
-		s.Log.Warn("获取直链失败", "id", id, "quality", quality)
+		s.Log.Warn("获取可用音频失败", "id", id, "quality", quality)
 		if r.Context().Err() == nil {
-			fail(w, r, ErrGeneric, "无法获取播放地址")
+			fail(w, r, ErrGeneric, "无法获取可用的播放地址")
 		}
 		return
 	}
@@ -93,45 +82,17 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 		if !persistPlayback {
 			return
 		}
-		if err := s.Catalog.RememberSync(rc.ctx, []*music.Info{in}); err != nil {
+		if err := s.Catalog.RememberSync(r.Context(), []*music.Info{in}); err != nil {
 			s.Log.Warn("持久化播放歌曲元数据失败", "id", id, "err", err)
 		}
 	}
-	mode := s.Settings.Get().StreamMode
-	// 强制 302 优先于客户端的 proxy 参数，播放和下载均禁止服务器转发。
-	if mode != "force_redirect" && (mode == "proxy" || param(r, "proxy") == "1") {
-		if s.proxyStream(w, r, in, res, func(failed music.URLResolution) (music.URLResolution, error) { return resolve(&failed) }, fail) {
+	if proxy {
+		if s.proxyStream(w, r, in, res, resp) {
 			persist()
 		}
 		return
 	}
-	if res.Cached {
-		checkStarted := time.Now()
-		status, checkErr := s.Catalog.CheckPlaybackURL(rc.ctx, res, func(ctx context.Context) (int, error) {
-			return s.checkMedia(ctx, in, res.Result.URL)
-		})
-		s.mediaEvent("cache_check", id, in.Source(), res.Result.Quality, true, status, checkStarted, checkErr)
-		if rc.ctx.Err() != nil {
-			return
-		}
-		if checkErr == nil && expiredMediaStatus(status) {
-			s.Log.Info("缓存直链失效，尝试刷新", "id", id, "status", status)
-			res, err = resolve(&res)
-			if err != nil {
-				s.Log.Warn("直链刷新失败", "id", id)
-				if rc.ctx.Err() == nil {
-					fail(w, r, ErrGeneric, "重新获取播放地址失败")
-				}
-				return
-			}
-		} else if checkErr != nil || (status != http.StatusOK && status != http.StatusPartialContent) {
-			// 校验网络与客户端网络可能不同，不能据此删除直链或阻止客户端尝试。
-			s.Log.Info("直链校验结果不确定，继续客户端直连", "id", id, "status", status)
-		} else {
-			s.Log.Debug("缓存直链校验成功", "id", id, "status", status)
-		}
-	}
-	if rc.ctx.Err() != nil {
+	if r.Context().Err() != nil {
 		return
 	}
 	// 重定向成功即可交由客户端直连上游，此时记录播放。
@@ -142,7 +103,7 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	http.Redirect(w, r, res.Result.URL, http.StatusFound)
 }
 
-// mediaEvent 只向独立结构化缓冲写入白名单，不影响播放/强制302分支。
+// mediaEvent 只向独立结构化缓冲写入白名单，不输出签名地址或脚本身份。
 func (s *Server) mediaEvent(stage, id, platform, quality string, cached bool, status int, started time.Time, err error) {
 	s.Diagnostics.Add(diagnostics.Event{Stage: stage, TrackID: id, Platform: platform, Quality: quality, Mode: s.Settings.Get().StreamMode, Cached: cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds()})
 }
@@ -172,8 +133,8 @@ func expiredMediaStatus(status int) bool {
 // checkMedia 使用最小 Range 校验，不读取或转发音频正文，也不继承客户端凭据。
 func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return 0, err
+	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+		return 0, errInvalidMediaURL
 	}
 	ref, ua := refererFor(in.Source())
 	req.Header.Set("User-Agent", ua)
@@ -190,11 +151,16 @@ func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string)
 	return resp.StatusCode, nil
 }
 
-// openMedia 只请求响应头，不向客户端提交内容，为限次恢复保留空间。
-func (s *Server) openMedia(r *http.Request, in *music.Info, url string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
-	if err != nil {
+// openMedia 取得响应头后解除恢复预算，但始终保留父请求取消和正文关闭的生命周期。
+func (s *Server) openMedia(ctx context.Context, r *http.Request, in *music.Info, address string) (*http.Response, error) {
+	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	bodyCtx, cancel := context.WithCancel(r.Context())
+	req, err := http.NewRequestWithContext(bodyCtx, http.MethodGet, address, nil)
+	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+		cancel()
+		return nil, errInvalidMediaURL
 	}
 	ref, ua := refererFor(in.Source())
 	req.Header.Set("User-Agent", ua)
@@ -206,53 +172,39 @@ func (s *Server) openMedia(r *http.Request, in *music.Info, url string) (*http.R
 			req.Header.Set(h, value)
 		}
 	}
-	return s.HTTP.Do(req)
+	stop := context.AfterFunc(ctx, cancel)
+	resp, err := s.HTTP.Do(req)
+	if !stop() {
+		err = ctx.Err()
+	}
+	if err == nil {
+		err = bodyCtx.Err()
+	}
+	if err != nil {
+		cancel()
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, err
+	}
+	resp.Body = &mediaResponseBody{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
 }
 
-func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.Info, resolution music.URLResolution, refresh func(music.URLResolution) (music.URLResolution, error), fail mediaErrorWriter) bool {
-	var resp *http.Response
-	for attempt := 0; attempt < 2; attempt++ {
-		if r.Context().Err() != nil {
-			return false
-		}
-		var err error
-		started := time.Now()
-		resp, err = s.openMedia(r, in, resolution.Result.URL)
-		status := 0
-		if resp != nil {
-			status = resp.StatusCode
-		}
-		s.mediaEvent("proxy_response", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, status, started, err)
-		if err != nil {
-			// http 错误可能包含签名 URL，只记录阶段，不输出原始错误。
-			s.Log.Warn("代理上游请求失败", "id", in.TrackID(), "attempt", attempt+1)
-			if r.Context().Err() == nil {
-				fail(w, r, ErrGeneric, "上游请求失败")
-			}
-			return false
-		}
-		if attempt == 0 && expiredMediaStatus(resp.StatusCode) {
-			_ = resp.Body.Close()
-			s.Log.Info("直链失效，尝试刷新", "id", in.TrackID(), "status", resp.StatusCode)
-			resolution, err = refresh(resolution)
-			if err != nil {
-				s.Log.Warn("直链刷新失败", "id", in.TrackID())
-				if r.Context().Err() == nil {
-					fail(w, r, ErrGeneric, "重新获取播放地址失败")
-				}
-				return false
-			}
-			continue
-		}
-		break
-	}
+type mediaResponseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *mediaResponseBody) Close() error {
+	b.cancel()
+	return b.ReadCloser.Close()
+}
+
+// proxyStream 仅提交已经选定的响应；416 或 copy 开始后的错误都不重新播放。
+func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.Info, resolution music.URLResolution, resp *http.Response) bool {
 	defer resp.Body.Close()
 	if r.Context().Err() != nil {
-		return false
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusRequestedRangeNotSatisfiable {
-		s.Log.Warn("代理上游响应失败", "id", in.TrackID(), "status", resp.StatusCode)
-		fail(w, r, ErrGeneric, "上游返回 "+strconv.Itoa(resp.StatusCode))
 		return false
 	}
 	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"} {

@@ -120,7 +120,7 @@ func TestPlaybackRefreshCoalescesAndProtectsNewResult(t *testing.T) {
 	in := stabilityTrack()
 	var calls atomic.Int32
 	release := make(chan struct{})
-	c.urlCall = func(ctx context.Context, platform string, info any, quality string) (*js.MusicURLResult, error) {
+	c.urlCall = func(ctx context.Context, platform string, info any, quality string, _ []int64) (*js.MusicURLResult, error) {
 		n := calls.Add(1)
 		if n == 2 {
 			select {
@@ -184,7 +184,7 @@ func TestRefreshTTLIsSelective(t *testing.T) {
 		searches.Add(1)
 		return json.RawMessage(`{"list":[{"songmid":"one"}]}`), nil
 	}
-	c.urlCall = func(ctx context.Context, source string, info any, quality string) (*js.MusicURLResult, error) {
+	c.urlCall = func(ctx context.Context, source string, info any, quality string, _ []int64) (*js.MusicURLResult, error) {
 		urls.Add(1)
 		return &js.MusicURLResult{URL: "https://cdn.example/track", Quality: quality}, nil
 	}
@@ -234,7 +234,7 @@ func TestConcurrentCacheCoverDoesNotMutateMetadata(t *testing.T) {
 	}
 	defer sdk.Close()
 	c.SDK = sdk
-	c.urlCall = func(ctx context.Context, source string, info any, quality string) (*js.MusicURLResult, error) {
+	c.urlCall = func(ctx context.Context, source string, info any, quality string, _ []int64) (*js.MusicURLResult, error) {
 		return &js.MusicURLResult{URL: "https://cdn.example/track", Quality: quality}, nil
 	}
 	info := stabilityTrack()
@@ -265,7 +265,7 @@ func TestConcurrentCacheSettingsAndRequests(t *testing.T) {
 	c.searchCall = func(context.Context, string, ...any) (json.RawMessage, error) {
 		return json.RawMessage(`{"list":[{"songmid":"one","singer":"歌手"}]}`), nil
 	}
-	c.urlCall = func(ctx context.Context, source string, info any, quality string) (*js.MusicURLResult, error) {
+	c.urlCall = func(ctx context.Context, source string, info any, quality string, _ []int64) (*js.MusicURLResult, error) {
 		return &js.MusicURLResult{URL: "https://cdn.example/track", Quality: quality}, nil
 	}
 	var wg sync.WaitGroup

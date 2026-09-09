@@ -68,7 +68,7 @@ func (c *Catalog) EnableURLCache(dataDir, proxy string) error {
 		c.urls.serial++
 		entry := timedEntry[js.MusicURLResult]{
 			result: cachedResult[js.MusicURLResult]{
-				value: js.MusicURLResult{URL: record.URL, Quality: record.ResolvedQuality, Source: record.Source},
+				value: js.MusicURLResult{URL: record.URL, Quality: record.ResolvedQuality, Source: record.Source, SourceID: record.SourceID},
 				token: cacheToken{generation: c.urls.generation, serial: c.urls.serial},
 			},
 			created: time.UnixMilli(record.CreatedAt),
@@ -99,7 +99,7 @@ func (c *Catalog) urlCacheFingerprint(proxy string) (string, error) {
 		TTL     int
 		Proxy   string
 		Sources []sourceState
-	}{Version: 1, TTL: c.Settings.Get().URLCacheTTL, Proxy: proxy}
+	}{Version: 2, TTL: c.Settings.Get().URLCacheTTL, Proxy: proxy}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	sources, err := c.DB.ListSources(ctx)
@@ -131,7 +131,7 @@ func (p *urlPersistence) put(key urlKey, entry timedEntry[js.MusicURLResult]) er
 	}
 	return p.store.Put(urlcache.Record{
 		TrackID: key.trackID, Quality: key.quality, URL: entry.result.value.URL,
-		ResolvedQuality: entry.result.value.Quality, Source: entry.result.value.Source,
+		ResolvedQuality: entry.result.value.Quality, Source: entry.result.value.Source, SourceID: entry.result.value.SourceID,
 		CreatedAt: entry.created.UnixMilli(), ExpiresAt: expires, LastUsedAt: entry.created.UnixNano(),
 	})
 }

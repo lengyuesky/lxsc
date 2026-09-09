@@ -247,8 +247,8 @@ func TestRecoveryDownloadAndRedirectBoundaries(t *testing.T) {
 					t.Fatal("下载代理应支持限次恢复")
 				}
 			} else {
-				if gets.Load() != 0 || rec.Code != 302 {
-					t.Fatal("首次取链应直接返回 302，不额外校验")
+				if gets.Load() != 2 || rec.Code != 302 || rec.Header().Get("Location") != "https://cdn.example/2" {
+					t.Fatal("首次302必须校验，过期刷新后的新直链也要复验")
 				}
 				s.stream(httptest.NewRecorder(), mediaStabilityRequest(user, info, ""))
 				if _, err := s.DB.GetTrack(context.Background(), info.TrackID()); err != nil {

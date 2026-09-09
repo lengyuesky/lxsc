@@ -36,9 +36,9 @@ func TestRedirectCachedURLStatusMatrix(t *testing.T) {
 					body := &probeOnlyBody{}
 					var checks atomic.Int32
 					s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-						checks.Add(1)
-						if req.Method != http.MethodGet || req.URL.Path != "/1" || req.Header.Get("Range") != "bytes=0-0" || req.Header.Get("If-Range") != "" || req.Header.Get("Accept-Encoding") != "identity" {
-							t.Errorf("只能校验旧直链的最小 Range: %s %v", req.URL.Path, req.Header)
+						n := checks.Add(1)
+						if req.Method != http.MethodGet || req.URL.Path != fmt.Sprintf("/%d", n) || req.Header.Get("Range") != "bytes=0-0" || req.Header.Get("If-Range") != "" || req.Header.Get("Accept-Encoding") != "identity" {
+							t.Errorf("缓存及刷新直链都只校验最小 Range: %s %v", req.URL.Path, req.Header)
 						}
 						if req.Header.Get("Referer") != "https://music.163.com/" || req.Header.Get("User-Agent") == "" || req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
 							t.Error("校验应带平台请求头，但不能继承客户端凭据")
@@ -62,18 +62,23 @@ func TestRedirectCachedURLStatusMatrix(t *testing.T) {
 					} else {
 						s.download(rec, req)
 					}
-					want := "https://cdn.example/1"
+					success := status == 200 || status == 206
+					wantChecks := int32(1)
 					if status == 403 || status == 404 || status == 410 {
-						want = "https://cdn.example/2"
+						wantChecks = 2
 					}
-					if rec.Code != 302 || rec.Header().Get("Location") != want || rec.Header().Get("Cache-Control") != "no-store" {
-						t.Fatalf("应按校验结果返回直链: %d %v", rec.Code, rec.Header())
+					if success {
+						if rec.Code != 302 || rec.Header().Get("Location") != "https://cdn.example/1" || rec.Header().Get("Cache-Control") != "no-store" {
+							t.Fatalf("应交付校验成功的直链: %d %v", rec.Code, rec.Header())
+						}
+					} else if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
+						t.Fatalf("唯一音源明确失败，不能302到未复验或已拒绝的地址: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
 					}
-					if checks.Load() != 1 || body.closed.Load() != 1 || body.reads.Load() != 0 {
-						t.Fatalf("校验必须限一次并关闭响应，不能读取正文: %d/%d/%d", checks.Load(), body.closed.Load(), body.reads.Load())
+					if checks.Load() != wantChecks || body.closed.Load() != wantChecks || body.reads.Load() != 0 {
+						t.Fatalf("每源最多两次校验并立即关闭响应，不能读取正文: %d/%d/%d", checks.Load(), body.closed.Load(), body.reads.Load())
 					}
 					_, storedErr := s.DB.GetTrack(context.Background(), info.TrackID())
-					if (storedErr == nil) != (endpoint == "stream") {
+					if (storedErr == nil) != (endpoint == "stream" && success) {
 						t.Fatal("保持播放与下载的歌曲持久化边界")
 					}
 				})
@@ -129,15 +134,20 @@ func TestRedirectProbeUnknownAndRefreshFailure(t *testing.T) {
 	}
 }
 
-func TestRedirectWithoutCacheDoesNotProbe(t *testing.T) {
+func TestRedirectWithoutCacheChecksNewURLs(t *testing.T) {
 	s, user, info := newMediaStabilityServer(t, recoveryScript)
 	if _, err := s.Settings.Update(context.Background(), map[string]json.RawMessage{"urlCacheTTL": json.RawMessage(`0`)}); err != nil {
 		t.Fatal(err)
 	}
 	s.Catalog.RefreshTTL()
-	s.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		t.Error("不缓存时新解析的链接不应额外校验")
-		return nil, errors.New("不应请求")
+	var checks atomic.Int32
+	body := &probeOnlyBody{}
+	s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		checks.Add(1)
+		if req.Header.Get("Range") != "bytes=0-0" {
+			t.Error("新直链也必须只校验响应头")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: body, Request: req}, nil
 	})}
 	for i := 1; i <= 2; i++ {
 		rec := httptest.NewRecorder()
@@ -145,6 +155,9 @@ func TestRedirectWithoutCacheDoesNotProbe(t *testing.T) {
 		if rec.Code != 302 || rec.Header().Get("Location") != fmt.Sprintf("https://cdn.example/%d", i) {
 			t.Fatalf("不缓存应逐次取链: %d %v", rec.Code, rec.Header())
 		}
+	}
+	if checks.Load() != 2 || body.closed.Load() != 2 || body.reads.Load() != 0 {
+		t.Fatal("关闭缓存不能跳过新直链校验，也不能读取正文")
 	}
 }
 
@@ -156,9 +169,13 @@ func TestRedirectLateProbeCannotInvalidateNewURL(t *testing.T) {
 	}
 	started, release := make(chan struct{}), make(chan struct{})
 	s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		close(started)
-		<-release
-		return &http.Response{StatusCode: 403, Header: make(http.Header), Body: &probeOnlyBody{}, Request: req}, nil
+		status := 200
+		if req.URL.Path == "/1" {
+			close(started)
+			<-release
+			status = 403
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: &probeOnlyBody{}, Request: req}, nil
 	})}
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {

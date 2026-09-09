@@ -41,8 +41,8 @@ func TestPersistentURLCachePresetsAndAbsoluteExpiry(t *testing.T) {
 			now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
 			c.urls.now = func() time.Time { return now }
 			var calls atomic.Int32
-			call := func(context.Context, string, any, string) (*js.MusicURLResult, error) {
-				return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", calls.Add(1)), Quality: "320k", Source: "测试音源"}, nil
+			call := func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error) {
+				return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", calls.Add(1)), Quality: "320k", Source: "测试音源", SourceID: 1}, nil
 			}
 			c.urlCall = call
 			attachTestURLCache(t, c, dir)
@@ -88,8 +88,8 @@ func TestPersistentURLCacheLRUAndDisable(t *testing.T) {
 	c.urls = newRequestCache[urlKey, js.MusicURLResult](2, -time.Second)
 	setURLTTL(t, c, -1)
 	var calls atomic.Int32
-	c.urlCall = func(context.Context, string, any, string) (*js.MusicURLResult, error) {
-		return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", calls.Add(1)), Quality: "320k"}, nil
+	c.urlCall = func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error) {
+		return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", calls.Add(1)), Quality: "320k", SourceID: 1}, nil
 	}
 	attachTestURLCache(t, c, dir)
 	load := func(id string) URLResolution {
@@ -135,8 +135,8 @@ func TestPersistentURLCacheContextAndFaultRecovery(t *testing.T) {
 			}
 			dir := t.TempDir()
 			var calls atomic.Int32
-			call := func(context.Context, string, any, string) (*js.MusicURLResult, error) {
-				return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", calls.Add(1)), Quality: "320k"}, nil
+			call := func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error) {
+				return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", calls.Add(1)), Quality: "320k", SourceID: 1}, nil
 			}
 			c.urlCall = call
 			attachTestURLCache(t, c, dir)
@@ -193,13 +193,13 @@ func TestPersistentURLCacheLateResolutionCannotReturnToDisk(t *testing.T) {
 	attachTestURLCache(t, c, dir)
 	started, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	c.urlCall = func(context.Context, string, any, string) (*js.MusicURLResult, error) {
+	c.urlCall = func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error) {
 		n := calls.Add(1)
 		if n == 1 {
 			close(started)
 			<-release
 		}
-		return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", n), Quality: "320k"}, nil
+		return &js.MusicURLResult{URL: fmt.Sprintf("https://cdn.example/%d", n), Quality: "320k", SourceID: 1}, nil
 	}
 	old := make(chan error, 1)
 	go func() { _, err := c.ResolveURL(context.Background(), stabilityTrack(), "320k"); old <- err }()
@@ -221,8 +221,8 @@ func TestPersistentURLCacheLateResolutionCannotReturnToDisk(t *testing.T) {
 
 func TestURLChecksShareVersionAndCancelIndependently(t *testing.T) {
 	c := newStabilityCatalog(t)
-	c.urlCall = func(context.Context, string, any, string) (*js.MusicURLResult, error) {
-		return &js.MusicURLResult{URL: "https://cdn.example/same-url", Quality: "320k"}, nil
+	c.urlCall = func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error) {
+		return &js.MusicURLResult{URL: "https://cdn.example/same-url", Quality: "320k", SourceID: 1}, nil
 	}
 	old, err := c.ResolvePlaybackURL(context.Background(), stabilityTrack(), "320k")
 	if err != nil {

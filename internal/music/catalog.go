@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -45,7 +46,7 @@ type Catalog struct {
 	urlChecks       *requestCache[urlCheckKey, int]
 	search          *requestCache[searchKey, []*Info]
 	searchCall      func(context.Context, string, ...any) (json.RawMessage, error)
-	urlCall         func(context.Context, string, any, string) (*js.MusicURLResult, error)
+	urlCall         func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
 	lyrics          *lru.LRU[string, *Lyrics]
 	generic         *lru.LRU[string, json.RawMessage]
 }
@@ -78,11 +79,11 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		}
 		return c.SDK.CallRaw(ctx, path, args...)
 	}
-	c.urlCall = func(ctx context.Context, platform string, info any, quality string) (*js.MusicURLResult, error) {
+	c.urlCall = func(ctx context.Context, platform string, info any, quality string, sourceIDs []int64) (*js.MusicURLResult, error) {
 		if c.Sources == nil {
 			return nil, errors.New("音源未初始化")
 		}
-		return c.Sources.MusicURL(ctx, platform, info, quality)
+		return c.Sources.MusicURLForSources(ctx, platform, info, quality, sourceIDs)
 	}
 	return c
 }
@@ -319,38 +320,72 @@ func (c *Catalog) ResolveURL(ctx context.Context, in *Info, quality string) (*js
 	return &r.Result, nil
 }
 
-// ResolvePlaybackURL 获取直链和对应的版本标识。
+// ResolvePlaybackURL 获取直链和对应的版本标识，不主动请求音频。
 func (c *Catalog) ResolvePlaybackURL(ctx context.Context, in *Info, quality string) (URLResolution, error) {
-	if quality == "" {
-		quality = c.Settings.Get().DefaultQuality
-	}
-	key := urlKey{trackID: in.TrackID(), quality: SelectQuality(quality, in.Qualities())}
-	return c.resolvePlaybackURL(ctx, in, key, nil)
+	return c.ResolvePlaybackURLForSources(ctx, in, quality, nil, nil)
 }
 
 // RefreshPlaybackURL 仅失效失败请求所使用的版本，复用其他请求刚刷新的结果。
 func (c *Catalog) RefreshPlaybackURL(ctx context.Context, in *Info, failed URLResolution) (URLResolution, error) {
-	if failed.key.trackID != in.TrackID() {
-		return URLResolution{}, errors.New("直链刷新歌曲不匹配")
-	}
-	return c.resolvePlaybackURL(ctx, in, failed.key, &failed.token)
+	return c.ResolvePlaybackURLForSources(ctx, in, "", nil, &failed)
 }
 
-func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, key urlKey, failed *cacheToken) (URLResolution, error) {
-	r, err := c.urls.load(ctx, key, failed, 45*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
-		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), key.quality)
+// ResolvePlaybackURLForSources 在请求内剩余脚本集合中取链，nil 使用当前全部候选。
+// failed 非空时只刷新原脚本；若已有其他请求发布的可用候选，则直接复用其新版本。
+func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, quality string, sourceIDs []int64, failed *URLResolution) (URLResolution, error) {
+	if quality == "" {
+		quality = c.Settings.Get().DefaultQuality
+	}
+	key := urlKey{trackID: in.TrackID(), quality: SelectQuality(quality, in.Qualities())}
+	var failedToken *cacheToken
+	if failed != nil {
+		if failed.key.trackID != in.TrackID() {
+			return URLResolution{}, errors.New("直链刷新歌曲不匹配")
+		}
+		key, failedToken = failed.key, &failed.token
+	}
+	if sourceIDs == nil && c.Sources != nil {
+		sourceIDs = c.Sources.MusicURLSourceIDs(in.Source())
+	}
+	// 候选集合按 ID 规范化仅用于合并；实际调用仍由音源管理器按优先级排序。
+	sourceIDs = slices.Clone(sourceIDs)
+	slices.Sort(sourceIDs)
+	sourceIDs = slices.Compact(sourceIDs)
+	selection := "*"
+	var accept func(js.MusicURLResult) bool
+	if sourceIDs != nil {
+		selection = fmt.Sprint(sourceIDs)
+		accept = func(value js.MusicURLResult) bool { return slices.Contains(sourceIDs, value.SourceID) }
+	}
+	resolveIDs := sourceIDs
+	if failed != nil {
+		selection += fmt.Sprintf("/refresh:%d:%d:%d", failed.token.generation, failed.token.serial, failed.Result.SourceID)
+		if failed.Result.SourceID > 0 {
+			resolveIDs = []int64{failed.Result.SourceID}
+			if accept != nil && !accept(failed.Result) {
+				resolveIDs = []int64{}
+			}
+		}
+	}
+	r, err := c.urls.loadSelected(ctx, key, failedToken, selection, accept, 45*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
+		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), key.quality, resolveIDs)
 		if remoteCtx.Err() != nil {
 			err = remoteCtx.Err()
 		}
 		if err != nil {
 			return js.MusicURLResult{}, false, err
 		}
-		if value == nil || value.URL == "" {
-			return js.MusicURLResult{}, false, errors.New("音源返回空播放地址")
+		if value == nil || value.URL == "" || (resolveIDs != nil && !slices.Contains(resolveIDs, value.SourceID)) {
+			return js.MusicURLResult{}, false, errors.New("音源返回无效播放地址或身份")
 		}
 		return *value, true, nil
 	})
 	return URLResolution{Result: r.value, Cached: r.cached, key: key, token: r.token}, err
+}
+
+// InvalidatePlaybackURL 只丢弃明确失败的同一解析版本，不影响并发刷新产生的新链接。
+func (c *Catalog) InvalidatePlaybackURL(failed URLResolution) {
+	c.urls.invalidate(failed.key, failed.token)
 }
 
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。

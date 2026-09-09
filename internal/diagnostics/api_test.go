@@ -387,6 +387,51 @@ func TestProbeSafeOutputNoPlaybackSideEffects(t *testing.T) {
 		}
 	}
 }
+func TestProbeDoesNotAutomaticallyRefreshOrFailOver(t *testing.T) {
+	f := newFixture(t)
+	setupProbe(t, f)
+	const fallback = `lx.on(lx.EVENT_NAMES.request,()=>Promise.resolve('https://media.example/other'));lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['320k']}}});`
+	if _, err := f.s.Catalog.Sources.Load(context.Background(), 22, 2, fallback); err != nil {
+		t.Fatal(err)
+	}
+	_, key := f.create(t, true)
+	calls := 0
+	body := &unreadBody{t: t}
+	f.s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Header.Get("User-Agent") != "lxsc-debug-probe" || r.Header.Get("Referer") != "" || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("Range") != "bytes=0-0" {
+			t.Error("主动探测不得改用播放请求头或继承凭据")
+		}
+		return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: body, Request: r}, nil
+	})}
+	w := f.call("POST", "/api/debug/probe", `{"trackId":"tr-wy-1","quality":"320k"}`, key, nil)
+	var result struct {
+		Events []Event `json:"events"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || calls != 1 || !body.closed || len(result.Events) != 3 {
+		t.Fatal("探测应保持独立三阶段且只检查一次音频响应")
+	}
+	for i, stage := range []string{"metadata", "resolve", "probe"} {
+		if result.Events[i].Stage != stage {
+			t.Fatalf("探测不应自动加入播放恢复阶段：%+v", result.Events)
+		}
+	}
+	if result.Events[2].Status != 403 {
+		t.Fatal("必须忠实交付本次探测的上游拒绝状态")
+	}
+	info, err := f.s.Catalog.Track(context.Background(), "tr-wy-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := f.s.Catalog.ResolvePlaybackURL(context.Background(), info, "320k")
+	if err != nil || !cached.Cached || cached.Result.SourceID != 1 {
+		t.Fatal("独立探测不能偷偷刷新或切换音源")
+	}
+	if _, err := f.s.DB.GetTrack(context.Background(), "tr-wy-1"); err == nil {
+		t.Fatal("探测不能记录播放")
+	}
+}
+
 func TestProbeRevokeExpiryAndOwnerCancelInFlight(t *testing.T) {
 	for _, action := range []string{"revoke", "expiry", "demote", "delete"} {
 		t.Run(action, func(t *testing.T) {
