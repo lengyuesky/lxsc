@@ -77,7 +77,7 @@
 
   <main>
     <section id="tab-playlists" class="tab">
-      <div class="page-head"><div><h2>歌单</h2><p>管理歌曲、顺序与洛雪歌单导入</p></div><div class="page-actions"><label class="quality-control">默认播放音质<select id="qualitySelect" data-quality-select><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label><button id="refreshButton" class="sec"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
+      <div class="page-head"><div><h2>歌单</h2><p>管理歌曲、顺序，导入洛雪、网易云和 QQ 音乐歌单</p></div><div class="page-actions"><label class="quality-control">默认播放音质<select id="qualitySelect" data-quality-select><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label><button id="refreshButton" class="sec"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
       <details id="boardSettingsPanel" class="card board-settings-panel admin-only hidden">
         <summary><span><svg class="icon"><use href="#i-sliders"/></svg>自定义榜单</span><small>在线目录与客户端歌单</small></summary>
         <div id="boardSettingsLoadNotice" class="board-settings-notice hidden" role="status"><span id="boardSettingsLoadMsg"></span><button id="retryBoardSettings" type="button" class="sec sm hidden" onclick="loadBoardSettings()">重试</button></div>
@@ -109,9 +109,15 @@
           </details>
 
           <details class="card create-card">
-            <summary><svg class="icon"><use href="#i-upload"/></svg>导入洛雪歌单</summary>
+            <summary><svg class="icon"><use href="#i-upload"/></svg>导入歌单</summary>
             <form id="importForm">
-              <label>备份文件<input name="file" type="file" accept=".lxmc,.json,application/json,application/gzip" required><small>支持洛雪音乐导出的 .lxmc / .json 文件</small></label>
+              <label>来源<select name="source"><option value="lx">洛雪歌单文件</option><option value="wy">网易云音乐</option><option value="tx">QQ 音乐</option></select></label>
+              <label id="importFileWrap">备份文件<input name="file" type="file" accept=".lxmc,.json,application/json,application/gzip" required><small>支持洛雪音乐导出的 .lxmc / .json 文件</small></label>
+              <div id="importOnlineWrap" class="hidden">
+                <label>歌单链接或 ID<input name="input" maxlength="4096" placeholder="粘贴完整歌单链接或数字 ID"><small>仅支持公开歌单；短链接请先在浏览器打开后复制完整链接。最多导入 2000 首，不下载音频。</small></label>
+                <button id="previewOnlineImport" type="button" class="sec block">读取歌单</button>
+              </div>
+              <p id="importStatus" class="muted hint" role="status"></p>
               <div id="importLists" class="import-lists hidden"></div>
               <label>导入方式<select name="mode"><option value="create">每个列表新建一个歌单</option><option value="append">追加到当前选中的歌单</option></select></label>
               <label id="importOwnerWrap" class="hidden">归属用户<select name="ownerId"></select></label>

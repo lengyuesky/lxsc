@@ -547,7 +547,12 @@ func (c *Catalog) SongListDetail(ctx context.Context, source, id string, page in
 		page = 1
 	}
 	key := fmt.Sprintf("sl|%s|%s|%d", source, id, page)
-	raw, err := c.cachedCallRaw(ctx, key, source+".songList.getListDetail", id, page)
+	args := []any{id}
+	// QQ 音乐第二参数是重试次数，不是页码。
+	if source != "tx" {
+		args = append(args, page)
+	}
+	raw, err := c.cachedCallRaw(ctx, key, source+".songList.getListDetail", args...)
 	if err != nil {
 		return nil, nil, err
 	}

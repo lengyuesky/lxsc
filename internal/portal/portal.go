@@ -93,6 +93,7 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/playlists/{id}/tracks", s.replacePlaylistTracks)
 	r.Post("/playlists/{id}/tracks", s.addPlaylistTrack)
 	r.Post("/playlists/import", s.importPlaylists)
+	r.Post("/playlists/import/online", s.importOnlinePlaylist)
 	r.Delete("/playlists/{id}", s.deletePlaylist)
 	r.Post("/search", s.search)
 	r.Post("/search/stream", s.searchStream)

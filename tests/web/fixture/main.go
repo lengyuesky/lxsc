@@ -44,6 +44,11 @@ function song(source, key, query) {
 globalThis.__sdk_call=(path,args)=> {
 	if (args[0]==='渐进测试' && path.startsWith('tx.')) return new Promise(resolve=>setTimeout(()=>resolve({list:[1,2,3].map(id=>song('tx',id,args[0]))}),1500));
 	if (args[0]==='渐进测试' && path.startsWith('mg.')) return Promise.reject(new Error('合成平台故障'));
+  if (path.endsWith('.songList.getListDetail')) {
+    const source = path.split('.')[0];
+    if (source === 'tx' && args.length !== 1) return Promise.reject(new Error('QQ 歌单参数错误'));
+    return Promise.resolve({list:[1,2,3].map(id=>song(source,id,'')),total:3,limit:1000,info:{name:source+' 在线歌单 '+args[0]}});
+  }
   if (path.endsWith('.leaderboard.getBoards')) return Promise.resolve({list:[
     {id:'旧标识',bangid:'hot',name:'热歌榜'},
     {bangid:'new',name:'新歌榜'},
