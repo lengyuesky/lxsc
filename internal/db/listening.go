@@ -167,12 +167,14 @@ type ListeningStats struct {
 const listeningSums = `COALESCE(SUM(CASE WHEN s.source='web' THEN d.milliseconds ELSE 0 END),0),COALESCE(SUM(CASE WHEN s.source='client' THEN d.milliseconds ELSE 0 END),0),COUNT(DISTINCT s.id),COUNT(DISTINCT CASE WHEN s.unknown_duration=1 THEN s.id END)`
 
 // ListeningStatistics 的 userID=0 只供已经通过管理员鉴权的全站查询使用。
-func (d *DB) ListeningStatistics(ctx context.Context, userID int64, days int, at time.Time) (ListeningStats, error) {
+func (d *DB) ListeningStatistics(ctx context.Context, userID int64, days int, at time.Time) (result ListeningStats, resultErr error) {
+	finish := d.ListeningQueries.Start()
+	defer func() { finish(resultErr) }()
 	out := ListeningStats{Timezone: "Asia/Shanghai", Daily: []ListeningDay{}, TopTracks: []ListeningRank{}, TopUsers: []ListeningRank{}}
 	if days != 7 && days != 30 && days != 90 && days != 365 {
 		return out, ErrListeningProgress
 	}
-	tx, err := d.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := d.read.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, err
 	}

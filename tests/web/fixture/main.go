@@ -42,6 +42,8 @@ function song(source, key, query) {
   return {source,songmid:String(key),name:(query ? query+' · ' : '')+names[Number(String(key).replace(/^fail-/,''))-1],singer:'测试歌手',albumName:'合成音频',interval:'00:45',types:[{type:'320k'},{type:'128k'}]};
 }
 globalThis.__sdk_call=(path,args)=> {
+	if (args[0]==='渐进测试' && path.startsWith('tx.')) return new Promise(resolve=>setTimeout(()=>resolve({list:[1,2,3].map(id=>song('tx',id,args[0]))}),1500));
+	if (args[0]==='渐进测试' && path.startsWith('mg.')) return Promise.reject(new Error('合成平台故障'));
   if (path.endsWith('.leaderboard.getBoards')) return Promise.resolve({list:[
     {id:'旧标识',bangid:'hot',name:'热歌榜'},
     {bangid:'new',name:'新歌榜'},

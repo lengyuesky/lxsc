@@ -40,7 +40,15 @@ var version = "0.1.0"
 
 func main() {
 	cfgPath := flag.String("config", envOr("LXSC_CONFIG", ""), "配置文件路径（yaml）")
+	healthcheck := flag.Bool("healthcheck", false, "检查已运行服务的健康状态后退出")
 	flag.Parse()
+	if *healthcheck {
+		if err := checkHealth(*cfgPath); err != nil {
+			fmt.Fprintln(os.Stderr, "健康检查失败:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*cfgPath); err != nil {
 		fmt.Fprintln(os.Stderr, "启动失败:", err)
 		os.Exit(1)
@@ -153,6 +161,9 @@ func run(cfgPath string) error {
 	}
 	// 数据目录 sources/ 下的 .js 文件自动导入（便于 Docker 挂载）
 	authManager := &webauth.Manager{DB: database, Secret: box}
+	authCtx, stopAuth := context.WithCancel(ctx)
+	defer stopAuth()
+	go authManager.Maintain(authCtx)
 	authSrv := &webauth.Server{Auth: authManager, Settings: st}
 	backupSrv := backup.New(database, box, cfg.DataDir, version, httpSecure, log)
 	backupCtx, stopBackups := context.WithCancel(context.Background())
@@ -181,6 +192,7 @@ func run(cfgPath string) error {
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger(log))
 	r.Use(cors)
+	r.Get("/healthz", healthHandler(database, sdkPool))
 	r.Mount("/rest", sub.Routes())
 	r.Mount("/api/auth", authSrv.Routes())
 	r.Mount("/api/app", portalSrv.Routes())

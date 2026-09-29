@@ -122,12 +122,22 @@ document.querySelectorAll('[data-quality-select]').forEach(select => select.addE
   finally { if (epoch === sessionState.epoch) syncQualityControls() }
 }))
 
+function renderSearchStatus(selector, results) {
+  const labels = { pending: '搜索中…', timeout: '超时', error: '失败', busy: '繁忙' }
+  const node = $(selector)
+  node.textContent = results.sources.map(source => {
+    const item = results.platforms.get(source)
+    return (platName[source] || source) + '：' + (item.status === 'ok' ? item.tracks.length + ' 首' : labels[item.status])
+  }).join(' · ')
+  node.classList.toggle('err', results.failed)
+}
+
 function searchMessage(message, error = false) {
   $('#searchTable tbody').innerHTML = `<tr><td colspan="7" class="${error ? 'err' : 'muted'} center">${esc(message)}</td></tr>`
 }
 function renderSongResults() {
   if (!songSearchState.tracks.length) return searchMessage('没有找到可用结果，请更换关键词或平台再试')
-  $('#searchTable tbody').innerHTML = songSearchState.tracks.map((track, index) => `<tr data-playing-id="${esc(track.id)}"><td><div class="song-title" title="${esc(track.name)}">${esc(track.name)}</div></td><td>${esc(track.singer)}</td><td class="muted song-album">${esc(track.album)}</td><td><span class="badge">${esc(platName[track.source] || track.source)}</span></td><td class="muted song-duration">${track.duration ? formatSongTime(track.duration) : '—'}</td><td class="muted song-quality">${esc((track.qualities || []).join('/'))}</td><td class="song-actions"><button type="button" class="sec sm" data-song-action="play" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg>播放</button><button type="button" class="sm" data-song-action="collect" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}>收藏到歌单</button></td></tr>`).join('')
+  LXSCSearch.appendRows($('#searchTable tbody'), songSearchState.tracks, (track, index) => `<tr data-playing-id="${esc(track.id)}"><td><div class="song-title" title="${esc(track.name)}">${esc(track.name)}</div></td><td>${esc(track.singer)}</td><td class="muted song-album">${esc(track.album)}</td><td><span class="badge">${esc(platName[track.source] || track.source)}</span></td><td class="muted song-duration">${track.duration ? formatSongTime(track.duration) : '—'}</td><td class="muted song-quality">${esc((track.qualities || []).join('/'))}</td><td class="song-actions"><button type="button" class="sec sm" data-song-action="play" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg>播放</button><button type="button" class="sm" data-song-action="collect" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}>收藏到歌单</button></td></tr>`)
   renderPlaybackMarkers()
 }
 $('#songSearchForm').addEventListener('submit', async event => {
@@ -136,14 +146,27 @@ $('#songSearchForm').addEventListener('submit', async event => {
   const query = String(form.get('query') || '').trim()
   const request = songSearchGate.begin()
   songSearchState.tracks = []
+  $('#songSearchStatus').textContent = ''
   if (!query) return searchMessage('请输入歌名或歌手')
   searchMessage('搜索中…')
   try {
-    const tracks = await playlistAPI('/search', { method: 'POST', signal: request.signal, body: { query, sources: form.get('source') ? [form.get('source')] : [] } })
-    if (!request.current()) return
-    songSearchState.tracks = tracks
-    renderSongResults()
-  } catch (error) { if (request.current() && !isAbort(error)) searchMessage(error.message, true) }
+    const results = new LXSCSearch.Results()
+    await playlistAPI('/search/stream', { method: 'POST', signal: request.signal, body: { query, sources: form.get('source') ? [form.get('source')] : [] }, onEvent: event => {
+      if (!request.current()) return
+      const previousCount = results.tracks.length
+      results.accept(event)
+      songSearchState.tracks = results.tracks
+      renderSearchStatus('#songSearchStatus', results)
+      if (results.tracks.length > previousCount) renderSongResults()
+      else if (!results.tracks.length && !results.pending) searchMessage(results.failed ? '平台搜索未全部成功，请稍后重试或更换平台' : '没有找到可用结果，请更换关键词或平台再试', results.failed)
+    } })
+  } catch (error) {
+    if (request.current() && !isAbort(error)) {
+      $('#songSearchStatus').textContent = error.message
+      $('#songSearchStatus').classList.add('err')
+      if (!songSearchState.tracks.length) searchMessage(error.message, true)
+    }
+  }
 })
 $('#searchTable tbody').addEventListener('click', event => {
   const button = event.target.closest('[data-song-action]')
@@ -163,12 +186,24 @@ $('#searchForm').addEventListener('submit', async event => {
   playlistState.searchResults = []
   box.innerHTML = '<p class="muted">搜索中…</p>'
   try {
-    const tracks = await playlistAPI('/search', { method: 'POST', signal: request.signal, body: { query: form.get('query'), sources: form.get('source') ? [form.get('source')] : [] } })
-    if (!request.current() || playlistState.current?.id !== id) return
-    playlistState.searchResults = tracks
-    if (!tracks.length) box.innerHTML = '<p class="muted">没有找到可用结果，请更换关键词或平台再试</p>'
-    else renderSearchResults()
-  } catch (error) { if (request.current() && !isAbort(error)) box.innerHTML = `<p class="err">${esc(error.message)}</p>` }
+    $('#playlistSearchStatus').textContent = ''
+    const results = new LXSCSearch.Results()
+    await playlistAPI('/search/stream', { method: 'POST', signal: request.signal, body: { query: form.get('query'), sources: form.get('source') ? [form.get('source')] : [] }, onEvent: event => {
+      if (!request.current() || playlistState.current?.id !== id) return
+      const previousCount = results.tracks.length
+      results.accept(event)
+      playlistState.searchResults = results.tracks
+      renderSearchStatus('#playlistSearchStatus', results)
+      if (results.tracks.length > previousCount) renderSearchResults()
+      else if (!results.tracks.length && !results.pending) box.textContent = results.failed ? '平台搜索未全部成功，请稍后重试或更换平台' : '没有找到可用结果，请更换关键词或平台再试'
+    } })
+  } catch (error) {
+    if (request.current() && !isAbort(error)) {
+      $('#playlistSearchStatus').textContent = error.message
+      $('#playlistSearchStatus').classList.add('err')
+      if (!playlistState.searchResults.length) box.textContent = error.message
+    }
+  }
 })
 
 async function openCollect(track) {
@@ -289,6 +324,8 @@ function resetMusicSession() {
   if ($('#collectDialog').open) $('#collectDialog').close()
   songSearchState.tracks = []
   playlistState.searchResults = []
+  $('#songSearchStatus').textContent = ''
+  $('#playlistSearchStatus').textContent = ''
   $('#songSearchForm').reset()
   $('#searchForm').reset()
   searchMessage('输入关键词开始搜索')

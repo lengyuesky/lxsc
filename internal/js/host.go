@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"lxsc/internal/admission"
 	"math/big"
 	"net"
 	"net/http"
@@ -302,7 +303,25 @@ func rsaPublicEncrypt(keyPEM string, data []byte, padding int) ([]byte, error) {
 	}
 }
 
+const maxDecompressedBytes = 64 << 20
+
+// readDecompressed 同时限制压缩比很高的响应和异常脚本调用的内存占用。
+func readDecompressed(r io.Reader, limit int64) ([]byte, error) {
+	out, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if int64(len(out)) > limit {
+		return nil, errors.New("解压结果超过大小限制")
+	}
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
+	return out, nil
+}
+
 func zlibOp(op string, data []byte) ([]byte, error) {
+	return zlibOpLimited(op, data, maxDecompressedBytes)
+}
+
+func zlibOpLimited(op string, data []byte, limit int64) ([]byte, error) {
 	var buf bytes.Buffer
 	switch op {
 	case "inflate", "unzip":
@@ -314,11 +333,7 @@ func zlibOp(op string, data []byte) ([]byte, error) {
 			return nil, err
 		}
 		defer r.Close()
-		_, err = io.Copy(&buf, r)
-		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, err
-		}
-		return buf.Bytes(), nil
+		return readDecompressed(r, limit)
 	case "deflate":
 		wr := zlib.NewWriter(&buf)
 		wr.Write(data)
@@ -327,10 +342,7 @@ func zlibOp(op string, data []byte) ([]byte, error) {
 	case "inflateRaw":
 		r := flate.NewReader(bytes.NewReader(data))
 		defer r.Close()
-		if _, err := io.Copy(&buf, r); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, err
-		}
-		return buf.Bytes(), nil
+		return readDecompressed(r, limit)
 	case "deflateRaw":
 		wr, _ := flate.NewWriter(&buf, flate.DefaultCompression)
 		wr.Write(data)
@@ -342,10 +354,7 @@ func zlibOp(op string, data []byte) ([]byte, error) {
 			return nil, err
 		}
 		defer r.Close()
-		if _, err := io.Copy(&buf, r); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, err
-		}
-		return buf.Bytes(), nil
+		return readDecompressed(r, limit)
 	case "gzip":
 		wr := gzip.NewWriter(&buf)
 		wr.Write(data)
@@ -440,11 +449,37 @@ func hostFetch(w *Worker, vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	handle := vm.NewObject()
 	_ = handle.Set("abort", func(goja.FunctionCall) goja.Value { cancel(); return goja.Undefined() })
+	permit, reserveErr := fetchLimits.Reserve(0)
+	if reserveErr != nil {
+		cancel()
+		eo := vm.NewObject()
+		_ = eo.Set("message", reserveErr.Error())
+		_ = eo.Set("code", "EBUSY")
+		_, _ = cb(goja.Undefined(), eo, goja.Null())
+		return handle
+	}
+	// 卸载 Worker 可能丢弃尚未执行的回调，必须同时取消 HTTP 并释放全局额度。
+	stopWatch := context.AfterFunc(w.lifetime, func() { cancel(); permit.Release() })
 
 	go func() {
 		defer cancel()
-		resp, data, err := w.doFetch(ctx, method, rawURL, headers, body, follow, insecure)
-		w.run(func(vm *goja.Runtime) {
+		transferred := false
+		defer func() {
+			if !transferred {
+				stopWatch()
+				permit.Release()
+			}
+		}()
+		var resp *http.Response
+		var data []byte
+		err := permit.Wait(ctx)
+		if err == nil {
+			resp, data, err = w.doFetch(ctx, method, rawURL, headers, body, follow, insecure)
+		}
+		transferred = w.run(func(vm *goja.Runtime) {
+			// JS 已消费响应或丢弃取消结果后才归还额度，限制回调积压的正文内存。
+			defer permit.Release()
+			defer stopWatch()
 			if parent.Err() != nil {
 				return
 			}
@@ -477,6 +512,12 @@ func hostFetch(w *Worker, vm *goja.Runtime, call goja.FunctionCall) goja.Value {
 }
 
 func errCode(err error) string {
+	if errors.Is(err, admission.ErrBusy) {
+		return "EBUSY"
+	}
+	if errors.Is(err, ErrResponseTooLarge) {
+		return "ERESPONSETOOLARGE"
+	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		return "ETIMEDOUT"
@@ -493,6 +534,8 @@ func errCode(err error) string {
 	}
 	return "ECONNRESET"
 }
+
+var ErrResponseTooLarge = errors.New("上游响应超过大小限制")
 
 func (w *Worker) doFetch(ctx context.Context, method, rawURL string, headers map[string]string, body []byte, follow int, insecure bool) (*http.Response, []byte, error) {
 	var rd io.Reader
@@ -532,7 +575,10 @@ func (w *Worker) doFetch(ctx context.Context, method, rawURL string, headers map
 		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, w.opts.MaxBodyBytes))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, w.opts.MaxBodyBytes+1))
+	if int64(len(data)) > w.opts.MaxBodyBytes {
+		return nil, nil, ErrResponseTooLarge
+	}
 	if err != nil {
 		return nil, nil, err
 	}

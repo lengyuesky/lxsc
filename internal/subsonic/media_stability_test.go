@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"lxsc/internal/admission"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -261,6 +262,8 @@ func TestRecoveryDownloadAndRedirectBoundaries(t *testing.T) {
 
 func TestConcurrentProxyRecoverySharesOneRefresh(t *testing.T) {
 	s, user, info := newMediaStabilityServer(t, recoveryScript)
+	// 此用例专门验证二十路共享恢复；默认用户限额由过载用例验证。
+	s.Catalog.RequestLimits = admission.New(32, 32, 32, 32)
 	if _, err := s.Catalog.ResolveURL(context.Background(), info, "320k"); err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +309,24 @@ func TestConcurrentProxyRecoverySharesOneRefresh(t *testing.T) {
 	}
 	if oldGets.Load() != 20 || newGets.Load() != 20 || closed.Load() != 40 {
 		t.Fatalf("每个播放请求最多两次 GET，且只使用一个新解析版本: old=%d new=%d closed=%d", oldGets.Load(), newGets.Load(), closed.Load())
+	}
+}
+
+func TestMediaOverloadUsesCompatibleErrors(t *testing.T) {
+	s, user, info := newMediaStabilityServer(t, recoveryScript)
+	s.Catalog.RequestLimits = admission.New(1, 0, 1, 0)
+	permit, _ := s.Catalog.RequestLimits.Reserve(user.ID)
+	defer permit.Release()
+	req := mediaStabilityRequest(user, info, "&f=json")
+	rec := httptest.NewRecorder()
+	s.stream(rec, req)
+	if rec.Code != 503 || rec.Header().Get("Retry-After") != "2" || !strings.Contains(rec.Body.String(), "subsonic-response") || !strings.Contains(rec.Body.String(), "服务繁忙") {
+		t.Fatalf("Subsonic 过载响应错误: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.serveMediaWithError(rec, req, true, writeWebMediaError)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "服务繁忙") {
+		t.Fatal("网页播放也必须明确报告过载")
 	}
 }
 

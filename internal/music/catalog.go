@@ -13,49 +13,58 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/db"
 	"lxsc/internal/js"
+	"lxsc/internal/metrics"
 	"lxsc/internal/settings"
 )
 
 // Catalog 汇聚 SDK、音源脚本、数据库与缓存，是 Subsonic 层的唯一数据入口
 type Catalog struct {
-	DB       *db.DB
-	SDK      *js.SDKPool
-	Sources  *js.SourceManager
-	Settings *settings.Store
-	Log      *slog.Logger
+	RequestLimits *admission.Gate
+	workLimits    *admission.Gate
+	DB            *db.DB
+	SDK           *js.SDKPool
+	Sources       *js.SourceManager
+	Settings      *settings.Store
+	Log           *slog.Logger
 
-	tracks          *lru.LRU[string, *Info]
-	albums          *lru.LRU[string, []*Info]
-	artists         *lru.LRU[string, string]
-	artistRefs      *lru.LRU[string, ArtistRef]
-	seenArtists     *lru.LRU[string, string]
-	searchedArtists *lru.LRU[string, string]
-	artistDetails   *lru.LRU[string, ArtistDetail]
-	albumPages      *lru.LRU[string, AlbumPage]
-	albumMetadata   *lru.LRU[string, AlbumMeta]
-	boardNames      *lru.LRU[string, string]
-	failures        *lru.LRU[string, string]
-	flight          requestGroup
-	observeMu       sync.RWMutex
-	observer        func(RemoteRequest)
-	remoteCall      func(context.Context, string, ...any) (json.RawMessage, error)
-	configMu        sync.Mutex
-	urls            *requestCache[urlKey, js.MusicURLResult]
-	urlChecks       *requestCache[urlCheckKey, int]
-	search          *requestCache[searchKey, []*Info]
-	searchCall      func(context.Context, string, ...any) (json.RawMessage, error)
-	urlCall         func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
-	lyrics          *lru.LRU[string, *Lyrics]
-	generic         *lru.LRU[string, json.RawMessage]
+	tracks           *lru.LRU[string, *Info]
+	albums           *lru.LRU[string, []*Info]
+	artists          *lru.LRU[string, string]
+	artistRefs       *lru.LRU[string, ArtistRef]
+	seenArtists      *lru.LRU[string, string]
+	searchedArtists  *lru.LRU[string, string]
+	artistDetails    *lru.LRU[string, ArtistDetail]
+	albumPages       *lru.LRU[string, AlbumPage]
+	albumMetadata    *lru.LRU[string, AlbumMeta]
+	boardNames       *lru.LRU[string, string]
+	failures         *lru.LRU[string, string]
+	flight           requestGroup
+	observeMu        sync.RWMutex
+	observer         func(RemoteRequest)
+	remoteCall       func(context.Context, string, ...any) (json.RawMessage, error)
+	configMu         sync.Mutex
+	urls             *requestCache[urlKey, js.MusicURLResult]
+	urlChecks        *requestCache[urlCheckKey, int]
+	search           *requestCache[searchKey, []*Info]
+	searchCall       func(context.Context, string, ...any) (json.RawMessage, error)
+	urlCall          func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
+	searchMetrics    map[string]*metrics.Operation
+	urlMetrics       metrics.Operation
+	MediaPreparation metrics.Operation
+	lyrics           *lru.LRU[string, *Lyrics]
+	generic          *lru.LRU[string, json.RawMessage]
 }
 
 // NewCatalog 创建
 func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.Store, log *slog.Logger) *Catalog {
 	v := st.Get()
 	c := &Catalog{
-		DB: d, SDK: sdk, Sources: src, Settings: st, Log: log,
+		RequestLimits: admission.New(16, 32, 4, 4),
+		workLimits:    admission.New(32, 64, 0, 0),
+		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log,
 		tracks:          lru.NewLRU[string, *Info](5000, nil, time.Hour),
 		albums:          lru.NewLRU[string, []*Info](2000, nil, time.Hour),
 		artists:         lru.NewLRU[string, string](2000, nil, time.Hour),
@@ -72,7 +81,12 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		search:          newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:          lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
 		generic:         lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
+		searchMetrics:   make(map[string]*metrics.Operation),
 	}
+	for _, platform := range []string{"wy", "tx", "kw", "kg", "mg"} {
+		c.searchMetrics[platform] = &metrics.Operation{}
+	}
+	c.urls.gate, c.search.gate, c.urlChecks.gate, c.flight.gate = c.workLimits, c.workLimits, c.workLimits, c.workLimits
 	c.searchCall = func(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
 		if c.SDK == nil {
 			return nil, errors.New("sdk 未初始化")
@@ -332,7 +346,9 @@ func (c *Catalog) RefreshPlaybackURL(ctx context.Context, in *Info, failed URLRe
 
 // ResolvePlaybackURLForSources 在请求内剩余脚本集合中取链，nil 使用当前全部候选。
 // failed 非空时只刷新原脚本；若已有其他请求发布的可用候选，则直接复用其新版本。
-func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, quality string, sourceIDs []int64, failed *URLResolution) (URLResolution, error) {
+func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, quality string, sourceIDs []int64, failed *URLResolution) (resolution URLResolution, err error) {
+	finish := c.urlMetrics.Start()
+	defer func() { finish(err) }()
 	if quality == "" {
 		quality = c.Settings.Get().DefaultQuality
 	}
@@ -424,111 +440,6 @@ func (c *Catalog) ScriptInfo(in *Info) map[string]any {
 	m["meta"] = meta
 	m["id"] = in.TrackID()
 	return m
-}
-
-// SearchOptions 搜索参数
-type SearchOptions struct {
-	Sources []string
-	Page    int
-	Limit   int
-}
-
-type searchKey struct {
-	query   string
-	sources string
-	page    int
-	limit   int
-}
-
-// Search 聚合搜索：并发请求各平台，按平台顺序交错合并。
-func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) []*Info {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil
-	}
-	if opts.Page <= 0 {
-		opts.Page = 1
-	}
-	if opts.Limit <= 0 {
-		opts.Limit = c.Settings.Get().SearchLimit
-	}
-	if len(opts.Sources) == 0 {
-		opts.Sources = c.Settings.Get().SearchSources
-	}
-	opts.Sources = append([]string(nil), opts.Sources...)
-	encodedSources, _ := json.Marshal(opts.Sources)
-	key := searchKey{query: query, sources: string(encodedSources), page: opts.Page, limit: opts.Limit}
-	r, err := c.search.load(ctx, key, nil, 15*time.Second, func(remoteCtx context.Context) ([]*Info, bool, error) {
-		return c.searchPlatforms(remoteCtx, query, opts)
-	})
-	if err != nil {
-		return nil
-	}
-	c.Cache(r.value)
-	c.rememberArtistRefs(r.value, true)
-	return append([]*Info(nil), r.value...)
-}
-
-func (c *Catalog) searchPlatforms(ctx context.Context, query string, opts SearchOptions) ([]*Info, bool, error) {
-	type res struct {
-		idx  int
-		list []*Info
-		err  error
-	}
-	ch := make(chan res, len(opts.Sources))
-	for i, s := range opts.Sources {
-		go func(i int, s string) {
-			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			defer cancel()
-			var out struct {
-				List []map[string]any `json:"list"`
-			}
-			raw, err := c.searchCall(cctx, s+".musicSearch.search", query, opts.Page, opts.Limit)
-			if err == nil {
-				err = json.Unmarshal(raw, &out)
-			}
-			if err != nil {
-				if c.Log != nil {
-					c.Log.Debug("搜索失败", "source", s, "err", err)
-				}
-				ch <- res{idx: i, err: err}
-				return
-			}
-			list := make([]*Info, 0, len(out.List))
-			for _, m := range out.List {
-				if m == nil {
-					continue
-				}
-				if _, ok := m["source"]; !ok {
-					m["source"] = s
-				}
-				list = append(list, FromMap(m))
-			}
-			ch <- res{idx: i, list: list}
-		}(i, s)
-	}
-	lists := make([][]*Info, len(opts.Sources))
-	complete := true
-	for range opts.Sources {
-		r := <-ch
-		lists[r.idx] = r.list
-		complete = complete && r.err == nil
-	}
-	var merged []*Info
-	for {
-		added := false
-		for i := range lists {
-			if len(lists[i]) > 0 {
-				merged = append(merged, lists[i][0])
-				lists[i] = lists[i][1:]
-				added = true
-			}
-		}
-		if !added {
-			break
-		}
-	}
-	return merged, complete && len(merged) > 0, nil
 }
 
 // Board 榜单

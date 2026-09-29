@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -77,6 +78,9 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/settings", nil); status != http.StatusForbidden {
 		t.Fatalf("普通用户访问管理接口应返回 403，实际为 %d", status)
 	}
+	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/performance", nil); status != http.StatusForbidden {
+		t.Fatal("性能指标只能由管理员访问")
+	}
 	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/boards?source=wy", nil); status != http.StatusForbidden {
 		t.Fatalf("普通用户不能读取管理榜单候选接口: %d", status)
 	}
@@ -99,6 +103,22 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	}
 	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/backups/status", nil); status != http.StatusOK {
 		t.Fatalf("管理员会话应可访问备份接口: %d", status)
+	}
+	if status := jsonRequest(t, adminClient, http.MethodGet, ts.URL+"/api/admin/performance", nil); status != http.StatusOK {
+		t.Fatal("管理员应能读取性能指标")
+	}
+	aliceUser, err := database.GetUserByName(ctx, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := jsonRequest(t, adminClient, http.MethodPut, fmt.Sprintf("%s/api/admin/users/%d", ts.URL, aliceUser.ID), map[string]any{"name": "alice", "password": "新密码", "isAdmin": false}); status != 200 {
+		t.Fatalf("修改密码失败: %d", status)
+	}
+	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/auth/me", nil); status != 401 {
+		t.Fatal("管理端改密后旧会话必须撤销")
+	}
+	if status := jsonRequest(t, alice, http.MethodPost, ts.URL+"/api/auth/login", map[string]any{"username": "alice", "password": "新密码"}); status != 200 {
+		t.Fatal("新密码应可重新登录")
 	}
 	if status := jsonRequest(t, adminClient, http.MethodPost, ts.URL+"/api/auth/logout", nil); status != http.StatusOK {
 		t.Fatalf("注销失败: %d", status)

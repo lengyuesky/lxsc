@@ -3,6 +3,7 @@ package webauth
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -24,12 +25,15 @@ type Manager struct {
 	DB     *db.DB
 	Secret *secret.Box
 
-	sessions sync.Map // token -> session
+	sessions sync.Map // 会话令牌映射到会话信息。
+	mu       sync.Mutex
+	attempts map[[32]byte]loginAttempt
 }
 
 type session struct {
-	userID  int64
-	expires time.Time
+	userID   int64
+	expires  time.Time
+	password [32]byte
 }
 
 // Server 提供统一认证接口。
@@ -76,8 +80,16 @@ func (m *Manager) Authenticate(ctx context.Context, username, password string) (
 
 // Start 创建会话并设置 Cookie。
 func (m *Manager) Start(w http.ResponseWriter, r *http.Request, u *db.User) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocked(time.Now())
+	// 每个用户最多保留十个会话；重复登录优先淘汰最早的会话。
+	for m.evictOldestLocked(u.ID, 10) {
+	}
+	for m.evictOldestLocked(0, 4096) {
+	}
 	token := secret.RandomToken(24)
-	m.sessions.Store(token, session{userID: u.ID, expires: time.Now().Add(7 * 24 * time.Hour)})
+	m.sessions.Store(token, session{userID: u.ID, expires: time.Now().Add(7 * 24 * time.Hour), password: sha256.Sum256([]byte(u.PasswordEnc))})
 	setCookie(w, r, token, 7*24*3600)
 }
 
@@ -100,12 +112,12 @@ func (m *Manager) User(r *http.Request) *db.User {
 		return nil
 	}
 	ss := value.(session)
-	if time.Now().After(ss.expires) {
+	if !time.Now().Before(ss.expires) {
 		m.sessions.Delete(cookie.Value)
 		return nil
 	}
 	u, err := m.DB.GetUserByID(r.Context(), ss.userID)
-	if err != nil {
+	if err != nil || ss.password != sha256.Sum256([]byte(u.PasswordEnc)) {
 		m.sessions.Delete(cookie.Value)
 		return nil
 	}
@@ -138,11 +150,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "参数错误")
 		return
 	}
+	name := strings.TrimSpace(body.Username)
+	if !s.Auth.allowLogin(name, time.Now()) {
+		w.Header().Set("Retry-After", "60")
+		fail(w, http.StatusTooManyRequests, "登录尝试过于频繁，请一分钟后重试")
+		return
+	}
 	u, err := s.Auth.Authenticate(r.Context(), body.Username, body.Password)
 	if err != nil {
 		fail(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
+	s.Auth.mu.Lock()
+	delete(s.Auth.attempts, sha256.Sum256([]byte(name)))
+	s.Auth.mu.Unlock()
 	s.Auth.Start(w, r, u)
 	s.writeSession(w, u)
 }

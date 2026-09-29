@@ -8,13 +8,16 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"lxsc/internal/metrics"
 )
 
 // SDKPool 运行 musicSdk bundle 的无状态工作池
 type SDKPool struct {
-	workers []*Worker
-	next    atomic.Uint64
-	log     *slog.Logger
+	workers    []*Worker
+	next       atomic.Uint64
+	log        *slog.Logger
+	operations metrics.Operation
 }
 
 // NewSDKPool 创建 n 个 SDK worker
@@ -50,7 +53,9 @@ func (p *SDKPool) Close() {
 }
 
 // Call 调用 SDK 方法，path 形如 "wy.musicSearch.search"，结果解码到 out
-func (p *SDKPool) Call(ctx context.Context, path string, out any, args ...any) error {
+func (p *SDKPool) Call(ctx context.Context, path string, out any, args ...any) (err error) {
+	finish := p.operations.Start()
+	defer func() { finish(err) }()
 	if len(p.workers) == 0 {
 		return fmt.Errorf("sdk pool empty")
 	}
@@ -72,7 +77,9 @@ func (p *SDKPool) Call(ctx context.Context, path string, out any, args ...any) e
 }
 
 // CallRaw 返回原始 JSON
-func (p *SDKPool) CallRaw(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
+func (p *SDKPool) CallRaw(ctx context.Context, path string, args ...any) (result json.RawMessage, err error) {
+	finish := p.operations.Start()
+	defer func() { finish(err) }()
 	if len(p.workers) == 0 {
 		return nil, fmt.Errorf("sdk pool empty")
 	}
@@ -91,10 +98,17 @@ func (p *SDKPool) CallRaw(ctx context.Context, path string, args ...any) (json.R
 func (p *SDKPool) Workers() []*Worker { return p.workers }
 
 // CallFn 调用 bundle 中的任意全局函数
-func (p *SDKPool) CallFn(ctx context.Context, fn string, args ...any) (json.RawMessage, error) {
+func (p *SDKPool) CallFn(ctx context.Context, fn string, args ...any) (result json.RawMessage, err error) {
+	finish := p.operations.Start()
+	defer func() { finish(err) }()
 	if len(p.workers) == 0 {
 		return nil, fmt.Errorf("sdk pool empty")
 	}
 	w := p.workers[int(p.next.Add(1)-1)%len(p.workers)]
 	return w.CallJSON(ctx, fn, args...)
+}
+
+// Performance 的 active 包含正在执行和等待 JS 工作循环的调用。
+func (p *SDKPool) Performance() map[string]any {
+	return map[string]any{"workers": len(p.workers), "calls": p.operations.Snapshot()}
 }

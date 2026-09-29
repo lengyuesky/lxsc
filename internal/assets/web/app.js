@@ -10,8 +10,15 @@ const requestAPI = async (base, path, opts = {}) => {
   sessionState.requests.add(controller)
   try {
     const o = { ...opts, headers: { ...opts.headers }, credentials: 'same-origin', signal: controller.signal }
+    delete o.onEvent
     if (o.body && !(o.body instanceof FormData)) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(o.body) }
     const r = await fetch(base + path, o)
+    if (r.ok && opts.onEvent) {
+      return await LXSCSearch.readEvents(r.body, event => {
+        if (epoch !== sessionState.epoch || controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError')
+        opts.onEvent(event)
+      })
+    }
     const d = await r.json().catch(() => ({}))
     if (epoch !== sessionState.epoch || controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError')
     if (r.status === 401 && path !== '/login') showLogin()
@@ -655,6 +662,7 @@ async function initializePlaylists(data) {
   playlistState.tracksDirty = false
   playlistState.metaDirty = false
   playlistState.searchResults = []
+  $('#playlistSearchStatus').textContent = ''
   $('#ownerFilterWrap').classList.toggle('hidden', !playlistState.me.isAdmin)
   $('#ownerCreateWrap').classList.toggle('hidden', !playlistState.me.isAdmin)
   $('#importOwnerWrap').classList.toggle('hidden', !playlistState.me.isAdmin)
@@ -776,48 +784,22 @@ function renderDetail() {
   renderTracks()
 }
 
-function renderTracks() {
-  const canEdit = !!playlistState.current?.canEdit
-  $('#trackCount').textContent = `(${playlistState.draftTracks.length} 首)`
-  $('#saveTracksButton').disabled = !canEdit || !playlistState.tracksDirty
-  renderCollectForm()
-  document.querySelector('.tracks-card .track-tip').classList.toggle('hidden', !canEdit)
-  const body = $('#trackTable')
-  if (!playlistState.draftTracks.length) {
-    body.innerHTML = `<tr><td colspan="6" class="muted">${canEdit ? '歌单还是空的，可从上方搜索添加歌曲。' : '该歌单暂无歌曲。'}</td></tr>`
-    return
-  }
-  body.innerHTML = playlistState.draftTracks.map((track, index) => `<tr class="track-row" data-track-index="${index}" data-playing-id="${esc(track.id)}" draggable="${canEdit}">
-    <td>${index + 1}</td>
-    <td class="${track.unavailable ? 'unavailable' : ''}"><div class="song-title">${esc(track.name)}</div>${track.unavailable ? `<div class="song-sub">${esc(track.id)}</div>` : ''}</td>
-    <td>${esc(track.singer || '')}</td><td class="muted">${esc(track.album || '')}</td><td><span class="badge">${esc(platName[track.source] || track.source || '')}</span></td>
-    <td class="track-actions"><button type="button" title="播放" aria-label="播放 ${esc(track.name)}" data-track-action="play" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg></button>${canEdit ? `<button type="button" title="上移" data-track-action="up" ${index === 0 ? 'disabled' : ''}><svg class="icon"><use href="#i-up"/></svg></button><button type="button" title="下移" data-track-action="down" ${index === playlistState.draftTracks.length - 1 ? 'disabled' : ''}><svg class="icon"><use href="#i-down"/></svg></button><button type="button" title="移除" class="remove" data-track-action="remove"><svg class="icon"><use href="#i-x"/></svg></button>` : ''}</td>
-  </tr>`).join('')
-  renderPlaybackMarkers()
-}
-
-function markTracksDirty() {
-  playlistState.editVersion++
-  playlistState.tracksDirty = true
-  renderTracks()
-  renderSearchResults()
-}
-
-function moveTrack(from, to) {
-  if (to < 0 || to >= playlistState.draftTracks.length || from === to) return
-  const [track] = playlistState.draftTracks.splice(from, 1)
-  playlistState.draftTracks.splice(to, 0, track)
-  markTracksDirty()
-}
-
 function renderSearchResults() {
   const box = $('#searchResults')
   if (!playlistState.searchResults.length) return
   const existing = new Set(playlistState.draftTracks.map(track => track.id))
-  box.innerHTML = '<div class="search-results">' + playlistState.searchResults.map((track, index) => {
+  let list = box.querySelector(':scope > .search-results')
+  if (!list) { list = document.createElement('div'); list.className = 'search-results'; box.replaceChildren(list) }
+  LXSCSearch.appendRows(list, playlistState.searchResults, (track, index) => {
     const added = existing.has(track.id)
     return `<div class="search-item" data-playing-id="${esc(track.id)}"><div><div class="song-title">${esc(track.name)}</div><div class="song-sub">${esc(track.singer)} · ${esc(track.album)} · ${esc(platName[track.source] || track.source)}</div></div><div class="search-item-actions"><button type="button" class="sec" data-play-playlist-search="${index}" ${track.unavailable ? 'disabled' : ''}>播放</button><button type="button" data-add-track="${esc(track.id)}" ${added ? 'disabled' : ''}>${added ? '已加入' : '加入草稿'}</button></div></div>`
-  }).join('') + '</div>'
+  })
+  list.querySelectorAll('[data-add-track]').forEach(button => {
+    const added = existing.has(button.dataset.addTrack)
+    if (button.disabled !== added) button.disabled = added
+    const label = added ? '已加入' : '加入草稿'
+    if (button.textContent !== label) button.textContent = label
+  })
   renderPlaybackMarkers()
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"lxsc/internal/admission"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,8 +66,9 @@ type requestCall struct {
 }
 
 type requestGroup struct {
-	mu sync.Mutex
-	m  map[string]*requestCall
+	gate *admission.Gate
+	mu   sync.Mutex
+	m    map[string]*requestCall
 }
 
 func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMessage, error)) (json.RawMessage, error) {
@@ -79,9 +81,18 @@ func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMe
 	}
 	call, ok := g.m[key]
 	if !ok {
+		if g.gate == nil {
+			g.gate = admission.New(32, 64, 0, 0)
+		}
+		permit, err := g.gate.Reserve(0)
+		if err != nil {
+			g.mu.Unlock()
+			return nil, err
+		}
 		call = &requestCall{done: make(chan struct{})}
 		g.m[key] = call
 		go func() {
+			defer permit.Release()
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					call.data = nil
@@ -92,6 +103,12 @@ func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMe
 				delete(g.m, key)
 				g.mu.Unlock()
 			}()
+			waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := permit.Wait(waitCtx); err != nil {
+				call.err = admission.ErrBusy
+				return
+			}
 			call.data, call.err = fn()
 		}()
 	}
@@ -161,7 +178,7 @@ func (c *Catalog) cachedCallRaw(ctx context.Context, key, path string, args ...a
 		defer cancel()
 		value, err := caller(remoteCtx, path, args...)
 		if err != nil {
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, admission.ErrBusy) {
 				c.failures.Add(key, err.Error())
 			}
 			return nil, err

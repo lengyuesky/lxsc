@@ -161,6 +161,8 @@ func TestPersistentURLCacheContextAndFaultRecovery(t *testing.T) {
 			case "持久化故障":
 				p := c.urls.persistent.(*urlPersistence)
 				_ = p.store.Close()
+				afterTouchWindow := time.Now().Add(time.Minute)
+				c.urls.now = func() time.Time { return afterTouchWindow }
 				got, err := c.ResolvePlaybackURL(ctx, stabilityTrack(), "320k")
 				if err != nil || got.Result.URL != old.Result.URL || c.urls.persistent != nil {
 					t.Fatal("缓存数据库故障应退化为内存缓存")

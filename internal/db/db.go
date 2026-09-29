@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"lxsc/internal/metrics"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -21,8 +23,10 @@ var schema string
 
 // DB 数据库句柄
 type DB struct {
-	sql  *sql.DB
-	path string
+	sql              *sql.DB
+	read             *sql.DB
+	path             string
+	ListeningQueries metrics.Operation
 }
 
 // Stats 是概览与备份清单使用的数据统计。
@@ -60,7 +64,20 @@ func Open(path string) (*DB, error) {
 			return nil, fmt.Errorf("初始化表结构失败: %w (%s)", err, stmt)
 		}
 	}
-	return &DB{sql: s, path: path}, nil
+	// 长统计使用独立只读连接；业务写入仍串行，避免增加 SQLite 写锁竞争。
+	read, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=query_only(1)", path))
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	read.SetMaxOpenConns(2)
+	read.SetMaxIdleConns(2)
+	if err := read.Ping(); err != nil {
+		read.Close()
+		s.Close()
+		return nil, err
+	}
+	return &DB{sql: s, read: read, path: path}, nil
 }
 
 // Snapshot 使用 SQLite VACUUM INTO 生成包含 WAL 中最新数据的一致快照。
@@ -99,7 +116,15 @@ func (d *DB) Statistics(ctx context.Context) (Stats, error) {
 }
 
 // Close 关闭
-func (d *DB) Close() error { return d.sql.Close() }
+func (d *DB) Close() error { return errors.Join(d.read.Close(), d.sql.Close()) }
+
+// Ping 检查业务连接是否能够访问数据库，供独立健康检查使用。
+func (d *DB) Ping(ctx context.Context) error { return d.sql.PingContext(ctx) }
+
+// ConnectionStats 不执行 SQL，避免监控本身排队等待统计查询。
+func (d *DB) ConnectionStats() map[string]sql.DBStats {
+	return map[string]sql.DBStats{"business": d.sql.Stats(), "statistics": d.read.Stats()}
+}
 
 func now() int64 { return time.Now().Unix() }
 

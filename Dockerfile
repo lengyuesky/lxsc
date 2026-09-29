@@ -34,4 +34,5 @@ RUN cp /lib/apk/db/installed /usr/share/licenses/lxsc/ALPINE_PACKAGES.txt \
 USER lxsc
 VOLUME ["/data"]
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 CMD ["lxsc", "-healthcheck"]
 ENTRYPOINT ["lxsc"]

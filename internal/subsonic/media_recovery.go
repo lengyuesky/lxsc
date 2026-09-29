@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/music"
 )
 
@@ -24,7 +25,9 @@ var (
 
 // prepareMedia 只在响应提交前恢复：固定候选快照、每源至多一次过期刷新，失败排除仅限本次请求。
 // 代理返回尚未读取的响应体；302 只做最小 Range 头校验，不把调试 probe 纳入恢复流程。
-func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy bool) (music.URLResolution, *http.Response, error) {
+func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy bool) (result music.URLResolution, response *http.Response, resultErr error) {
+	finish := s.Catalog.MediaPreparation.Start()
+	defer func() { finish(resultErr) }()
 	if s.Catalog.Sources == nil {
 		return music.URLResolution{}, nil, errMediaUnavailable
 	}
@@ -43,6 +46,9 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		resolution, err := s.Catalog.ResolvePlaybackURLForSources(ctx, in, quality, sourceIDs, failed)
 		s.mediaEvent(stage, in.TrackID(), in.Source(), quality, resolution.Cached, 0, started, err)
 		if err != nil {
+			if errors.Is(err, admission.ErrBusy) {
+				return music.URLResolution{}, nil, err
+			}
 			if failed == nil {
 				break
 			}

@@ -1,9 +1,13 @@
 package subsonic
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/music"
 )
 
@@ -52,6 +56,14 @@ func parsePrefix(q string) (clean string, sources []string, local bool) {
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
+	release, err := s.Catalog.AcquireRequest(r.Context(), u.ID)
+	if err != nil {
+		if r.Context().Err() == nil {
+			writeErr(w, r, ErrBusy, admission.ErrBusy.Error())
+		}
+		return
+	}
+	defer release()
 	raw := param(r, "query")
 	if raw == "" {
 		raw = param(r, "any")
@@ -76,6 +88,13 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
+		// 聚合搜索共享五秒预算；单平台搜索仍允许完整的上游超时。
+		searchCtx := rc.ctx
+		if len(sources) > 1 {
+			var cancel context.CancelFunc
+			searchCtx, cancel = context.WithTimeout(searchCtx, 5*time.Second)
+			defer cancel()
+		}
 		// 在线搜索：按 offset 推算页码（每平台 limit 条），把多页合并
 		limit := s.Settings.Get().SearchLimit
 		if songCount > limit*len(sources) {
@@ -91,7 +110,12 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		startPage := songOffset/perPage + 1
 		endPage := (songOffset+songCount-1)/perPage + 1
 		for page := startPage; page <= endPage && page <= startPage+2; page++ {
-			infos = append(infos, s.Catalog.Search(rc.ctx, query, music.SearchOptions{Sources: sources, Page: page, Limit: limit})...)
+			list, err := s.Catalog.SearchChecked(searchCtx, query, music.SearchOptions{Sources: sources, Page: page, Limit: limit})
+			if errors.Is(err, admission.ErrBusy) && len(infos) == 0 {
+				writeErr(w, r, ErrBusy, err.Error())
+				return
+			}
+			infos = append(infos, list...)
 		}
 		infos = dedupe(infos)
 		// 相对本次起始页的偏移

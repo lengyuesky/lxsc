@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/db"
 	"lxsc/internal/music"
 	"lxsc/internal/secret"
@@ -94,6 +95,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/playlists/import", s.importPlaylists)
 	r.Delete("/playlists/{id}", s.deletePlaylist)
 	r.Post("/search", s.search)
+	r.Post("/search/stream", s.searchStream)
 	r.Get("/stream", s.stream)
 	r.Post("/listening/progress", s.listeningProgress)
 	r.Get("/listening/stats", s.listeningStats)
@@ -445,33 +447,63 @@ func (s *Server) deletePlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Query   string   `json:"query"`
-		Sources []string `json:"sources"`
-	}
-	if err := decodeJSON(w, r, &body); err != nil {
-		fail(w, http.StatusBadRequest, "参数错误: "+err.Error())
+	body, ok := s.readSearch(w, r)
+	if !ok {
 		return
 	}
-	body.Query = strings.TrimSpace(body.Query)
-	if body.Query == "" || utf8.RuneCountInString(body.Query) > 200 {
-		fail(w, http.StatusBadRequest, "搜索关键词必须为 1–200 个字符")
-		return
-	}
-	for _, source := range body.Sources {
-		if !music.IsPlatform(source) {
-			fail(w, http.StatusBadRequest, "不支持的平台: "+source)
-			return
-		}
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	infos := s.Catalog.Search(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Limit: 20})
+	release, ok := s.admitSearch(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	infos, err := s.Catalog.SearchChecked(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Limit: 20})
+	if errors.Is(err, admission.ErrBusy) {
+		w.Header().Set("Retry-After", "2")
+		fail(w, 503, err.Error())
+		return
+	}
 	out := make([]trackView, 0, len(infos))
 	for _, in := range infos {
 		out = append(out, infoTrackView(in))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type searchBody struct {
+	Query   string   `json:"query"`
+	Sources []string `json:"sources"`
+}
+
+func (s *Server) readSearch(w http.ResponseWriter, r *http.Request) (searchBody, bool) {
+	var body searchBody
+	if err := decodeJSON(w, r, &body); err != nil {
+		fail(w, http.StatusBadRequest, "参数错误: "+err.Error())
+		return body, false
+	}
+	body.Query = strings.TrimSpace(body.Query)
+	if body.Query == "" || utf8.RuneCountInString(body.Query) > 200 {
+		fail(w, http.StatusBadRequest, "搜索关键词必须为 1–200 个字符")
+		return body, false
+	}
+	if len(body.Sources) == 0 {
+		body.Sources = s.Settings.Get().SearchSources
+	}
+	seen := make(map[string]bool)
+	sources := make([]string, 0, len(body.Sources))
+	for _, source := range body.Sources {
+		if !music.IsPlatform(source) {
+			fail(w, http.StatusBadRequest, "不支持的平台: "+source)
+			return body, false
+		}
+		if !seen[source] {
+			sources = append(sources, source)
+			seen[source] = true
+		}
+	}
+	body.Sources = sources
+	return body, true
 }
 
 // ---------- 洛雪歌单导入 ----------

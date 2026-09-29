@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/backup"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
@@ -63,6 +64,7 @@ func (s *Server) Routes() http.Handler {
 		r.Mount("/debug-tokens", s.Debug.ManagementRoutes())
 	}
 	r.Get("/status", s.status)
+	r.Get("/performance", s.performance)
 	r.Get("/logs", s.logs)
 	r.Get("/backups/status", s.backupStatus)
 	r.Post("/backups/export", s.exportBackup)
@@ -164,6 +166,13 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.Logs.List(n))
 }
 
+// performance 只向管理员展示进程内指标，不执行大表统计查询。
+func (s *Server) performance(w http.ResponseWriter, r *http.Request) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	writeJSON(w, http.StatusOK, map[string]any{"database": s.DB.ConnectionStats(), "listening": s.DB.ListeningQueries.Snapshot(), "music": s.Catalog.Performance(), "heapBytes": ms.Alloc, "sysBytes": ms.Sys, "goroutines": runtime.NumGoroutine()})
+}
+
 // ---------- 设置 ----------
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +268,11 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	enc := ""
 	if b.Password != "" {
-		enc, _ = s.Secret.Encrypt(b.Password)
+		enc, err = s.Secret.Encrypt(b.Password)
+		if err != nil {
+			fail(w, 500, "密码保存失败")
+			return
+		}
 	}
 	if b.Name == "" {
 		b.Name = cur.Name
@@ -276,7 +289,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	if s.Debug != nil && !b.IsAdmin {
+	if b.Password != "" && s.Auth != nil {
+		s.Auth.RevokeUser(id)
+	}
+	if s.Debug != nil && (!b.IsAdmin || b.Password != "") {
 		s.Debug.Tokens.RevokeOwner(id)
 	}
 	u, _ := s.DB.GetUserByID(r.Context(), id)
@@ -293,6 +309,9 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if err := s.DB.DeleteUser(r.Context(), id); err != nil {
 		fail(w, 500, err.Error())
 		return
+	}
+	if s.Auth != nil {
+		s.Auth.RevokeUser(id)
 	}
 	if s.Debug != nil {
 		s.Debug.Tokens.RevokeOwner(id)
@@ -598,6 +617,15 @@ func (s *Server) testSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) searchTest(w http.ResponseWriter, r *http.Request) {
+	release, err := s.Catalog.AcquireRequest(r.Context(), r.Context().Value(ctxUser{}).(*db.User).ID)
+	if err != nil {
+		if r.Context().Err() == nil {
+			w.Header().Set("Retry-After", "2")
+			fail(w, 503, admission.ErrBusy.Error())
+		}
+		return
+	}
+	defer release()
 	var body struct {
 		Query   string   `json:"query"`
 		Sources []string `json:"sources"`
@@ -605,7 +633,12 @@ func (s *Server) searchTest(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	infos := s.Catalog.Search(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Limit: 10})
+	infos, err := s.Catalog.SearchChecked(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Limit: 10})
+	if errors.Is(err, admission.ErrBusy) {
+		w.Header().Set("Retry-After", "2")
+		fail(w, 503, err.Error())
+		return
+	}
 	out := make([]map[string]any, 0, len(infos))
 	for _, in := range infos {
 		out = append(out, map[string]any{"id": in.TrackID(), "name": in.Name(), "singer": in.Singer(), "album": in.Album(), "source": in.Source(), "qualities": in.Qualities(), "img": in.Img()})

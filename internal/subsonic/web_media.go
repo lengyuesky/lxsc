@@ -41,6 +41,9 @@ func (s *Server) ServeWebStream(w http.ResponseWriter, r *http.Request, user *db
 func writeWebMediaError(w http.ResponseWriter, _ *http.Request, code int, message string) {
 	status := http.StatusBadGateway
 	switch code {
+	case ErrBusy:
+		status = http.StatusServiceUnavailable
+		w.Header().Set("Retry-After", "2")
 	case ErrWrongAuth:
 		status = http.StatusUnauthorized
 	case ErrMissingParam:

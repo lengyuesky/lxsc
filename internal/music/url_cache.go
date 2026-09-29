@@ -72,6 +72,7 @@ func (c *Catalog) EnableURLCache(dataDir, proxy string) error {
 				token: cacheToken{generation: c.urls.generation, serial: c.urls.serial},
 			},
 			created: time.UnixMilli(record.CreatedAt),
+			touched: time.Unix(0, record.LastUsedAt),
 		}
 		if record.ExpiresAt != 0 {
 			entry.expires = time.UnixMilli(record.ExpiresAt)

@@ -3,6 +3,8 @@ package music
 import (
 	"context"
 	"fmt"
+	"lxsc/internal/admission"
+	"lxsc/internal/metrics"
 	"sync"
 	"time"
 
@@ -25,6 +27,7 @@ type timedEntry[V any] struct {
 	result  cachedResult[V]
 	created time.Time
 	expires time.Time
+	touched time.Time
 }
 
 // cachePersistence 的操作在缓存锁内执行，保证失效后旧请求不能重新落盘。
@@ -44,6 +47,7 @@ type flightKey[K comparable] struct {
 }
 
 type cacheCall[V any] struct {
+	permit  *admission.Permit
 	done    chan struct{}
 	cancel  context.CancelFunc
 	waiters int
@@ -54,15 +58,20 @@ type cacheCall[V any] struct {
 // requestCache 将过期、代次隔离、条件失效和在途合并放在同一同步边界内。
 // 固定 LRU 不创建清理协程；过期项在读取或容量淘汰时移除。
 type requestCache[K comparable, V any] struct {
-	mu         sync.Mutex
-	entries    *lru.Cache[K, timedEntry[V]]
-	calls      map[flightKey[K]]*cacheCall[V]
-	ttl        time.Duration
-	generation uint64
-	serial     uint64
-	now        func() time.Time
-	capacity   int
-	persistent cachePersistence[K, V]
+	persistenceTiming metrics.Operation
+	gate              *admission.Gate
+	mu                sync.Mutex
+	entries           *lru.Cache[K, timedEntry[V]]
+	calls             map[flightKey[K]]*cacheCall[V]
+	ttl               time.Duration
+	generation        uint64
+	serial            uint64
+	now               func() time.Time
+	capacity          int
+	persistent        cachePersistence[K, V]
+	hits              uint64
+	misses            uint64
+	shared            uint64
 }
 
 func newRequestCache[K comparable, V any](capacity int, ttl time.Duration) *requestCache[K, V] {
@@ -70,12 +79,15 @@ func newRequestCache[K comparable, V any](capacity int, ttl time.Duration) *requ
 	if err != nil {
 		panic(err)
 	}
-	return &requestCache[K, V]{entries: entries, calls: make(map[flightKey[K]]*cacheCall[V]), ttl: ttl, now: time.Now, capacity: capacity}
+	return &requestCache[K, V]{gate: admission.New(32, 64, 0, 0), entries: entries, calls: make(map[flightKey[K]]*cacheCall[V]), ttl: ttl, now: time.Now, capacity: capacity}
 }
 
 func (c *requestCache[K, V]) persistLocked(stage string, fn func(cachePersistence[K, V]) error) {
 	if c.persistent != nil {
-		if err := fn(c.persistent); err != nil {
+		finish := c.persistenceTiming.Start()
+		err := fn(c.persistent)
+		finish(err)
+		if err != nil {
 			c.persistent.disable(stage)
 			c.persistent = nil
 		}
@@ -147,9 +159,16 @@ func (c *requestCache[K, V]) loadSelected(ctx context.Context, key K, failed *ca
 				c.removeLocked(key)
 			} else {
 				if accept == nil || accept(entry.result.value) {
+					c.hits++
 					result := entry.result
 					result.cached = true
-					c.persistLocked("更新使用时间", func(p cachePersistence[K, V]) error { return p.touch(key, c.now()) })
+					// 热门歌曲一分钟内只写一次使用时间，内存 LRU 仍每次更新。
+					now := c.now()
+					if c.persistent != nil && now.Sub(entry.touched) >= time.Minute {
+						c.persistLocked("更新使用时间", func(p cachePersistence[K, V]) error { return p.touch(key, now) })
+						entry.touched = now
+						c.entries.Add(key, entry)
+					}
 					c.mu.Unlock()
 					return result, nil
 				}
@@ -157,13 +176,22 @@ func (c *requestCache[K, V]) loadSelected(ctx context.Context, key K, failed *ca
 		}
 	}
 	fk := flightKey[K]{key: key, generation: c.generation, selection: selection}
+	c.misses++
 	call, ok := c.calls[fk]
 	if !ok {
+		permit, err := c.gate.Reserve(0)
+		if err != nil {
+			c.mu.Unlock()
+			return cachedResult[V]{}, err
+		}
 		remoteCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		c.serial++
 		call = &cacheCall[V]{done: make(chan struct{}), cancel: cancel, result: cachedResult[V]{token: cacheToken{generation: c.generation, serial: c.serial}}}
+		call.permit = permit
 		c.calls[fk] = call
 		go c.execute(remoteCtx, fk, call, fn)
+	} else {
+		c.shared++
 	}
 	call.waiters++
 	c.mu.Unlock()
@@ -181,6 +209,7 @@ func (c *requestCache[K, V]) loadSelected(ctx context.Context, key K, failed *ca
 }
 
 func (c *requestCache[K, V]) execute(ctx context.Context, key flightKey[K], call *cacheCall[V], fn func(context.Context) (V, bool, error)) {
+	defer call.permit.Release()
 	var value V
 	var cacheable bool
 	var err error
@@ -205,7 +234,7 @@ func (c *requestCache[K, V]) execute(ctx context.Context, key flightKey[K], call
 			replace := !exists || current.result.token.serial < call.result.token.serial
 			if err == nil && cacheable && c.ttl != 0 && key.generation == c.generation && replace {
 				now := c.now()
-				entry := timedEntry[V]{result: call.result, created: now}
+				entry := timedEntry[V]{result: call.result, created: now, touched: now}
 				if c.ttl > 0 {
 					entry.expires = now.Add(c.ttl)
 				}
@@ -219,7 +248,9 @@ func (c *requestCache[K, V]) execute(ctx context.Context, key flightKey[K], call
 		}
 		close(call.done)
 	}()
-	value, cacheable, err = fn(ctx)
+	if err = call.permit.Wait(ctx); err == nil {
+		value, cacheable, err = fn(ctx)
+	}
 }
 
 func (c *requestCache[K, V]) leave(key flightKey[K], call *cacheCall[V]) {

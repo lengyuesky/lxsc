@@ -360,8 +360,60 @@ async function main() {
       assert.equal(await page.locator('#playerBar').isVisible(), false)
     })
 
+    await check('聚合搜索逐步交付，慢平台追加且失败状态可见', async page => {
+      await page.locator('#songSearchForm [name=query]').fill('渐进测试')
+      await page.locator('#songSearchForm [name=source]').selectOption('')
+      await page.locator('#songSearchForm button').click()
+      await page.waitForFunction(() => songSearchState.tracks.length > 0 && document.querySelector('#songSearchStatus').textContent.includes('QQ音乐：搜索中'))
+      const first = await page.locator('#searchTable tbody tr').first().getAttribute('data-playing-id')
+      await page.evaluate(() => {
+        window.firstSearchRow = document.querySelector('#searchTable tbody tr')
+        window.firstSearchButton = window.firstSearchRow.querySelector('[data-song-action=collect]')
+        window.firstSearchButton.focus()
+      })
+      await page.waitForFunction(() => !document.querySelector('#songSearchStatus').textContent.includes('搜索中'))
+      assert.match(await page.locator('#songSearchStatus').innerText(), /咪咕：失败/)
+      assert.match(await page.locator('#songSearchStatus').innerText(), /QQ音乐：3 首/)
+      assert.equal(await page.locator('#searchTable tbody tr').first().getAttribute('data-playing-id'), first)
+      assert.equal(await page.locator('#searchTable [data-song-action=play]').count(), 12)
+      assert.equal(await page.locator('#searchTable img').count(), 0)
+      assert.equal(await page.evaluate(() => document.querySelector('#searchTable tbody tr') === window.firstSearchRow && document.activeElement === window.firstSearchButton), true, '追加与完成事件必须保留原按钮和焦点')
+    })
+
+    await check('两千首歌单复用行，移动保留焦点、重复项与滚动', async page => {
+      await selectPlaylistUI(page, 'pl-alice')
+      const result = await page.evaluate(() => {
+        playlistState.draftTracks = Array.from({ length: 2000 }, (_, index) => ({ id: 'tr-wy-' + index, name: '歌曲 ' + index, source: 'wy', singer: '歌手' }))
+        renderTracks()
+        const rows = Array.from(document.querySelector('#trackTable').children)
+        const button = rows[1000].querySelector('[data-track-action=down]')
+        button.focus()
+        const scrollBefore = window.scrollY
+        const start = performance.now()
+        button.click()
+        const durationMs = performance.now() - start
+        const moved = document.querySelector('#trackTable').children[1001]
+        const kept = moved === rows[1000] && Array.from(document.querySelector('#trackTable').children).every(row => rows.includes(row))
+        const focused = document.activeElement === button
+        const scrollAfter = window.scrollY
+        const positions = Array.from(document.querySelector('#trackTable').children).every((row, index) => row.dataset.trackIndex === String(index) && row.firstElementChild.textContent === String(index + 1))
+        playlistState.draftTracks = [playlistState.draftTracks[0], { ...playlistState.draftTracks[0] }, playlistState.draftTracks[1]]
+        renderTracks()
+        const duplicateRows = document.querySelector('#trackTable').children.length
+        document.querySelector('#trackTable').children[1].querySelector('[data-track-action=remove]').click()
+        return { durationMs, kept, focused, positions, scrollBefore, scrollAfter, duplicateRows, afterRemove: playlistState.draftTracks.length }
+      })
+      assert.equal(result.kept, true)
+      assert.equal(result.focused, true)
+      assert.equal(result.positions, true)
+      assert.equal(result.scrollBefore, result.scrollAfter)
+      assert.equal(result.duplicateRows, 3)
+      assert.equal(result.afterRemove, 2)
+      fs.writeFileSync(path.join(artifacts, 'playlist-performance.json'), JSON.stringify(result, null, 2))
+    })
+
     await check('空白新搜索取消旧结果', async page => {
-      const held = await holdResponse(page, '**/api/app/search', 'POST', request => request.postDataJSON().query === '慢')
+      const held = await holdResponse(page, '**/api/app/search/stream', 'POST', request => request.postDataJSON().query === '慢')
       await page.locator('#songSearchForm [name=query]').fill('慢')
       await page.locator('#songSearchForm [name=source]').selectOption('wy')
       await page.locator('#songSearchForm button').click()

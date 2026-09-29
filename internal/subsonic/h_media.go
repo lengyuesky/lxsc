@@ -2,11 +2,13 @@ package subsonic
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
 )
@@ -54,11 +56,23 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	ctx, cancel := context.WithTimeout(r.Context(), mediaRecoveryTimeout)
 	defer cancel()
 	u := currentUser(r)
+	release, err := s.Catalog.AcquireRequest(ctx, u.ID)
+	if err != nil {
+		if r.Context().Err() == nil {
+			fail(w, r, ErrBusy, admission.ErrBusy.Error())
+		}
+		return
+	}
+	defer release()
 	id := param(r, "id")
 	metadataStarted := time.Now()
 	in, err := s.Catalog.Track(ctx, id)
 	s.mediaEvent("metadata", id, "", "", false, 0, metadataStarted, err)
 	if err != nil {
+		if errors.Is(err, admission.ErrBusy) {
+			fail(w, r, ErrBusy, err.Error())
+			return
+		}
 		if r.Context().Err() == nil {
 			fail(w, r, ErrNotFound, err.Error())
 		}
@@ -69,9 +83,14 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	// 强制 302 优先于客户端的 proxy 参数，播放和下载均禁止服务器转发。
 	proxy := mode != "force_redirect" && (mode == "proxy" || param(r, "proxy") == "1")
 	res, resp, err := s.prepareMedia(ctx, r, in, quality, proxy)
+	release()
 	// 预算只覆盖取得可用响应头之前的工作，不能截断已经开始的整首音频传输。
 	cancel()
 	if err != nil {
+		if errors.Is(err, admission.ErrBusy) {
+			fail(w, r, ErrBusy, err.Error())
+			return
+		}
 		s.Log.Warn("获取可用音频失败", "id", id, "quality", quality)
 		if r.Context().Err() == nil {
 			fail(w, r, ErrGeneric, "无法获取可用的播放地址")

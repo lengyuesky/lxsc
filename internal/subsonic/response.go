@@ -28,6 +28,7 @@ const (
 	ErrNotAuthorized  = 50
 	ErrTrial          = 60
 	ErrNotFound       = 70
+	ErrBusy           = -1 // 仅内部区分过载，对外仍使用兼容的通用错误码。
 )
 
 // M 有序对象：使用 map 但输出时排序键，便于 XML 属性与 JSON 稳定
@@ -54,6 +55,19 @@ func writeOK(w http.ResponseWriter, r *http.Request, name string, payload any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
+	if code == ErrBusy {
+		w.Header().Set("Retry-After", "2")
+		switch detectFormat(r) {
+		case "json":
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		case "jsonp":
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		default:
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		code = ErrGeneric
+	}
 	writeResp(w, r, "failed", "error", nil, M{"code": code, "message": msg})
 }
 

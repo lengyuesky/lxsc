@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"lxsc/internal/admission"
+
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/buffer"
 	"github.com/dop251/goja_nodejs/console"
@@ -36,6 +38,8 @@ type Options struct {
 
 // Worker 是单个 goja 运行时 + 事件循环，所有 JS 执行都在事件循环 goroutine 内进行
 type Worker struct {
+	lifetime        context.Context
+	stopLifetime    context.CancelFunc
 	opts            Options
 	loop            *eventloop.EventLoop
 	log             *slog.Logger
@@ -80,6 +84,7 @@ func New(opts Options) (*Worker, error) {
 		opts.MaxBodyBytes = 64 << 20
 	}
 	w := &Worker{opts: opts, log: opts.Logger.With("worker", opts.Name)}
+	w.lifetime, w.stopLifetime = context.WithCancel(context.Background())
 	registry := require.NewRegistry()
 	registry.RegisterNativeModule(console.ModuleName, console.RequireWithPrinter(consolePrinter{w}))
 	registry.RegisterNativeModule(buffer.ModuleName, buffer.Require)
@@ -106,7 +111,7 @@ var __await = function(v, cb) {
     var msg = e && e.message ? String(e.message) : String(e)
     if (e && e.stack && String(e.stack).indexOf(msg) === -1) msg += ' @ ' + String(e.stack).split('\n').slice(0, 3).join(' | ')
     else if (e && e.stack) msg = String(e.stack).split('\n').slice(0, 4).join(' | ')
-    cb(msg, null)
+    cb(msg, null, e && e.code)
   })
 }`); err != nil {
 			return err
@@ -140,6 +145,7 @@ func (w *Worker) Stop() {
 	if w.stopped.Swap(true) {
 		return
 	}
+	w.stopLifetime()
 	w.loop.Terminate()
 }
 
@@ -238,6 +244,13 @@ func (w *Worker) callInternal(ctx context.Context, produce func(vm *goja.Runtime
 	// 调用完成也取消无人等待的子请求；共享 Catalog 工作传入的是共享 context。
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	stopWatch := context.AfterFunc(w.lifetime, cancel)
+	defer stopWatch()
+	release, err := callLimits.Acquire(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	scope := &callScope{ctx: ctx}
 	res := make(chan jsResult, 1)
 	var finished atomic.Bool
@@ -264,6 +277,10 @@ func (w *Worker) callInternal(ctx context.Context, produce func(vm *goja.Runtime
 		}
 		cb := vm.ToValue(func(call goja.FunctionCall) goja.Value {
 			if e := call.Argument(0); !goja.IsNull(e) && !goja.IsUndefined(e) {
+				if call.Argument(2).String() == "EBUSY" {
+					deliver(jsResult{err: admission.ErrBusy})
+					return goja.Undefined()
+				}
 				deliver(jsResult{err: errors.New(e.String())})
 				return goja.Undefined()
 			}

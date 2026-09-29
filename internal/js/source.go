@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"lxsc/internal/admission"
 	"net/http"
 	"regexp"
 	"slices"
@@ -424,6 +425,9 @@ func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string,
 			cancel()
 			if err != nil {
 				lastErr = fmt.Errorf("%s: %w", ls.meta.Name, err)
+				if errors.Is(err, admission.ErrBusy) {
+					return nil, err
+				}
 				// 脚本错误可能包含签名地址，普通取链日志也不输出错误原文。
 				m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q)
 				if ctx.Err() != nil {

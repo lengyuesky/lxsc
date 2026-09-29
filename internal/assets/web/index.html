@@ -145,6 +145,7 @@
                 <select name="source"><option value="">全部平台</option><option value="wy">网易云</option><option value="tx">QQ音乐</option><option value="kw">酷我</option><option value="kg">酷狗</option><option value="mg">咪咕</option></select>
                 <button type="submit">搜索</button>
               </form>
+              <p id="playlistSearchStatus" class="muted hint" role="status"></p>
               <div id="searchResults"></div>
             </section>
 
@@ -226,6 +227,7 @@
     <section id="tab-search" class="tab">
       <div class="page-head"><div><h2>搜歌</h2><p>在线找歌、连续播放，收藏到你的歌单</p></div><label class="quality-control">默认播放音质<select id="searchQualitySelect" data-quality-select><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label></div>
       <form id="songSearchForm" class="card toolbar"><input name="query" aria-label="歌名或歌手" placeholder="歌名或歌手" maxlength="200" required class="grow"><select name="source" aria-label="搜索平台"><option value="">全部平台</option><option value="wy">网易云</option><option value="tx">QQ音乐</option><option value="kw">酷我</option><option value="kg">酷狗</option><option value="mg">咪咕</option></select><button type="submit"><svg class="icon"><use href="#i-search"/></svg>搜索</button></form>
+      <p id="songSearchStatus" class="muted hint" role="status"></p>
       <div class="table-wrap"><table id="searchTable"><thead><tr><th>歌曲</th><th>歌手</th><th class="song-album">专辑</th><th>平台</th><th class="song-duration">时长</th><th class="song-quality">音质</th><th class="right">操作</th></tr></thead><tbody><tr><td colspan="7" class="muted center">输入关键词开始搜索</td></tr></tbody></table></div>
     </section>
 
@@ -271,6 +273,8 @@
 <script src="player.js"></script>
 <script src="listening-tracker.js"></script>
 <script src="board-settings.js"></script>
+<script src="search.js"></script>
+<script src="playlist-tracks.js"></script>
 <script src="app.js"></script>
 <script src="debug.js"></script>
 <script src="listening.js"></script>

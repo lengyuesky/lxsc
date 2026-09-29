@@ -17,7 +17,7 @@ import (
 	"lxsc/internal/settings"
 )
 
-func newStabilityCatalog(t *testing.T) *Catalog {
+func newStabilityCatalog(t testing.TB) *Catalog {
 	t.Helper()
 	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -53,7 +53,7 @@ func TestSearchCoalescingAndKeys(t *testing.T) {
 	for range 20 {
 		go func() { results <- c.Search(context.Background(), " 歌曲 ", opts) }()
 	}
-	waitCacheWaiters(t, c.search, 20)
+	waitCacheWaiters(t, c.search, 40)
 	close(release)
 	for range 20 {
 		result := <-results
@@ -75,15 +75,15 @@ func TestSearchCoalescingAndKeys(t *testing.T) {
 	} {
 		c.Search(context.Background(), "歌曲", options)
 	}
-	if calls.Load() != 8 {
-		t.Fatalf("不同顺序、页码、条数不得误合并: %d", calls.Load())
+	if calls.Load() != 6 {
+		t.Fatalf("平台顺序应复用结果，页码和条数不得误合并: %d", calls.Load())
 	}
 	if _, err := c.DB.GetTrack(context.Background(), TrackID("wy", "one")); err == nil {
 		t.Fatal("搜索仍不得持久化歌曲")
 	}
 }
 
-func TestSearchPartialAndEmptyNotCached(t *testing.T) {
+func TestSearchCachesSuccessfulPlatformsOnly(t *testing.T) {
 	for _, mode := range []string{"partial", "empty", "failed"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newStabilityCatalog(t)
@@ -108,8 +108,12 @@ func TestSearchPartialAndEmptyNotCached(t *testing.T) {
 					t.Fatalf("部分失败仍应返回成功结果: %d", len(got))
 				}
 			}
-			if calls.Load() != 4 {
-				t.Fatalf("失败、空及残缺结果不应缓存: %d", calls.Load())
+			wantCalls := int32(4)
+			if mode == "partial" {
+				wantCalls = 3
+			}
+			if calls.Load() != wantCalls {
+				t.Fatalf("成功平台应缓存，失败和空结果需要重试: %d", calls.Load())
 			}
 		})
 	}
