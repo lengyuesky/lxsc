@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"lxsc/internal/metrics"
@@ -27,6 +28,8 @@ type DB struct {
 	read             *sql.DB
 	path             string
 	ListeningQueries metrics.Operation
+	listening        listeningGroup
+	listeningVersion atomic.Uint64
 }
 
 // Stats 是概览与备份清单使用的数据统计。
@@ -63,6 +66,10 @@ func Open(path string) (*DB, error) {
 			s.Close()
 			return nil, fmt.Errorf("初始化表结构失败: %w (%s)", err, stmt)
 		}
+	}
+	if err := initTrackSearch(s); err != nil {
+		s.Close()
+		return nil, err
 	}
 	// 长统计使用独立只读连接；业务写入仍串行，避免增加 SQLite 写锁竞争。
 	read, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=query_only(1)", path))
@@ -116,7 +123,10 @@ func (d *DB) Statistics(ctx context.Context) (Stats, error) {
 }
 
 // Close 关闭
-func (d *DB) Close() error { return errors.Join(d.read.Close(), d.sql.Close()) }
+func (d *DB) Close() error {
+	d.listening.close()
+	return errors.Join(d.read.Close(), d.sql.Close())
+}
 
 // Ping 检查业务连接是否能够访问数据库，供独立健康检查使用。
 func (d *DB) Ping(ctx context.Context) error { return d.sql.PingContext(ctx) }
@@ -253,7 +263,12 @@ func (d *DB) CreateUser(ctx context.Context, name, passwordEnc string, isAdmin b
 }
 
 // UpdateUser 更新用户（passwordEnc 为空则不改口令）
-func (d *DB) UpdateUser(ctx context.Context, id int64, name, passwordEnc string, isAdmin bool, quality string) error {
+func (d *DB) UpdateUser(ctx context.Context, id int64, name, passwordEnc string, isAdmin bool, quality string) (resultErr error) {
+	defer func() {
+		if resultErr == nil {
+			d.listeningVersion.Add(1)
+		}
+	}()
 	if passwordEnc != "" {
 		_, err := d.sql.ExecContext(ctx, `UPDATE users SET name=?, password_enc=?, is_admin=?, quality=? WHERE id=?`, name, passwordEnc, boolInt(isAdmin), quality, id)
 		return err
@@ -271,6 +286,9 @@ func (d *DB) UpdateUserQuality(ctx context.Context, id int64, quality string) er
 // DeleteUser 删除用户
 func (d *DB) DeleteUser(ctx context.Context, id int64) error {
 	_, err := d.sql.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
+	if err == nil {
+		d.listeningVersion.Add(1)
+	}
 	return err
 }
 
@@ -544,27 +562,6 @@ func (d *DB) GetTracks(ctx context.Context, ids []string) ([]*Track, error) {
 		}
 	}
 	return out, nil
-}
-
-// SearchTracks 在本地库中按名称/歌手/专辑模糊搜索
-func (d *DB) SearchTracks(ctx context.Context, q string, limit, offset int) ([]*Track, error) {
-	like := "%" + q + "%"
-	rows, err := d.sql.QueryContext(ctx, `SELECT id, source, name, singer, album, json, updated_at FROM tracks WHERE name LIKE ? OR singer LIKE ? OR album LIKE ? ORDER BY updated_at DESC LIMIT ? OFFSET ?`, like, like, like, limit, offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Track
-	for rows.Next() {
-		var t Track
-		var js string
-		if err := rows.Scan(&t.ID, &t.Source, &t.Name, &t.Singer, &t.Album, &js, &t.UpdatedAt); err != nil {
-			return nil, err
-		}
-		t.JSON = []byte(js)
-		out = append(out, &t)
-	}
-	return out, rows.Err()
 }
 
 // ---------- albums / artists 缓存 ----------

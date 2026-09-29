@@ -83,7 +83,7 @@ func (d *DB) SaveListeningProgress(ctx context.Context, p ListeningProgress, tra
 			return err
 		}
 	}
-	return tx.Commit()
+	return d.commitListening(tx)
 }
 
 // AddClientListening 只接收正式 scrobble；有原始时间戳时按用户、客户端和歌曲去重。
@@ -129,7 +129,15 @@ func (d *DB) AddClientListening(ctx context.Context, userID int64, client string
 	if _, err = tx.ExecContext(ctx, `INSERT INTO listening_days(session_id,day,milliseconds) VALUES(?,?,?)`, id, day, durationMS); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return d.commitListening(tx)
+}
+
+func (d *DB) commitListening(tx *sql.Tx) error {
+	err := tx.Commit()
+	if err == nil {
+		d.listeningVersion.Add(1)
+	}
+	return err
 }
 
 type ListeningTotals struct {
@@ -166,8 +174,8 @@ type ListeningStats struct {
 
 const listeningSums = `COALESCE(SUM(CASE WHEN s.source='web' THEN d.milliseconds ELSE 0 END),0),COALESCE(SUM(CASE WHEN s.source='client' THEN d.milliseconds ELSE 0 END),0),COUNT(DISTINCT s.id),COUNT(DISTINCT CASE WHEN s.unknown_duration=1 THEN s.id END)`
 
-// ListeningStatistics 的 userID=0 只供已经通过管理员鉴权的全站查询使用。
-func (d *DB) ListeningStatistics(ctx context.Context, userID int64, days int, at time.Time) (result ListeningStats, resultErr error) {
+// listeningStatistics 的 userID=0 只供已经通过管理员鉴权的全站查询使用。
+func (d *DB) listeningStatistics(ctx context.Context, userID int64, days int, at time.Time) (result ListeningStats, resultErr error) {
 	finish := d.ListeningQueries.Start()
 	defer func() { finish(resultErr) }()
 	out := ListeningStats{Timezone: "Asia/Shanghai", Daily: []ListeningDay{}, TopTracks: []ListeningRank{}, TopUsers: []ListeningRank{}}

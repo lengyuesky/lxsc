@@ -411,40 +411,62 @@ func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo
 // 此处不校验音频响应，播放层独立决定是否刷新或换源，调试解析不会隐式探测媒体。
 func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
 	var lastErr error = ErrNoSource
-	for _, ls := range m.candidates(platform, "musicUrl") {
-		if sourceIDs != nil && !slices.Contains(sourceIDs, ls.id) {
+	candidates := m.candidates(platform, "musicUrl")
+	candidates = slices.DeleteFunc(candidates, func(ls *loadedSource) bool {
+		return sourceIDs != nil && !slices.Contains(sourceIDs, ls.id)
+	})
+	for index, ls := range candidates {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// 同一音源的全部降级尝试共用预算；为剩余音源和媒体响应头预留时间。
+		budget := m.CallTime
+		if deadline, ok := ctx.Deadline(); ok {
+			budget = min(budget, time.Until(deadline)/time.Duration(len(candidates)-index+1))
+		}
+		sourceCtx, cancel := context.WithTimeout(ctx, budget)
+		result, err := m.musicURLFromSource(sourceCtx, ls, platform, musicInfo, quality)
+		cancel()
+		if err == nil {
+			return result, nil
+		}
+		lastErr = fmt.Errorf("%s: %w", ls.meta.Name, err)
+		if errors.Is(err, admission.ErrBusy) {
+			return nil, err
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	return nil, lastErr
+}
+
+func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
+	var lastErr error = ErrScriptFailed
+	for _, q := range downgradeChain(quality, ls.platforms[platform].Qualitys) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		out, err := ls.worker.CallJSON(ctx, "__lx_request", map[string]any{
+			"source": platform, "action": "musicUrl",
+			"info": map[string]any{"type": q, "musicInfo": musicInfo},
+		})
+		if err != nil {
+			lastErr = err
+			if errors.Is(err, admission.ErrBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				return nil, err
+			}
+			// 音质不支持仍允许降级，日志不输出可能携带签名地址的错误原文。
+			m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q)
 			continue
 		}
-		lastErr = ErrScriptFailed
-		for _, q := range downgradeChain(quality, ls.platforms[platform].Qualitys) {
-			cctx, cancel := context.WithTimeout(ctx, m.CallTime)
-			out, err := ls.worker.CallJSON(cctx, "__lx_request", map[string]any{
-				"source": platform, "action": "musicUrl",
-				"info": map[string]any{"type": q, "musicInfo": musicInfo},
-			})
-			cancel()
-			if err != nil {
-				lastErr = fmt.Errorf("%s: %w", ls.meta.Name, err)
-				if errors.Is(err, admission.ErrBusy) {
-					return nil, err
-				}
-				// 脚本错误可能包含签名地址，普通取链日志也不输出错误原文。
-				m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q)
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				continue
-			}
-			var r MusicURLResult
-			if err := json.Unmarshal(out, &r); err != nil || r.URL == "" {
-				lastErr = fmt.Errorf("%s: 返回数据无效", ls.meta.Name)
-				continue
-			}
-			r.Quality = q
-			r.Source = ls.meta.Name
-			r.SourceID = ls.id
-			return &r, nil
+		var result MusicURLResult
+		if err := json.Unmarshal(out, &result); err != nil || result.URL == "" {
+			lastErr = errors.New("返回数据无效")
+			continue
 		}
+		result.Quality, result.Source, result.SourceID = q, ls.meta.Name, ls.id
+		return &result, nil
 	}
 	return nil, lastErr
 }

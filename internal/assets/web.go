@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,10 +42,25 @@ func WebHandler() (http.Handler, error) {
 		files[entry.Name()] = webAsset{plain: data, version: fmt.Sprintf("%x", sha256.Sum256(data)), contentType: mime.TypeByExtension(path.Ext(entry.Name()))}
 	}
 	index := files["index.html"]
+	var scriptHashes []string
+	for name, asset := range files {
+		if strings.HasSuffix(name, ".js") {
+			sum := sha256.Sum256(asset.plain)
+			scriptHashes = append(scriptHashes, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+		}
+	}
+	sort.Strings(scriptHashes)
+	// 脚本按内容授权；保留动态样式与跨站音频直链所需的权限。
+	policy := "default-src 'self'; script-src 'self' 'strict-dynamic' " + strings.Join(scriptHashes, " ") + "; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; media-src 'self' blob: https: http:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 	index.plain = resourceURL.ReplaceAllFunc(index.plain, func(match []byte) []byte {
 		parts := resourceURL.FindSubmatch(match)
 		if asset, ok := files[string(parts[2])]; ok {
-			return []byte(string(parts[1]) + string(parts[2]) + "?v=" + asset.version + string(parts[3]))
+			attribute := string(parts[1]) + string(parts[2]) + "?v=" + asset.version + string(parts[3])
+			if string(parts[1]) == `src="` && strings.HasSuffix(string(parts[2]), ".js") {
+				sum := sha256.Sum256(asset.plain)
+				attribute += ` integrity="sha256-` + base64.StdEncoding.EncodeToString(sum[:]) + `"`
+			}
+			return []byte(attribute)
 		}
 		return match
 	})
@@ -79,6 +96,9 @@ func WebHandler() (http.Handler, error) {
 		w.Header().Set("Vary", "Accept-Encoding")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
+		if name == "index.html" {
+			w.Header().Set("Content-Security-Policy", policy)
+		}
 		w.Header().Set("Content-Type", asset.contentType)
 		w.Header().Set("Cache-Control", "no-cache")
 		if name != "index.html" && r.URL.Query().Get("v") == asset.version {

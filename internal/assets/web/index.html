@@ -80,8 +80,8 @@
       <div class="page-head"><div><h2>歌单</h2><p>管理歌曲、顺序，导入洛雪、网易云和 QQ 音乐歌单</p></div><div class="page-actions"><label class="quality-control">默认播放音质<select id="qualitySelect" data-quality-select><option value="128k">128 kbps</option><option value="320k">320 kbps</option><option value="flac">FLAC 无损</option><option value="flac24bit">Hi-Res 24-bit</option></select></label><button id="refreshButton" class="sec"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
       <details id="boardSettingsPanel" class="card board-settings-panel admin-only hidden">
         <summary><span><svg class="icon"><use href="#i-sliders"/></svg>自定义榜单</span><small>在线目录与客户端歌单</small></summary>
-        <div id="boardSettingsLoadNotice" class="board-settings-notice hidden" role="status"><span id="boardSettingsLoadMsg"></span><button id="retryBoardSettings" type="button" class="sec sm hidden" onclick="loadBoardSettings()">重试</button></div>
-        <form id="boardSettingsForm" class="hidden" inert onsubmit="return saveBoardSettings(event)">
+        <div id="boardSettingsLoadNotice" class="board-settings-notice hidden" role="status"><span id="boardSettingsLoadMsg"></span><button id="retryBoardSettings" type="button" class="sec sm hidden" >重试</button></div>
+        <form id="boardSettingsForm" class="hidden" inert >
           <p class="muted hint">由管理员统一配置，所有用户共用以下榜单展示选择。</p>
           <label class="switch"><span>在在线音乐目录和歌单中展示平台榜单<small>两处共用下方选择；打开具体榜单后才加载歌曲。</small></span><input type="checkbox" name="showBoards"></label>
           <div class="form-grid"><label>榜单平台及顺序<input name="boardSources" placeholder="wy,tx,kw,kg,mg"><small>逗号分隔：wy 网易云、tx QQ音乐、kw 酷我、kg 酷狗、mg 咪咕。移除平台会保留其榜单选择。</small></label></div>
@@ -179,11 +179,11 @@
     </section>
 
     <section id="tab-dashboard" class="tab admin-only">
-      <div class="page-head"><div><h2>概览</h2><p>服务健康、数据规模与备份状态</p></div><button class="sec" onclick="loadDashboard()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
+      <div class="page-head"><div><h2>概览</h2><p>服务健康、数据规模与备份状态</p></div><button class="sec" id="refreshDashboard"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
       <div id="healthHero" class="card health-hero"></div>
       <div id="statusCards" class="overview-stats"></div>
       <div class="overview-grid">
-        <div class="card connect overview-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>客户端连接</h4><div class="kv"><span class="k">服务器地址</span><code id="serverUrl"></code><button type="button" class="ghost sm" onclick="copyText($('#serverUrl').textContent)"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="kv"><span class="k">认证账号</span><span>任一已创建用户</span></div><p class="muted hint">支持音流、Feishin、Symfonium 等 Subsonic 客户端；搜索前缀：<code>wy:</code> <code>tx:</code> <code>kw:</code> <code>kg:</code> <code>mg:</code></p></div>
+        <div class="card connect overview-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>客户端连接</h4><div class="kv"><span class="k">服务器地址</span><code id="serverUrl"></code><button type="button" class="ghost sm" id="copyServerURL"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="kv"><span class="k">认证账号</span><span>任一已创建用户</span></div><p class="muted hint">支持音流、Feishin、Symfonium 等 Subsonic 客户端；搜索前缀：<code>wy:</code> <code>tx:</code> <code>kw:</code> <code>kg:</code> <code>mg:</code></p></div>
         <div id="backupSummary" class="card overview-card"></div>
       </div>
       <div class="section-title overview-section"><h3>音源与平台</h3><a href="#sources">管理音源 →</a></div>
@@ -193,8 +193,8 @@
     <section id="tab-sources" class="tab admin-only">
       <div class="page-head"><div><h2>音源脚本</h2><p>上传或导入洛雪自定义音源，用于解析播放直链</p></div></div>
       <div class="grid2">
-        <form onsubmit="return uploadSource(event)" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>上传脚本</h4><input type="file" name="file" accept=".js,text/javascript" required><input name="name" placeholder="名称（可选，默认取脚本 @name）"><button type="submit">上传</button></form>
-        <form onsubmit="return importSource(event)" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>从 URL 导入</h4><input name="url" placeholder="https://example.com/source.js" required><button type="submit">导入</button></form>
+        <form id="uploadSourceForm" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>上传脚本</h4><input type="file" name="file" accept=".js,text/javascript" required><input name="name" placeholder="名称（可选，默认取脚本 @name）"><button type="submit">上传</button></form>
+        <form id="importSourceForm" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>从 URL 导入</h4><input name="url" placeholder="https://example.com/source.js" required><button type="submit">导入</button></form>
       </div>
       <div id="sourceList" class="stack"></div>
     </section>
@@ -206,19 +206,19 @@
     </section>
 
     <section id="tab-backups" class="tab admin-only">
-      <div class="page-head"><div><h2>备份与恢复</h2><p>完整迁移备份、本地恢复和 WebDAV 自动备份</p></div><button class="sec" onclick="loadBackups()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
+      <div class="page-head"><div><h2>备份与恢复</h2><p>完整迁移备份、本地恢复和 WebDAV 自动备份</p></div><button class="sec" id="refreshBackups"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
       <div id="pendingRestore"></div>
       <div class="grid2 backup-top-grid">
-        <form id="exportBackupForm" class="card form-card" onsubmit="return exportBackup(event)"><h4 class="card-title"><svg class="icon"><use href="#i-backup"/></svg>下载完整备份</h4><p class="muted hint">包含数据库、用户、歌单、音源、设置与迁移密钥，属于敏感文件。</p><label>可选备份密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不额外加密"></label><label>确认密码<input name="confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入"></label><button type="submit">生成并下载</button></form>
-        <form id="importBackupForm" class="card form-card" onsubmit="return importBackup(event)"><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>导入完整备份</h4><p class="muted hint">先检查备份摘要，确认后再暂存；重启容器后才覆盖当前数据。</p><label>备份文件<input name="file" type="file" accept=".lxsc-backup,application/octet-stream" required></label><label>备份密码<input name="password" type="password" placeholder="加密备份必填"></label><div id="backupPreview" class="backup-preview muted">尚未检查备份</div><button type="button" class="sec" onclick="previewBackup()">检查备份</button><label class="inline danger-confirm"><input name="confirm" type="checkbox" required disabled>我已核对摘要，并理解重启后将替换当前业务数据</label><button type="submit" class="danger" disabled>暂存恢复</button></form>
+        <form id="exportBackupForm" class="card form-card" ><h4 class="card-title"><svg class="icon"><use href="#i-backup"/></svg>下载完整备份</h4><p class="muted hint">包含数据库、用户、歌单、音源、设置与迁移密钥，属于敏感文件。</p><label>可选备份密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不额外加密"></label><label>确认密码<input name="confirmPassword" type="password" autocomplete="new-password" placeholder="再次输入"></label><button type="submit">生成并下载</button></form>
+        <form id="importBackupForm" class="card form-card" ><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>导入完整备份</h4><p class="muted hint">先检查备份摘要，确认后再暂存；重启容器后才覆盖当前数据。</p><label>备份文件<input name="file" type="file" accept=".lxsc-backup,application/octet-stream" required></label><label>备份密码<input name="password" type="password" placeholder="加密备份必填"></label><div id="backupPreview" class="backup-preview muted">尚未检查备份</div><button type="button" class="sec" id="inspectBackupButton">检查备份</button><label class="inline danger-confirm"><input name="confirm" type="checkbox" required disabled>我已核对摘要，并理解重启后将替换当前业务数据</label><button type="submit" class="danger" disabled>暂存恢复</button></form>
       </div>
-      <form id="webdavForm" class="card" onsubmit="return saveWebDAV(event)"><div class="section-title"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>WebDAV 配置</h4><span id="webdavSecurity" class="badge off"></span></div><div class="form-grid"><label>WebDAV 地址<input name="url" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user/"></label><label>用户名<input name="username" autocomplete="username"></label><label>密码 / 应用密码<input name="password" type="password" autocomplete="new-password" placeholder="留空保留现有密码"><small id="webdavPasswordState"></small></label><label>远程目录<input name="path" placeholder="lxsc-backups"></label><label>备份文件加密密码<input name="backupPassword" type="password" autocomplete="new-password" placeholder="留空保留现有密码"><small id="backupPasswordState"></small></label><label>执行周期<select name="frequency"><option value="daily">每日</option><option value="weekly">每周</option></select></label><label>执行时间<input name="time" type="time"></label><label id="weekdayWrap">星期<select name="weekday"><option value="1">星期一</option><option value="2">星期二</option><option value="3">星期三</option><option value="4">星期四</option><option value="5">星期五</option><option value="6">星期六</option><option value="0">星期日</option></select></label><label>保留最近份数<input name="retention" type="number" min="0" max="1000"><small>默认 3；0 表示不自动删除</small></label></div><div class="secret-clear-row"><label class="inline"><input name="clearPassword" type="checkbox">清除已保存的 WebDAV 密码</label><label class="inline"><input name="clearBackupPassword" type="checkbox">清除已保存的备份加密密码</label></div><label class="switch"><span>启用自动 WebDAV 备份<small id="backupTimezone"></small></span><input name="auto" type="checkbox"></label><div class="form-actions"><button type="submit">保存配置</button><button type="button" class="sec" onclick="testWebDAV()">测试连接</button><button type="button" onclick="runWebDAVBackup()"><svg class="icon"><use href="#i-upload"/></svg>立即备份</button></div></form>
+      <form id="webdavForm" class="card" ><div class="section-title"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>WebDAV 配置</h4><span id="webdavSecurity" class="badge off"></span></div><div class="form-grid"><label>WebDAV 地址<input name="url" type="url" placeholder="https://dav.example.com/remote.php/dav/files/user/"></label><label>用户名<input name="username" autocomplete="username"></label><label>密码 / 应用密码<input name="password" type="password" autocomplete="new-password" placeholder="留空保留现有密码"><small id="webdavPasswordState"></small></label><label>远程目录<input name="path" placeholder="lxsc-backups"></label><label>备份文件加密密码<input name="backupPassword" type="password" autocomplete="new-password" placeholder="留空保留现有密码"><small id="backupPasswordState"></small></label><label>执行周期<select name="frequency"><option value="daily">每日</option><option value="weekly">每周</option></select></label><label>执行时间<input name="time" type="time"></label><label id="weekdayWrap">星期<select name="weekday"><option value="1">星期一</option><option value="2">星期二</option><option value="3">星期三</option><option value="4">星期四</option><option value="5">星期五</option><option value="6">星期六</option><option value="0">星期日</option></select></label><label>保留最近份数<input name="retention" type="number" min="0" max="1000"><small>默认 3；0 表示不自动删除</small></label></div><div class="secret-clear-row"><label class="inline"><input name="clearPassword" type="checkbox">清除已保存的 WebDAV 密码</label><label class="inline"><input name="clearBackupPassword" type="checkbox">清除已保存的备份加密密码</label></div><label class="switch"><span>启用自动 WebDAV 备份<small id="backupTimezone"></small></span><input name="auto" type="checkbox"></label><div class="form-actions"><button type="submit">保存配置</button><button type="button" class="sec" id="testWebDAVButton">测试连接</button><button type="button" id="runWebDAVButton"><svg class="icon"><use href="#i-upload"/></svg>立即备份</button></div></form>
       <div class="section-title overview-section"><h3>远程备份</h3><span id="backupLastStatus" class="muted hint"></span></div><div class="table-wrap"><table id="remoteBackupTable"><thead><tr><th>文件</th><th>时间</th><th>大小</th><th class="right">操作</th></tr></thead><tbody><tr><td colspan="4">尚未加载</td></tr></tbody></table></div>
     </section>
 
     <section id="tab-settings" class="tab admin-only">
       <div class="page-head"><div><h2>设置</h2><p>运行时配置，保存后立即生效</p></div></div>
-      <form id="settingsForm" onsubmit="return saveSettings(event)">
+      <form id="settingsForm" >
         <div class="card"><h4 class="card-title">基本</h4><div class="form-grid"><label>服务器名称<input name="serverName"></label><label>新用户默认音质<select name="defaultQuality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label>聚合搜索平台及顺序<input name="searchSources" placeholder="wy,tx,kw,kg,mg"><small>逗号分隔，按填写顺序合并结果</small></label><label>每平台搜索条数<input name="searchLimit" type="number" min="1" max="100"></label></div></div>
         <div class="card"><h4 class="card-title">播放与缓存</h4><div class="form-grid"><label>播放方式<select name="streamMode"><option value="redirect">302 重定向到音源直链（推荐）</option><option value="force_redirect">强制 302（禁止服务器转发）</option><option value="proxy">服务端代理转发</option></select><small>302 复用缓存前轻量校验，确认失效后刷新一次；音频由客户端直连下载。强制 302 禁止播放与下载转发。</small></label><label>封面方式<select name="coverMode"><option value="redirect">302 重定向</option><option value="proxy">服务端代理</option></select></label><label>直链缓存<select name="urlCacheTTL"><option value="0">不缓存</option><option value="86400">1 天</option><option value="604800">1 周</option><option value="2592000">1 个月（30 天）</option><option value="-1">永久</option></select><small>默认 1 周，重启后保留。永久不按时间过期，失效或超过 2000 条时仍会清理；直链缓存不随备份保存。</small></label><label>搜索缓存<input name="searchCacheTTL" type="number" min="0"><small>秒，0 表示不缓存</small></label><label>歌手页最多歌曲<input name="artistSongLimit" type="number" min="1" max="100"><small>默认 30；不会再自动跨平台扩展搜索</small></label><label>歌手页最多专辑<input name="artistAlbumLimit" type="number" min="1" max="50"><small>默认 12，限制客户端级联拉取</small></label></div></div>
         <div class="card"><h4 class="card-title">歌单</h4>
@@ -258,7 +258,7 @@
       <div id="debugTokenList"></div>
     </section>
     <section id="tab-logs" class="tab admin-only">
-      <div class="page-head"><div><h2>日志</h2><p>最近 300 条服务日志</p></div><button class="sec" onclick="loadLogs()"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
+      <div class="page-head"><div><h2>日志</h2><p>最近 300 条服务日志</p></div><button class="sec" id="refreshLogs"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
       <div id="logBox" class="logbox"></div>
     </section>
   </main>
@@ -270,8 +270,8 @@
   </aside>
 </div>
 
-<dialog id="userDialog"><form id="editUserForm" method="dialog" class="dialog-form"><h3>编辑用户</h3><input type="hidden" name="id"><label>用户名<input name="name" required></label><label>新密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label><label>默认音质<select name="quality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label class="switch"><span>管理员</span><input type="checkbox" name="isAdmin"></label><div class="dialog-actions"><button type="button" class="sec" onclick="$('#userDialog').close()">取消</button><button type="submit">保存</button></div></form></dialog>
-<dialog id="keyDialog"><div class="dialog-form"><h3>API Key</h3><p class="muted">用于 OpenSubsonic 的 <code>apiKey</code> 参数，仅显示一次，请妥善保存。</p><div class="kv"><input id="keyValue" readonly class="mono"><button type="button" class="sec" onclick="copyText($('#keyValue').value)"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="dialog-actions"><button type="button" onclick="$('#keyDialog').close()">关闭</button></div></div></dialog>
+<dialog id="userDialog"><form id="editUserForm" method="dialog" class="dialog-form"><h3>编辑用户</h3><input type="hidden" name="id"><label>用户名<input name="name" required></label><label>新密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label><label>默认音质<select name="quality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label class="switch"><span>管理员</span><input type="checkbox" name="isAdmin"></label><div class="dialog-actions"><button type="button" class="sec" id="cancelEditUser">取消</button><button type="submit">保存</button></div></form></dialog>
+<dialog id="keyDialog"><div class="dialog-form"><h3>API Key</h3><p class="muted">用于 OpenSubsonic 的 <code>apiKey</code> 参数，仅显示一次，请妥善保存。</p><div class="kv"><input id="keyValue" readonly class="mono"><button type="button" class="sec" id="copyAPIKey"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="dialog-actions"><button type="button" id="closeAPIKey">关闭</button></div></div></dialog>
 
 <dialog id="collectDialog"><form id="collectForm" class="dialog-form"><h3>收藏到歌单</h3><p id="collectSong" class="song-sub"></p><label>收藏方式<select name="mode"><option value="existing">选择已有歌单</option><option value="create">新建歌单并收藏</option></select></label><label id="collectTargetWrap">目标歌单<select name="playlistId" aria-label="目标歌单"></select></label><div id="collectCreateFields" class="hidden"><label>歌单名称<input name="name" maxlength="100" autocomplete="off"></label><label class="switch"><span>公开歌单<small>新歌单归属当前登录用户</small></span><input name="public" type="checkbox"></label></div><p id="collectHint" class="muted hint"></p><p id="collectError" class="err" role="alert"></p><div class="dialog-actions"><button id="collectCancel" type="button" class="sec">取消</button><button id="collectSubmit" type="submit">收藏</button></div></form></dialog>
 
@@ -283,6 +283,11 @@
 <script src="playlist-tracks.js"></script>
 <script src="api.js"></script>
 <script src="users.js"></script>
+<script src="ui-common.js"></script>
+<script src="admin-pages.js"></script>
+<script src="backups.js"></script>
+<script src="settings-ui.js"></script>
+<script src="playlist-import.js"></script>
 <script src="app.js"></script>
 <script src="maintenance.js"></script>
 <script src="debug.js"></script>

@@ -11,9 +11,11 @@ import (
 )
 
 type reqCtx struct {
-	ctx     context.Context
-	starred map[string]int64
-	plays   map[string]int
+	ctx           context.Context
+	starred       map[string]int64
+	plays         map[string]int
+	library       []*music.Info
+	libraryLoaded bool
 }
 
 func (s *Server) newReqCtx(r *http.Request) *reqCtx {
@@ -250,31 +252,19 @@ func dedupe(infos []*music.Info) []*music.Info {
 
 // libraryTracks 用户"资料库"= 收藏歌曲 + 歌单歌曲 + 最近播放
 func (s *Server) libraryTracks(rc *reqCtx, userID int64) []*music.Info {
-	ctx := rc.ctx
-	var ids []string
-	for id := range rc.starred {
-		if strings.HasPrefix(id, music.KindTrack+"-") {
-			ids = append(ids, id)
+	if !rc.libraryLoaded {
+		ids, err := s.DB.LibraryTrackIDs(rc.ctx, userID)
+		if err != nil {
+			if s.Log != nil {
+				s.Log.Warn("读取资料库失败", "err", err)
+			}
+			return nil
 		}
+		rc.library = s.Catalog.Tracks(rc.ctx, ids)
+		rc.libraryLoaded = true
 	}
-	pls, _ := s.DB.ListPlaylists(ctx, userID)
-	for _, p := range pls {
-		full, err := s.DB.GetPlaylist(ctx, p.ID)
-		if err == nil {
-			ids = append(ids, full.TrackIDs...)
-		}
-	}
-	recent, _ := s.DB.RecentTracks(ctx, userID, 200)
-	ids = append(ids, recent...)
-	seen := map[string]bool{}
-	uniq := ids[:0]
-	for _, id := range ids {
-		if !seen[id] {
-			seen[id] = true
-			uniq = append(uniq, id)
-		}
-	}
-	return s.Catalog.Tracks(ctx, uniq)
+	// 调用者可能就地排序或筛选，不能修改请求内复用的切片。
+	return append([]*music.Info(nil), rc.library...)
 }
 
 func sortByName(groups []*artistGroup) {

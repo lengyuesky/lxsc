@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"lxsc/internal/admission"
 	"lxsc/internal/db"
 )
 
@@ -92,6 +93,11 @@ func (s *Server) listeningStats(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := s.DB.ListeningStatistics(r.Context(), userID, days, time.Now())
 	if err != nil {
+		if errors.Is(err, admission.ErrBusy) {
+			w.Header().Set("Retry-After", "2")
+			fail(w, http.StatusServiceUnavailable, "统计服务繁忙，请稍后重试")
+			return
+		}
 		fail(w, 500, "读取听歌统计失败")
 		return
 	}

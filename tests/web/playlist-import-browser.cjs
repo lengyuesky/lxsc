@@ -10,14 +10,14 @@ module.exports = async ({ check, url, holdResponse, createPlaylist, selectPlayli
   }
   async function preview(page) {
     await page.locator('#previewOnlineImport').click()
-    await page.waitForFunction(() => importState.ready)
+    await page.waitForFunction(() => !document.querySelector('#importForm button[type=submit]').disabled)
   }
   async function submit(page) {
     const response = page.waitForResponse(response => response.url().includes('/api/app/playlists/import') && response.request().method() === 'POST')
     await page.locator('#importForm [type=submit]').click()
     const result = await response
     assert.equal(result.status(), 200)
-    await page.waitForFunction(() => !importState.busy)
+    await page.waitForFunction(() => !document.querySelector('#importForm').inert)
     return result.json()
   }
 
@@ -86,7 +86,7 @@ module.exports = async ({ check, url, holdResponse, createPlaylist, selectPlayli
     await held.ready
     await page.locator('#metaForm [name=name]').fill('导入期间的新草稿')
     await held.finish()
-    await page.waitForFunction(() => !importState.busy)
+    await page.waitForFunction(() => !document.querySelector('#importForm').inert)
     assert.equal(await page.evaluate(() => playlistState.current.id), target.id)
     assert.equal(await page.evaluate(() => playlistState.metaDirty), true)
     assert.equal(await page.locator('#metaForm [name=name]').inputValue(), '导入期间的新草稿')
@@ -97,7 +97,7 @@ module.exports = async ({ check, url, holdResponse, createPlaylist, selectPlayli
     await page.locator('#importForm [name=file]').setInputFiles({
       name: '歌单.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ type: 'playList_v2', data: [{ id: 'default', name: '文件导入回归', list: [{ source: 'wy', songmid: '1', name: '测试歌曲一' }] }] })),
     })
-    await page.waitForFunction(() => importState.ready)
+    await page.waitForFunction(() => !document.querySelector('#importForm button[type=submit]').disabled)
     assert.equal(await page.locator('#importForm [name=input]').isDisabled(), true)
     const result = await submit(page)
     assert.equal(result.added, 1)

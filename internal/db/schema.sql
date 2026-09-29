@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id, played_at DESC);
 CREATE INDEX IF NOT EXISTS idx_history_track ON history(track_id);
+CREATE INDEX IF NOT EXISTS idx_history_user_track_time ON history(user_id, track_id, played_at DESC);
 
 -- 新版首次打开数据库时启用统计，保留原有历史但不回填。
 CREATE TABLE IF NOT EXISTS listening_meta (

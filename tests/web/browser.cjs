@@ -80,7 +80,7 @@ async function saveSettingsUI(page, status = 200) {
   const response = await saved
   assert.equal(response.status(), status)
   for (const field of ['showBoards', 'boardSources', 'boardSelections']) assert.equal(Object.hasOwn(response.request().postDataJSON(), field), false, '系统设置不能回写榜单字段')
-  await page.waitForFunction(() => !settingsState.saving)
+  await page.waitForFunction(() => !LXSCSettings.system.saving)
   return response.json()
 }
 async function saveBoardSettingsUI(page, status = 200) {
@@ -89,7 +89,7 @@ async function saveBoardSettingsUI(page, status = 200) {
   const response = await saved
   assert.equal(response.status(), status)
   assert.deepEqual(Object.keys(response.request().postDataJSON()).sort(), ['boardSelections', 'boardSources', 'showBoards'], '榜单保存只能更新自己的字段')
-  await page.waitForFunction(() => !boardSettingsState.saving)
+  await page.waitForFunction(() => !LXSCSettings.boards.saving)
   return response.json()
 }
 async function draftSong(page) {
@@ -144,6 +144,10 @@ async function main() {
     }
     async function check(name, action, options = {}) {
       const context = await browser.newContext({ viewport: { width: 1360, height: 900 }, ...options })
+      await context.addInitScript(() => {
+        globalThis.cspViolations = []
+        document.addEventListener('securitypolicyviolation', event => globalThis.cspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI }))
+      })
       const page = await context.newPage(), errors = []
       page.setDefaultTimeout(8000)
       page.on('pageerror', error => errors.push(error.message))
@@ -153,6 +157,7 @@ async function main() {
         await action(page)
         await settle(page)
         assert.deepEqual(errors, [], '页面不应出现未处理异常')
+        assert.deepEqual(await page.evaluate(() => globalThis.cspViolations), [], '正常操作不能违反 CSP')
         results.push({ name, ok: true })
         console.log('通过：' + name)
       } catch (error) {
@@ -202,6 +207,7 @@ async function main() {
       assert.deepEqual(calls[1].body, { confirm: true })
     })
 
+    await require('./optimization-browser.cjs')({ check, url, login, holdResponse })
     await require('./debug-browser.cjs')({ check, url, artifacts, login })
     await require('./listening-browser.cjs')({ check, url, artifacts, login, search, playSearch, holdResponse })
     await require('./playlist-import-browser.cjs')({ check, url, holdResponse, createPlaylist, selectPlaylistUI })
@@ -509,7 +515,7 @@ async function main() {
       await page.reload()
       await showBoardSettings(page)
       assert.equal(await page.locator('[data-board-source=wy] [data-board-id=new]').isChecked(), true)
-      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), wanted)
+      assert.deepEqual(await page.evaluate(() => LXSCSettings.selection()), wanted)
       await page.locator('#boardSettingsPanel').screenshot({ path: path.join(artifacts, 'board-settings-desktop.png') })
       await page.locator('#boardSettingsForm [name=showBoards]').uncheck()
       assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, wanted)
@@ -553,7 +559,7 @@ async function main() {
       await wyHeld.ready
       // 取消一个尚未返回的已选项后，该占位行会立即移除。
       await wy.locator('[data-board-id=hot]').click()
-      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: ['missing'], tx: [] })
+      assert.deepEqual(await page.evaluate(() => LXSCSettings.selection()), { wy: ['missing'], tx: [] })
       await wyHeld.finish()
       await txHeld.finish()
       assert.equal(await wy.locator('[data-board-id=hot]').isChecked(), false)
@@ -580,7 +586,7 @@ async function main() {
       const wy = await boardGroup(page, 'wy')
       await wy.locator('[data-board-id=new]').uncheck()
       await held.finish()
-      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: [] })
+      assert.deepEqual(await page.evaluate(() => LXSCSettings.selection()), { wy: [] })
       await wy.locator('[data-board-id=hot]').check()
       let saves = 0
       await page.route('**/api/admin/settings', route => route.request().method() === 'PUT' && saves++ === 0
@@ -588,7 +594,7 @@ async function main() {
         : route.continue())
       await saveBoardSettingsUI(page, 500)
       assert.equal(await wy.locator('[data-board-id=hot]').isChecked(), true)
-      assert.equal(await page.evaluate(() => boardSettingsState.dirty), true)
+      assert.equal(await page.evaluate(() => LXSCSettings.boards.dirty), true)
       assert.deepEqual((await (await admin.get(url + '/api/admin/settings')).json()).boardSelections, { wy: ['new'] })
       assert.deepEqual((await saveBoardSettingsUI(page)).boardSelections, { wy: ['hot'] })
     })
@@ -623,7 +629,7 @@ async function main() {
       await wy.locator('[data-board-id=hot]').check()
       const boardSaved = await saveBoardSettingsUI(page)
       assert.equal(boardSaved.serverName, '系统原名称', '保存榜单不得提交另一个表单的系统草稿')
-      assert.deepEqual(await page.evaluate(() => ({ systemDirty: settingsState.dirty, metaDirty: playlistState.metaDirty, tracksDirty: playlistState.tracksDirty, ids: playlistState.draftTracks.map(track => track.id) })), { systemDirty: true, metaDirty: true, tracksDirty: true, ids: ['tr-wy-2', 'tr-wy-1'] })
+      assert.deepEqual(await page.evaluate(() => ({ systemDirty: LXSCSettings.system.dirty, metaDirty: playlistState.metaDirty, tracksDirty: playlistState.tracksDirty, ids: playlistState.draftTracks.map(track => track.id) })), { systemDirty: true, metaDirty: true, tracksDirty: true, ids: ['tr-wy-2', 'tr-wy-1'] })
       assert.equal(await page.locator('#metaForm [name=name]').inputValue(), '未保存的歌单名称')
       assert.deepEqual(await page.evaluate(() => [webPlayer.track.id, webPlayer.status]), [currentTrack, 'playing'])
       await page.locator('nav [data-tab=settings]').click()
@@ -652,7 +658,7 @@ async function main() {
       await page.locator('#retryBoardSettings').click()
       await page.locator('#boardSettingsForm:not([inert])').waitFor()
       assert.equal(await page.locator('#boardSettingsLoadNotice').isVisible(), false)
-      assert.deepEqual(await page.evaluate(() => boardChoices.snapshot()), { wy: ['hot'] })
+      assert.deepEqual(await page.evaluate(() => LXSCSettings.selection()), { wy: ['hot'] })
     })
 
     await check('直链缓存五档保存、刷新回显与保存失败保留选择', async page => {
@@ -677,7 +683,7 @@ async function main() {
       await select.selectOption('86400')
       await saveSettingsUI(page, 503)
       assert.equal(await select.inputValue(), '86400')
-      assert.equal(await page.evaluate(() => settingsState.dirty), true)
+      assert.equal(await page.evaluate(() => LXSCSettings.system.dirty), true)
       await page.unroute('**/api/admin/settings', failSave)
       assert.equal((await saveSettingsUI(page)).urlCacheTTL, 86400)
       await select.selectOption('604800')

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -225,9 +226,19 @@ func paramInt(r *http.Request, key string, def int) int {
 	if v == "" {
 		return def
 	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
+	n, err := strconv.Atoi(v)
+	if err != nil {
 		return def
 	}
 	return n
+}
+
+// 分页数量包含零（客户端可只请求专辑或歌手），单次最多返回 500 项。
+func paramCount(r *http.Request, key string, def int) int {
+	return min(500, max(0, paramInt(r, key, def)))
+}
+
+func paramOffset(r *http.Request, key string) int {
+	// 给后续页码计算保留空间，避免极大整数相加溢出。
+	return min(int(^uint(0)>>1)-500, max(0, paramInt(r, key, 0)))
 }

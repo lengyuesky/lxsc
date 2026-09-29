@@ -69,19 +69,24 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		raw = param(r, "any")
 	}
 	query, sources, local := s.parseQuery(raw)
-	songCount := paramInt(r, "songCount", 20)
-	songOffset := paramInt(r, "songOffset", 0)
-	albumCount := paramInt(r, "albumCount", 20)
-	albumOffset := paramInt(r, "albumOffset", 0)
-	artistCount := paramInt(r, "artistCount", 20)
-	artistOffset := paramInt(r, "artistOffset", 0)
+	songCount := paramCount(r, "songCount", 20)
+	songOffset := paramOffset(r, "songOffset")
+	albumCount := paramCount(r, "albumCount", 20)
+	albumOffset := paramOffset(r, "albumOffset")
+	artistCount := paramCount(r, "artistCount", 20)
+	artistOffset := paramOffset(r, "artistOffset")
+	windowSize := max(songCount, albumCount, artistCount)
 
 	var infos []*music.Info
 	if query == "" {
 		// 空查询：返回资料库内容（部分客户端用空查询列出全部）
 		infos = s.libraryTracks(rc, u.ID)
 	} else if local {
-		rows, _ := s.DB.SearchTracks(rc.ctx, query, songOffset+songCount, 0)
+		rows, err := s.DB.SearchTracks(rc.ctx, query, windowSize, songOffset)
+		if err != nil {
+			writeErr(w, r, ErrGeneric, "读取本地歌曲失败")
+			return
+		}
 		for _, t := range rows {
 			if in, err := music.ParseInfo(t.JSON); err == nil {
 				infos = append(infos, in)
@@ -97,8 +102,8 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 		// 在线搜索：按 offset 推算页码（每平台 limit 条），把多页合并
 		limit := s.Settings.Get().SearchLimit
-		if songCount > limit*len(sources) {
-			limit = (songCount + len(sources) - 1) / len(sources)
+		if windowSize > limit*len(sources) && len(sources) > 0 {
+			limit = (windowSize + len(sources) - 1) / len(sources)
 			if limit > 50 {
 				limit = 50
 			}
@@ -108,7 +113,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			perPage = limit
 		}
 		startPage := songOffset/perPage + 1
-		endPage := (songOffset+songCount-1)/perPage + 1
+		endPage := (songOffset+windowSize-1)/perPage + 1
 		for page := startPage; page <= endPage && page <= startPage+2; page++ {
 			list, err := s.Catalog.SearchChecked(searchCtx, query, music.SearchOptions{Sources: sources, Page: page, Limit: limit})
 			if errors.Is(err, admission.ErrBusy) && len(infos) == 0 {
@@ -126,10 +131,11 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			infos = nil
 		}
 	}
-	songs := infos
-	if len(songs) > songCount {
-		songs = songs[:songCount]
+	songStart := 0
+	if query == "" {
+		songStart = songOffset
 	}
+	songs := slicePage(infos, songStart, songCount)
 	albums := groupAlbums(infos)
 	for _, a := range albums {
 		s.rememberAlbum(rc, a)
@@ -161,12 +167,8 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func slicePage[T any](list []T, offset, count int) []T {
-	if offset >= len(list) || offset < 0 {
+	if offset >= len(list) || offset < 0 || count <= 0 {
 		return nil
 	}
-	end := offset + count
-	if end > len(list) || count <= 0 {
-		end = len(list)
-	}
-	return list[offset:end]
+	return list[offset : offset+min(count, len(list)-offset)]
 }

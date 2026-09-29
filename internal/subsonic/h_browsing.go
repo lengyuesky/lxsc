@@ -590,7 +590,7 @@ func (s *Server) getSong(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getTopSongs(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	name := param(r, "artist")
-	count := paramInt(r, "count", 50)
+	count := paramCount(r, "count", 50)
 	if maxCount := s.Settings.Get().ArtistSongLimit; count > maxCount {
 		count = maxCount
 	}
@@ -613,7 +613,7 @@ func (s *Server) getTopSongs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getSimilarSongs(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	id := param(r, "id")
-	count := paramInt(r, "count", 50)
+	count := paramCount(r, "count", 50)
 	if maxCount := s.Settings.Get().ArtistSongLimit; count > maxCount {
 		count = maxCount
 	}

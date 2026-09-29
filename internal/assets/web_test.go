@@ -3,6 +3,8 @@ package assets
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/base64"
 	"io"
 	"net/http/httptest"
 	"regexp"
@@ -63,5 +65,37 @@ func TestEncodingNegotiation(t *testing.T) {
 		if !acceptsGzip(value) {
 			t.Error("应发送gzip", value)
 		}
+	}
+}
+
+func TestWebScriptPolicyAndIntegrity(t *testing.T) {
+	handler, err := WebHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
+	policy := response.Header().Get("Content-Security-Policy")
+	if !strings.Contains(policy, "'strict-dynamic'") || !strings.Contains(policy, "script-src-attr 'none'") || strings.Contains(policy, "unsafe-eval") {
+		t.Fatal("脚本策略未生效", policy)
+	}
+	scripts := regexp.MustCompile(`<script src="([^"?]+)\?v=[a-f0-9]+" integrity="(sha256-[^"]+)"`).FindAllStringSubmatch(response.Body.String(), -1)
+	if len(scripts) < 15 {
+		t.Fatalf("脚本缺少内容完整性校验：%d", len(scripts))
+	}
+	for _, script := range scripts {
+		source, err := Web.ReadFile("web/" + script[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(source)
+		hash := "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+		if hash != script[2] || !strings.Contains(policy, "'"+hash+"'") {
+			t.Fatal("脚本与策略哈希不一致", script[1])
+		}
+	}
+	html, _ := Web.ReadFile("web/index.html")
+	if regexp.MustCompile(`\son[a-z]+\s*=`).Match(html) {
+		t.Fatal("页面仍包含内联事件")
 	}
 }

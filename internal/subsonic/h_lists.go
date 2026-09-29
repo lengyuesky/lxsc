@@ -12,8 +12,8 @@ func (s *Server) getAlbumList(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
 	typ := param(r, "type")
-	size := paramInt(r, "size", 10)
-	offset := paramInt(r, "offset", 0)
+	size := paramCount(r, "size", 10)
+	offset := paramOffset(r, "offset")
 	var infos []*music.Info
 	switch typ {
 	case "recent":
@@ -89,7 +89,7 @@ func (s *Server) writeAlbumList(w http.ResponseWriter, r *http.Request, rc *reqC
 func (s *Server) getRandomSongs(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
-	size := paramInt(r, "size", 10)
+	size := paramCount(r, "size", 10)
 	// 随机歌曲只来自用户资料库；打开该接口不应触发在线榜单扫描。
 	infos := s.libraryTracks(rc, u.ID)
 	infos = dedupe(infos)
@@ -104,8 +104,8 @@ func (s *Server) getSongsByGenre(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
 	genre := param(r, "genre")
-	count := paramInt(r, "count", 10)
-	offset := paramInt(r, "offset", 0)
+	count := paramCount(r, "count", 10)
+	offset := paramOffset(r, "offset")
 	var infos []*music.Info
 	for _, in := range s.libraryTracks(rc, u.ID) {
 		if music.PlatformName(in.Source()) == genre {
