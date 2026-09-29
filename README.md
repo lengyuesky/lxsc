@@ -227,7 +227,7 @@ bash scripts/check.sh --race
 GOTOOLCHAIN=go1.27.0 node scripts/licenses.mjs --check
 ```
 
-许可检查前需用固定 Bun 安装依赖并重建 JS；Node 验证使用 26.8.1，标准库许可归档对应 Go 1.27.0。
+许可检查前需用固定 Bun 安装依赖并重建 JS；Node 验证使用 24.21.0 LTS，标准库许可归档对应 Go 1.27.0。Playwright 1.58.2 的浏览器归档解包在 Node 26 下可能挂起，请使用上述固定 LTS 版本。
 
 自动回归使用临时数据库、可控上游和测试音源，不需要真实音乐资源。Node 仅用于前端测试，不是服务运行或 Go 构建依赖。
 
@@ -235,7 +235,7 @@ GOTOOLCHAIN=go1.27.0 node scripts/licenses.mjs --check
 
 ```bash
 npm --prefix tests/web ci --ignore-scripts
-node tests/web/node_modules/playwright/cli.js install chromium
+node tests/web/node_modules/playwright/cli.js install --only-shell chromium
 node tests/web/browser.cjs
 # 若 Playwright 不在默认模块路径，指定其绝对包路径；也可复用已安装的 Chromium：
 LXSC_PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \

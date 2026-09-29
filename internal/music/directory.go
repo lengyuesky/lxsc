@@ -92,15 +92,16 @@ func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMe
 		call = &requestCall{done: make(chan struct{})}
 		g.m[key] = call
 		go func() {
-			defer permit.Release()
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					call.data = nil
 					call.err = fmt.Errorf("在线目录请求异常: %v", recovered)
 				}
-				close(call.done)
+				// 先移除已结束请求并归还额度，再通知等待者；立即重试不能复用旧错误或误报繁忙。
 				g.mu.Lock()
 				delete(g.m, key)
+				permit.Release()
+				close(call.done)
 				g.mu.Unlock()
 			}()
 			waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

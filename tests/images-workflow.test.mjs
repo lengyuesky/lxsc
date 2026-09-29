@@ -42,6 +42,18 @@ test('竞态检测、浏览器与基准证据进入发布门禁', () => {
   assert.doesNotMatch(check, /go (?:test|vet) \.\/\.\.\./)
 })
 
+test('浏览器使用固定 Node LTS，并限制安装时间且保留发布门禁', () => {
+  const browser = workflow.split('\n  browser:')[1].split('\n  build-only:')[0]
+  const nodeVersions = [...workflow.matchAll(/node-version: '([^']+)'/g)].map(match => match[1])
+  assert.deepEqual(nodeVersions, ['24.21.0', '24.21.0'])
+  assert.match(browser, /安装锁定的浏览器测试依赖\n\s+timeout-minutes: 3/)
+  assert.match(browser, /安装匹配版本的 Chromium Headless Shell\n\s+timeout-minutes: 5/)
+  assert.match(browser, /DEBUG: pw:install/)
+  assert.match(browser, /PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '60000'/)
+  assert.match(browser, /playwright\/cli\.js install --with-deps --only-shell chromium/)
+  assert.doesNotMatch(browser, /continue-on-error|\|\|\s*true|LXSC_CHROMIUM_PATH/)
+})
+
 test('Docker 构建使用固定 Bun、严格锁文件、交叉编译并随附许可', () => {
   const dockerfile = read('Dockerfile')
   assert.match(dockerfile, /FROM --platform=\$BUILDPLATFORM oven\/bun:1\.3\.14 AS js/)

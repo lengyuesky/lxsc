@@ -29,10 +29,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: 安装 Node
+      - name: 安装 Node LTS
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '26.8.1'
+          node-version: '24.21.0'
       - name: 安装固定版本 Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -74,14 +74,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: 安装 Node
+      - name: 安装 Node LTS
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '26.8.1'
+          # Playwright 1.58.2 的归档解包在 Node 26 下可能挂起，使用已验证的 LTS。
+          node-version: '24.21.0'
       - name: 安装锁定的浏览器测试依赖
-        run: |
-          npm --prefix tests/web ci --ignore-scripts
-          node tests/web/node_modules/playwright/cli.js install --with-deps chromium
+        timeout-minutes: 3
+        run: npm --prefix tests/web ci --ignore-scripts
+      - name: 安装匹配版本的 Chromium Headless Shell
+        timeout-minutes: 5
+        env:
+          DEBUG: pw:install
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '60000'
+        run: node tests/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
       - name: 验证播放、权限、统计和页面竞态
         env:
           LXSC_BROWSER_ARTIFACT_DIR: ${{ runner.temp }}/lxsc-browser

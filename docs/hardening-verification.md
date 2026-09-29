@@ -63,3 +63,19 @@ npm --prefix tests/web ci --ignore-scripts
 node tests/web/node_modules/playwright/cli.js install chromium
 node tests/web/browser.cjs
 ```
+
+## 2026-09-29 镜像工作流故障修复
+
+`c4a4168` 的 [Actions 运行 36561271016](https://github.com/lengyuesky/lxsc/actions/runs/36561271016) 没有进入镜像发布，原因有两项：
+
+- `TestCanceledRemoteErrorIsNotNegativeCached` 失败。共享目录请求先关闭完成通道，随后才移除在途记录并释放额度；等待者立即重试时可能拿到上一请求的取消错误，或遇到尚未释放的额度。现将删除记录、释放额度、通知完成放在同一收尾临界区，先清理后通知。新增成功／取消／超时／异常四类连续立即重试回归，修复前可复现额度残留，修复后重复 100 轮通过。
+- 浏览器任务在下载 Chromium 100% 后挂起，20 分钟超时；上一运行也有相同现象。同一 Playwright 1.58.2 浏览器归档在本地 Node 26.10.0 解包时无法完成，在 Node 24.21.0 下正常完成。CI 两处 Node 统一固定为 24.21.0 LTS，浏览器仅安装匹配的 Headless Shell；npm 安装及浏览器安装分别设置 3／5 分钟步骤期限，并保留安装详细日志和连接超时。没有跳过浏览器测试、放宽发布门禁或修改 Docker 发布权限。
+
+修复后的本地验证：
+
+- `scripts/check.sh --race` 完整通过，含 Go 竞态检测、vet 和 54 项 Node 单元测试。
+- 在全新临时浏览器目录中，以 Node 24.21.0 下载、解包并校验 Playwright 1.58.2 配套的 Chromium Headless Shell 1208 和 FFmpeg 1011，安装成功。
+- 使用上述锁定配套版本、不指定 `LXSC_CHROMIUM_PATH`，48 项浏览器验收全部通过，证据目录 `/tmp/lxsc-ci-node24-browser`。
+- Bun 锁定安装、重建 JS 与提交产物一致；Go 1.27.0 许可检查通过。
+
+以上均不修改生产数据或运行容器；远程镜像是否发布以修复提交对应的 Actions 结果为准。
