@@ -405,15 +405,16 @@ func (d *DB) CleanupUnreferencedMetadata(ctx context.Context) (MetadataCleanup, 
 	}
 	defer tx.Rollback()
 
+	// 收藏专辑的 JSON 引用集合只展开一次；排除 null，避免 NOT IN 的三值逻辑阻止清理。
 	res, err := tx.ExecContext(ctx, `DELETE FROM tracks
 		WHERE NOT EXISTS (SELECT 1 FROM playlist_tracks p WHERE p.track_id = tracks.id)
 		  AND NOT EXISTS (SELECT 1 FROM stars s WHERE s.kind = 'track' AND s.item_id = tracks.id)
 		  AND NOT EXISTS (SELECT 1 FROM history h WHERE h.track_id = tracks.id)
-		  AND NOT EXISTS (
-			SELECT 1 FROM stars s
+		  AND tracks.id NOT IN (
+			SELECT CAST(j.value AS TEXT) FROM stars s
 			JOIN albums a ON a.id = s.item_id
 			JOIN json_each(CASE WHEN json_valid(a.json) THEN a.json ELSE '[]' END) j
-			WHERE s.kind = 'album' AND CAST(j.value AS TEXT) = tracks.id
+			WHERE s.kind = 'album' AND j.value IS NOT NULL
 		  )`)
 	if err != nil {
 		return out, err

@@ -21,14 +21,25 @@ test('所有第三方 Actions 均固定到已记录的官方仓库完整提交',
 test('PR 构建没有登录、推送或包写入权限，发布必须等待检查', () => {
   const buildOnly = workflow.split('\n  build-only:')[1].split('\n  publish:')[0]
   const publish = workflow.split('\n  publish:')[1]
-  assert.match(buildOnly, /needs: check/)
+  assert.match(buildOnly, /needs: \[check, browser\]/)
   assert.match(buildOnly, /github\.event_name == 'pull_request'/)
   assert.match(buildOnly, /push: false/)
   assert.doesNotMatch(buildOnly, /login-action|packages: write|secrets\./)
-  assert.match(publish, /needs: check/)
+  assert.match(publish, /needs: \[check, browser\]/)
   assert.match(publish, /github\.event_name != 'pull_request'/)
   assert.match(publish, /packages: write/)
   assert.match(publish, /\$\{GITHUB_REPOSITORY,,\}/)
+})
+
+test('竞态检测、浏览器与基准证据进入发布门禁', () => {
+  assert.match(workflow, /bash scripts\/check\.sh --race/)
+  assert.match(workflow, /npm --prefix tests\/web ci --ignore-scripts/)
+  assert.match(workflow, /run: node tests\/web\/browser\.cjs/)
+  assert.match(workflow, /name: browser-results/)
+  assert.match(workflow, /name: performance-baseline/)
+  const check = read('scripts/check.sh')
+  assert.match(check, /\.\/cmd\/\.\.\. \.\/internal\/\.\.\. \.\/tests\/web\/fixture\/\.\.\./)
+  assert.doesNotMatch(check, /go (?:test|vet) \.\/\.\.\./)
 })
 
 test('Docker 构建使用固定 Bun、严格锁文件、交叉编译并随附许可', () => {

@@ -1,5 +1,12 @@
 [
   {
+    "repository": "actions/upload-artifact",
+    "tag": "v4.6.2",
+    "commit": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "verifiedAt": "2026-09-29",
+    "referenceURL": "https://github.com/actions/upload-artifact/tree/v4.6.2"
+  },
+  {
     "repository": "actions/checkout",
     "tag": "v7.0.1",
     "commit": "3d3c42e5aac5ba805825da76410c181273ba90b1",

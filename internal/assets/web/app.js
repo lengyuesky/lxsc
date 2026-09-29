@@ -1,37 +1,4 @@
 // lxsc 统一控制台脚本（无框架）
-const $ = s => document.querySelector(s)
-const sessionState = { me: null, defaultPublic: false, epoch: 0, requests: new Set() }
-const isAbort = error => error?.name === 'AbortError'
-const requestAPI = async (base, path, opts = {}) => {
-  const epoch = sessionState.epoch, controller = new AbortController()
-  const abort = () => controller.abort()
-  if (opts.signal?.aborted) abort()
-  else opts.signal?.addEventListener('abort', abort, { once: true })
-  sessionState.requests.add(controller)
-  try {
-    const o = { ...opts, headers: { ...opts.headers }, credentials: 'same-origin', signal: controller.signal }
-    delete o.onEvent
-    if (o.body && !(o.body instanceof FormData)) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(o.body) }
-    const r = await fetch(base + path, o)
-    if (r.ok && opts.onEvent) {
-      return await LXSCSearch.readEvents(r.body, event => {
-        if (epoch !== sessionState.epoch || controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError')
-        opts.onEvent(event)
-      })
-    }
-    const d = await r.json().catch(() => ({}))
-    if (epoch !== sessionState.epoch || controller.signal.aborted) throw new DOMException('请求已取消', 'AbortError')
-    if (r.status === 401 && path !== '/login') showLogin()
-    if (!r.ok) { const error = new Error(d.error || r.statusText); error.status = r.status; throw error }
-    return d
-  } finally {
-    sessionState.requests.delete(controller)
-    opts.signal?.removeEventListener('abort', abort)
-  }
-}
-const authAPI = (path, opts) => requestAPI('/api/auth', path, opts)
-const adminAPI = (path, opts) => requestAPI('/api/admin', path, opts)
-const playlistAPI = (path, opts) => requestAPI('/api/app', path, opts)
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]))
 const platName = { wy: '网易云', tx: 'QQ音乐', kw: '酷我', kg: '酷狗', mg: '咪咕', local: '本地' }
 
@@ -195,43 +162,6 @@ async function testSource(id) {
     const r = await adminAPI('/sources/' + id + '/test', { method: 'POST', body: {} })
     box.innerHTML = '<div class="table-wrap sm"><table><thead><tr><th>平台</th><th>歌曲</th><th>结果</th><th>耗时</th></tr></thead><tbody>' + Object.entries(r).map(([p, v]) => `<tr><td>${platName[p] || p}</td><td>${esc(v.song || '')}</td><td>${v.ok ? `<span class="badge ok">成功 ${esc(v.quality)}</span> <a href="${esc(v.url)}" target="_blank" rel="noopener">打开链接</a>` : `<span class="badge err">失败</span> <span class="err">${esc(v.error)}</span>`}</td><td class="muted">${v.ms ?? ''} ms</td></tr>`).join('') + '</tbody></table></div>'
   } catch (err) { box.innerHTML = `<div class="note err">${esc(err.message)}</div>` }
-}
-
-// ---- 用户 ----
-let usersCache = []
-async function loadUsers() {
-  usersCache = await adminAPI('/users')
-  $('#userTable tbody').innerHTML = usersCache.length ? usersCache.map(u => `<tr><td class="muted">${u.id}</td><td><b>${esc(u.name)}</b></td><td>${u.isAdmin ? '<span class="badge pri">管理员</span>' : '<span class="badge off">普通用户</span>'}</td><td><code>${esc(u.quality)}</code></td>
-    <td class="actions"><button class="sec sm" onclick="editUser(${u.id})">编辑</button><button class="sec sm" onclick="apiKey(${u.id})">生成 API Key</button><button class="danger sm" onclick="deleteUser(${u.id})">删除</button></td></tr>`).join('') : '<tr><td colspan="5" class="muted center">暂无用户</td></tr>'
-}
-async function createUser(e) {
-  e.preventDefault()
-  const f = new FormData(e.target)
-  try { await adminAPI('/users', { method: 'POST', body: { name: f.get('name'), password: f.get('password'), quality: f.get('quality'), isAdmin: f.get('isAdmin') === 'on' } }); e.target.reset(); toast('用户已创建'); loadUsers() } catch (err) { toast(err.message, true) }
-  return false
-}
-function editUser(id) {
-  const u = usersCache.find(x => x.id === id); if (!u) return
-  const d = $('#userDialog'), f = d.querySelector('form')
-  f.reset()
-  f.elements.id.value = u.id
-  f.elements.name.value = u.name
-  f.elements.quality.value = u.quality
-  f.elements.isAdmin.checked = !!u.isAdmin
-  d.showModal()
-}
-async function submitUser(e) {
-  e.preventDefault()
-  const f = e.target
-  try {
-    await adminAPI('/users/' + f.elements.id.value, { method: 'PUT', body: { name: f.elements.name.value, password: f.elements.password.value, quality: f.elements.quality.value, isAdmin: f.elements.isAdmin.checked } })
-    $('#userDialog').close(); toast('已保存'); loadUsers()
-  } catch (err) { toast(err.message, true) }
-  return false
-}
-async function deleteUser(id) { if (!confirm('确定删除该用户及其歌单/收藏？')) return; try { await adminAPI('/users/' + id, { method: 'DELETE' }); toast('用户已删除'); loadUsers() } catch (err) { toast(err.message, true) } }
-async function apiKey(id) {
-  try { const r = await adminAPI('/users/' + id + '/apikey', { method: 'POST' }); $('#keyValue').value = r.apiKey; $('#keyDialog').showModal(); $('#keyValue').select() } catch (err) { toast(err.message, true) }
 }
 
 // ---- 备份 ----
@@ -611,16 +541,6 @@ async function saveSettings(e) {
     }
   }
   return false
-}
-async function cleanupMetadata() {
-  if (!confirm('确定清理无引用元数据并压缩数据库？歌单、收藏和播放历史不会被删除。')) return
-  try {
-    const r = await adminAPI('/metadata/cleanup', { method: 'POST', body: {} })
-    const c = r.cleanup || {}
-    toast(`已清理 ${c.tracks || 0} 首歌曲、${c.albums || 0} 个专辑、${c.artists || 0} 个歌手缓存`)
-    if (r.warning) toast(r.warning, true)
-    await loadDashboard()
-  } catch (err) { toast(err.message, true) }
 }
 
 // ---- 日志 ----

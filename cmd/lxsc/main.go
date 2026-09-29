@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -26,6 +25,7 @@ import (
 	"lxsc/internal/config"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/logbuf"
 	"lxsc/internal/music"
@@ -67,12 +67,6 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	if cfgPath == "" {
-		// 数据目录下的 config.yaml 也会被读取
-		if c2, err := config.Load(filepath.Join(cfg.DataDir, "config.yaml")); err == nil {
-			cfg = c2
-		}
-	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return err
 	}
@@ -87,8 +81,9 @@ func run(cfgPath string) error {
 		}
 	}()
 	if appliedRestore != nil && cfgPath == "" {
-		if restored, loadErr := config.Load(filepath.Join(cfg.DataDir, "config.yaml")); loadErr == nil {
-			cfg = restored
+		cfg, err = config.Load(filepath.Join(cfg.DataDir, "config.yaml"))
+		if err != nil {
+			return err
 		}
 	}
 
@@ -121,12 +116,8 @@ func run(cfgPath string) error {
 		return err
 	}
 	ctx := context.Background()
-	if n, _ := database.CountUsers(ctx); n == 0 {
-		enc, _ := box.Encrypt(cfg.AdminPassword)
-		if _, err := database.CreateUser(ctx, cfg.AdminUser, enc, true, "320k"); err != nil {
-			return fmt.Errorf("创建管理员失败: %w", err)
-		}
-		log.Info("已创建管理员账号", "user", cfg.AdminUser)
+	if err := ensureAdmin(ctx, database, box, cfg, log); err != nil {
+		return err
 	}
 	st, err := settings.New(ctx, database)
 	if err != nil {
@@ -181,16 +172,24 @@ func run(cfgPath string) error {
 
 	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
 	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}
-	webFS, err := fs.Sub(assets.Web, "web")
+	webHandler, err := assets.WebHandler()
 	if err != nil {
 		return err
 	}
-	webHandler := http.FileServer(http.FS(webFS))
+	var proxyRanges []string
+	if cfg.TrustProxy {
+		proxyRanges = cfg.TrustedProxies
+	}
+	prefixes, err := httpguard.TrustedPrefixes(proxyRanges)
+	if err != nil {
+		return err
+	}
 
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	r.Use(httpguard.ProxyHeaders(prefixes))
 	r.Use(middleware.Recoverer)
 	r.Use(requestLogger(log))
+	r.Use(httpguard.LimitIO)
 	r.Use(cors)
 	r.Get("/healthz", healthHandler(database, sdkPool))
 	r.Mount("/rest", sub.Routes())
@@ -205,7 +204,7 @@ func run(cfgPath string) error {
 	r.Handle("/", webHandler)
 	r.Handle("/*", webHandler)
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: r, ReadHeaderTimeout: 15 * time.Second}
+	srv := &http.Server{Addr: cfg.Listen, Handler: r, ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("监听 %s 失败: %w", cfg.Listen, err)

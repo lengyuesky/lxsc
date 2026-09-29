@@ -195,7 +195,7 @@
 
     <section id="tab-users" class="tab admin-only">
       <div class="page-head"><div><h2>用户</h2><p>Subsonic 客户端与控制台使用的登录账号</p></div></div>
-      <form onsubmit="return createUser(event)" class="card toolbar"><input name="name" placeholder="用户名" required><input name="password" type="password" placeholder="密码" required><select name="quality"><option value="128k">128k</option><option value="320k" selected>320k</option><option value="flac">flac</option><option value="flac24bit">flac24bit</option></select><label class="inline"><input type="checkbox" name="isAdmin">管理员</label><button type="submit"><svg class="icon"><use href="#i-plus"/></svg>新建用户</button></form>
+      <form id="createUserForm" class="card toolbar"><input name="name" placeholder="用户名" required><input name="password" type="password" placeholder="密码" required><select name="quality"><option value="128k">128k</option><option value="320k" selected>320k</option><option value="flac">flac</option><option value="flac24bit">flac24bit</option></select><label class="inline"><input type="checkbox" name="isAdmin">管理员</label><button type="submit"><svg class="icon"><use href="#i-plus"/></svg>新建用户</button></form>
       <div class="table-wrap"><table id="userTable"><thead><tr><th style="width:60px">ID</th><th>用户名</th><th>角色</th><th>默认音质</th><th class="right">操作</th></tr></thead><tbody></tbody></table></div>
     </section>
 
@@ -220,7 +220,7 @@
         </div>
         <div class="form-actions"><button type="submit">保存设置</button><span id="settingsMsg" class="ok"></span></div>
       </form>
-      <div class="card"><h4 class="card-title">元数据维护</h4><p class="muted hint">删除未被歌单、收藏、播放历史或收藏专辑引用的临时歌曲、专辑与歌手缓存，并压缩数据库。不会删除用户歌单和收藏。</p><button type="button" class="danger" onclick="cleanupMetadata()">清理无引用元数据</button></div>
+      <div class="card"><h4 class="card-title">元数据维护</h4><p class="muted hint">清理无引用元数据不会删除歌单和收藏，释放的空闲页可被后续写入复用。数据库压缩需单独在维护窗口执行，期间业务写入可能暂停，请先备份。</p><div class="actions"><button id="cleanupMetadataButton" type="button" class="danger">清理无引用元数据</button><button id="compactMetadataButton" type="button" class="sec">维护：压缩数据库</button></div></div>
       <p class="muted hint">监听端口、数据目录、上游代理等启动项通过环境变量或 config.yaml 配置，修改后需重启。</p>
     </section>
 
@@ -264,7 +264,7 @@
   </aside>
 </div>
 
-<dialog id="userDialog"><form method="dialog" class="dialog-form" onsubmit="return submitUser(event)"><h3>编辑用户</h3><input type="hidden" name="id"><label>用户名<input name="name" required></label><label>新密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label><label>默认音质<select name="quality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label class="switch"><span>管理员</span><input type="checkbox" name="isAdmin"></label><div class="dialog-actions"><button type="button" class="sec" onclick="$('#userDialog').close()">取消</button><button type="submit">保存</button></div></form></dialog>
+<dialog id="userDialog"><form id="editUserForm" method="dialog" class="dialog-form"><h3>编辑用户</h3><input type="hidden" name="id"><label>用户名<input name="name" required></label><label>新密码<input name="password" type="password" autocomplete="new-password" placeholder="留空则不修改"></label><label>默认音质<select name="quality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label class="switch"><span>管理员</span><input type="checkbox" name="isAdmin"></label><div class="dialog-actions"><button type="button" class="sec" onclick="$('#userDialog').close()">取消</button><button type="submit">保存</button></div></form></dialog>
 <dialog id="keyDialog"><div class="dialog-form"><h3>API Key</h3><p class="muted">用于 OpenSubsonic 的 <code>apiKey</code> 参数，仅显示一次，请妥善保存。</p><div class="kv"><input id="keyValue" readonly class="mono"><button type="button" class="sec" onclick="copyText($('#keyValue').value)"><svg class="icon"><use href="#i-copy"/></svg>复制</button></div><div class="dialog-actions"><button type="button" onclick="$('#keyDialog').close()">关闭</button></div></div></dialog>
 
 <dialog id="collectDialog"><form id="collectForm" class="dialog-form"><h3>收藏到歌单</h3><p id="collectSong" class="song-sub"></p><label>收藏方式<select name="mode"><option value="existing">选择已有歌单</option><option value="create">新建歌单并收藏</option></select></label><label id="collectTargetWrap">目标歌单<select name="playlistId" aria-label="目标歌单"></select></label><div id="collectCreateFields" class="hidden"><label>歌单名称<input name="name" maxlength="100" autocomplete="off"></label><label class="switch"><span>公开歌单<small>新歌单归属当前登录用户</small></span><input name="public" type="checkbox"></label></div><p id="collectHint" class="muted hint"></p><p id="collectError" class="err" role="alert"></p><div class="dialog-actions"><button id="collectCancel" type="button" class="sec">取消</button><button id="collectSubmit" type="submit">收藏</button></div></form></dialog>
@@ -275,7 +275,10 @@
 <script src="board-settings.js"></script>
 <script src="search.js"></script>
 <script src="playlist-tracks.js"></script>
+<script src="api.js"></script>
+<script src="users.js"></script>
 <script src="app.js"></script>
+<script src="maintenance.js"></script>
 <script src="debug.js"></script>
 <script src="listening.js"></script>
 <script src="music-ui.js"></script>

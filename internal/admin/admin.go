@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -30,19 +31,20 @@ import (
 
 // Server 管理服务
 type Server struct {
-	DB       *db.DB
-	Sources  *js.SourceManager
-	Catalog  *music.Catalog
-	Settings *settings.Store
-	Secret   *secret.Box
-	Logs     *logbuf.Buffer
-	Log      *slog.Logger
-	HTTP     *http.Client
-	Version  string
-	StartAt  time.Time
-	Auth     *webauth.Manager
-	Backup   *backup.Service
-	Debug    *diagnostics.Server
+	DB          *db.DB
+	Sources     *js.SourceManager
+	Catalog     *music.Catalog
+	Settings    *settings.Store
+	Secret      *secret.Box
+	Logs        *logbuf.Buffer
+	Log         *slog.Logger
+	HTTP        *http.Client
+	Version     string
+	StartAt     time.Time
+	Auth        *webauth.Manager
+	Backup      *backup.Service
+	Debug       *diagnostics.Server
+	maintenance atomic.Bool
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -83,6 +85,7 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/settings", s.putSettings)
 	r.Get("/boards", s.getBoards)
 	r.Post("/metadata/cleanup", s.cleanupMetadata)
+	r.Post("/metadata/compact", s.compactMetadata)
 	r.Get("/users", s.listUsers)
 	r.Post("/users", s.createUser)
 	r.Put("/users/{id}", s.updateUser)
@@ -199,17 +202,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cleanupMetadata(w http.ResponseWriter, r *http.Request) {
+	if !s.maintenance.CompareAndSwap(false, true) {
+		fail(w, http.StatusConflict, "正在执行数据库维护")
+		return
+	}
+	defer s.maintenance.Store(false)
 	result, err := s.DB.CleanupUnreferencedMetadata(r.Context())
 	if err != nil {
 		fail(w, 500, "清理元数据失败: "+err.Error())
 		return
 	}
 	s.Catalog.PurgeMetadataCaches()
-	if err := s.DB.Compact(r.Context()); err != nil {
-		s.Log.Warn("压缩数据库失败", "err", err)
-		writeJSON(w, 200, map[string]any{"cleanup": result, "warning": "元数据已清理，但数据库空间暂未完全回收: " + err.Error()})
-		return
-	}
 	s.Log.Info("已清理无引用元数据", "tracks", result.Tracks, "albums", result.Albums, "artists", result.Artists)
 	writeJSON(w, 200, map[string]any{"cleanup": result})
 }

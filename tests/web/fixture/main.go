@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"math"
 	"net/http"
@@ -26,6 +25,7 @@ import (
 	"lxsc/internal/assets"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/logbuf"
 	"lxsc/internal/music"
@@ -171,17 +171,19 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 	media := &subsonic.Server{Diagnostics: debug.Events, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, HTTP: client}
 	app := &portal.Server{DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Stream: media.ServeWebStream}
 	management := &admin.Server{Debug: debug, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Sources: sources, Logs: logbuf.New(100), HTTP: client, Version: "浏览器测试", StartAt: time.Now()}
-	web, err := fs.Sub(assets.Web, "web")
+	web, err := assets.WebHandler()
 	if err != nil {
 		return err
 	}
 	r := chi.NewRouter()
+	r.Use(httpguard.ProxyHeaders(nil))
+	r.Use(httpguard.LimitIO)
 	r.Mount("/api/auth", authServer.Routes())
 	r.Mount("/api/app", app.Routes())
 	r.Mount("/api/admin", management.Routes())
 	r.Mount("/api/debug", debug.Routes())
 	r.Mount("/rest", media.Routes())
-	r.Handle("/*", http.FileServer(http.FS(web)))
+	r.Handle("/*", web)
 	server := httptest.NewServer(r)
 	defer server.Close()
 	_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"url": server.URL, "upstreamURL": upstream.URL})

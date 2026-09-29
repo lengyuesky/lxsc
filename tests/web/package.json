@@ -1,0 +1,11 @@
+{
+  "name": "lxsc-browser-tests",
+  "private": true,
+  "description": "仅用于隔离浏览器验收，不随运行镜像分发",
+  "devDependencies": {
+    "playwright": "1.58.2"
+  },
+  "scripts": {
+    "test:browser": "node browser.cjs"
+  }
+}

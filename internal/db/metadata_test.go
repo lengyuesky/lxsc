@@ -37,7 +37,7 @@ func TestCleanupUnreferencedMetadata(t *testing.T) {
 	if err := database.AddHistory(ctx, user.ID, "tr-wy-history", 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.UpsertAlbum(ctx, "al-wy-1", "wy", "收藏专辑", "歌手", []byte(`["tr-wy-album"]`)); err != nil {
+	if err := database.UpsertAlbum(ctx, "al-wy-1", "wy", "收藏专辑", "歌手", []byte(`["tr-wy-album",null]`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Star(ctx, user.ID, "al-wy-1", "album"); err != nil {

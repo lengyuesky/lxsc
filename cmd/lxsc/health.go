@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"lxsc/internal/config"
@@ -49,11 +48,6 @@ func checkHealth(cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
-	}
-	if cfgPath == "" {
-		if local, err := config.Load(filepath.Join(cfg.DataDir, "config.yaml")); err == nil {
-			cfg = local
-		}
 	}
 	endpoint, err := healthURL(cfg.Listen)
 	if err != nil {

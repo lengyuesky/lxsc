@@ -2,8 +2,10 @@
 listen: ":8080"
 data_dir: "./data"
 admin_user: "admin"
-admin_password: "admin"      # 仅首次启动创建管理员时使用
+admin_password: ""           # 首次启动必须显式设置至少 12 个字符的密码，已有账号不受影响
 proxy: ""                    # 上游代理，如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
 sdk_workers: 2               # 搜索/歌词等 SDK 的 JS 工作线程数
 log_level: "info"            # debug / info / warn / error
 secret_key: ""               # 口令加密密钥，留空自动生成到 data_dir/secret.key
+trust_proxy: false           # 默认忽略转发头；启用时必须同时明确可信代理网段
+trusted_proxies: []          # 例如 ["127.0.0.1/32", "::1/128"]；Docker 反代应填写其实际地址/网段

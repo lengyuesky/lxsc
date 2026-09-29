@@ -23,6 +23,7 @@ import (
 // Catalog 汇聚 SDK、音源脚本、数据库与缓存，是 Subsonic 层的唯一数据入口
 type Catalog struct {
 	RequestLimits *admission.Gate
+	MediaLimits   *admission.Gate
 	workLimits    *admission.Gate
 	DB            *db.DB
 	SDK           *js.SDKPool
@@ -63,6 +64,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 	v := st.Get()
 	c := &Catalog{
 		RequestLimits: admission.New(16, 32, 4, 4),
+		MediaLimits:   admission.New(32, 0, 4, 0),
 		workLimits:    admission.New(32, 64, 0, 0),
 		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log,
 		tracks:          lru.NewLRU[string, *Info](5000, nil, time.Hour),
@@ -122,7 +124,11 @@ func (c *Catalog) Cache(infos []*Info) {
 	if len(infos) == 0 {
 		return
 	}
-	c.rememberRows(infos)
+	for _, in := range infos {
+		if in != nil && in.Source() != "" && in.Key() != "" {
+			c.tracks.Add(in.TrackID(), in)
+		}
+	}
 	c.rememberArtistRefs(infos, false)
 }
 

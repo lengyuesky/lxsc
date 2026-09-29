@@ -10,6 +10,7 @@ import (
 
 	"lxsc/internal/admission"
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/music"
 )
 
@@ -82,6 +83,16 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	mode := s.Settings.Get().StreamMode
 	// 强制 302 优先于客户端的 proxy 参数，播放和下载均禁止服务器转发。
 	proxy := mode != "force_redirect" && (mode == "proxy" || param(r, "proxy") == "1")
+	if proxy {
+		transferRelease, err := s.Catalog.MediaLimits.Acquire(ctx, u.ID)
+		if err != nil {
+			if r.Context().Err() == nil {
+				fail(w, r, ErrBusy, admission.ErrBusy.Error())
+			}
+			return
+		}
+		defer transferRelease()
+	}
 	res, resp, err := s.prepareMedia(ctx, r, in, quality, proxy)
 	release()
 	// 预算只覆盖取得可用响应头之前的工作，不能截断已经开始的整首音频传输。
@@ -238,7 +249,7 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
 	copyStarted := time.Now()
-	_, err := io.Copy(w, resp.Body)
+	_, err := httpguard.CopyIdle(w, resp.Body, 30*time.Second)
 	s.mediaEvent("proxy_copy", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, resp.StatusCode, copyStarted, err)
 	if err != nil || r.Context().Err() != nil {
 		s.Log.Info("代理传输中断", "id", in.TrackID())
@@ -322,34 +333,4 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.Redirect(w, r, url, http.StatusFound)
-}
-
-func (s *Server) proxyCover(w http.ResponseWriter, r *http.Request, url string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := s.HTTP.Do(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		http.Error(w, "upstream "+resp.Status, http.StatusBadGateway)
-		return
-	}
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "image/jpeg"
-	}
-	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, resp.Body)
 }

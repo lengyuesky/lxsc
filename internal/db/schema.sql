@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
   PRIMARY KEY (playlist_id, position)
 );
 
+CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
+
 CREATE TABLE IF NOT EXISTS stars (
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   item_id    TEXT NOT NULL,
@@ -73,6 +75,8 @@ CREATE TABLE IF NOT EXISTS stars (
   PRIMARY KEY (user_id, item_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_stars_kind_item ON stars(kind, item_id);
+
 CREATE TABLE IF NOT EXISTS history (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -80,6 +84,7 @@ CREATE TABLE IF NOT EXISTS history (
   played_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id, played_at DESC);
+CREATE INDEX IF NOT EXISTS idx_history_track ON history(track_id);
 
 -- 新版首次打开数据库时启用统计，保留原有历史但不回填。
 CREATE TABLE IF NOT EXISTS listening_meta (

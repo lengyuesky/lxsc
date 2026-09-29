@@ -37,12 +37,13 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.3.14'
-      - name: Go 测试与静态检查
+      - name: Go 竞态检测、静态检查与 Node 单元测试
+        run: bash scripts/check.sh --race
+      - name: 记录合成性能基准，不以机器耗时设置脆弱门槛
+        shell: bash
         run: |
-          go test ./...
-          go vet ./...
-      - name: Node 单元测试
-        run: node --test tests/*.test.mjs tests/web/*.test.cjs
+          set -o pipefail
+          go test ./internal/music ./internal/db -run '^$' -bench 'Benchmark(TemporaryCache|ConcurrentSearch|PersistentURLCacheHit|ListeningWithUserLookups)$' -benchmem -benchtime=100x -count=3 | tee "$RUNNER_TEMP/lxsc-benchmarks.txt"
       - name: 按锁文件构建并核对提交的 JS 产物
         working-directory: js-bridge
         run: |
@@ -51,10 +52,51 @@ jobs:
           git diff --exit-code -- bun.lock bundle-inputs.json ../internal/assets/js/
       - name: 核对实际分发依赖和许可原文
         run: node scripts/licenses.mjs --check
+      - name: 保存性能基准
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: performance-baseline
+          path: ${{ runner.temp }}/lxsc-benchmarks.txt
+          retention-days: 14
+
+  browser:
+    name: 隔离 Chromium 验收
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: 检出源码，不保存令牌
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 安装 Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: 安装 Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '26.8.1'
+      - name: 安装锁定的浏览器测试依赖
+        run: |
+          npm --prefix tests/web ci --ignore-scripts
+          node tests/web/node_modules/playwright/cli.js install --with-deps chromium
+      - name: 验证播放、权限、统计和页面竞态
+        env:
+          LXSC_BROWSER_ARTIFACT_DIR: ${{ runner.temp }}/lxsc-browser
+        run: node tests/web/browser.cjs
+      - name: 保存截图与验收结果
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: browser-results
+          path: ${{ runner.temp }}/lxsc-browser
+          retention-days: 14
 
   build-only:
     name: 多架构构建，不登录或推送
-    needs: check
+    needs: [check, browser]
     # PR 和非发布分支的手动运行只有读取权限，与发布任务隔离。
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
@@ -84,7 +126,7 @@ jobs:
 
   publish:
     name: 构建并发布 GHCR
-    needs: check
+    needs: [check, browser]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35

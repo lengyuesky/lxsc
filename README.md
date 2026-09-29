@@ -19,7 +19,7 @@
 ```bash
 mkdir -p lxsc/data/sources && cd lxsc
 curl -fsSLO https://raw.githubusercontent.com/lengyuesky/lxsc/main/docker-compose.yml
-export LXSC_ADMIN_PASSWORD='请替换为自己的强密码'
+export LXSC_ADMIN_PASSWORD='请替换为至少12个字符的强密码'
 # 把音源脚本放到 data/sources/ 目录会在启动时自动导入，也可之后在管理页上传
 docker compose pull
 docker compose up -d
@@ -27,13 +27,13 @@ docker compose up -d
 
 可通过 `export LXSC_IMAGE=ghcr.io/lengyuesky/lxsc:v1.2.3` 选择已发布版本，或用 `sha-<完整提交 SHA>` 固定构建；示例标签不代表该版本已经发布。请确保绑定的 `data/` 可由容器 UID 1000 写入。
 
-访问 `http://<host>:27880/` 进入统一控制台。Compose 要求显式设置非空的 `LXSC_ADMIN_PASSWORD`，请使用强密码；用户名默认为 `admin`。账号由 `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` 控制，仅首次启动创建时生效，不会覆盖已有账号。后续执行 Compose 命令时也需提供该密码变量；可将变量保存到 Compose 文件同目录的 `.env`（仓库已忽略），妥善限制文件权限，不要提交密码。
+访问 `http://<host>:27880/` 进入统一控制台。首次创建账号时必须显式设置至少 12 个字符、且不同于用户名的 `LXSC_ADMIN_PASSWORD`（或配置文件中的 `admin_password`）；程序不再使用默认密码。用户名默认为 `admin`。账号由 `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` 控制，仅首次启动创建时生效，不会覆盖已有账号。后续执行 Compose 命令时也需提供该密码变量；可将变量保存到 Compose 文件同目录的 `.env`（仓库已忽略），妥善限制文件权限，不要提交密码。
 
 所有账号共用同一登录入口：普通用户可使用「歌单」「搜歌」，管理自己的歌单，并浏览、播放其他用户的公开歌单；管理员还会显示概览、音源、用户、备份、设置和日志，并可管理全部用户歌单及替用户创建歌单。
 
 ### Actions 镜像标签与权限
 
-- 推送 `main`：先运行 Go 测试/vet、Node 单元测试、JS 锁定构建与产物一致性检查、许可检查；通过后构建双架构镜像，发布 `latest` 和 `sha-<完整提交 SHA>`。
+- 推送 `main`：先运行 Go 竞态检测/vet、Node 单元测试、独立 Chromium 验收、JS 锁定构建与产物一致性检查、许可检查；通过后构建双架构镜像，发布 `latest` 和 `sha-<完整提交 SHA>`。浏览器截图和合成性能基准作为 Actions 附件保留 14 天，不以固定机器耗时设置性能门槛。
 - 推送 `v*` 标签：执行同样检查，发布与 Git 标签一致的镜像标签（例如 `v1.2.3`）及 SHA 标签，不覆盖 `latest`。
 - PR：执行检查和双架构构建，不登录 GHCR、不推送，任务没有包写入权限。
 - 手动触发：在 [Actions](https://github.com/lengyuesky/lxsc/actions/workflows/images.yml) 选择运行；仅 `main` 或 `v*` 标签会发布，其他分支只检查/构建。
@@ -49,7 +49,7 @@ docker compose up -d
 ```bash
 git clone https://github.com/lengyuesky/lxsc.git
 cd lxsc
-export LXSC_ADMIN_PASSWORD='请替换为自己的强密码'
+export LXSC_ADMIN_PASSWORD='请替换为至少12个字符的强密码'
 export LXSC_IMAGE=lxsc:local
 docker build -t "$LXSC_IMAGE" .
 docker compose up -d --pull never
@@ -65,7 +65,8 @@ docker compose up -d --pull never
 
 ```bash
 go build -o lxsc ./cmd/lxsc
-LXSC_DATA_DIR=./data ./lxsc
+# 仅首次创建账号需要初始化密码，已有账号不会被覆盖。
+LXSC_ADMIN_PASSWORD='请替换为至少12个字符的强密码' LXSC_DATA_DIR=./data ./lxsc
 ```
 
 修改 `js-bridge/` 下的 JS 后需重新打包（固定使用 [Bun](https://bun.sh) **1.3.14**）：
@@ -119,13 +120,17 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 |---|---|---|
 | `LXSC_LISTEN` / `LXSC_PORT` | 监听地址 | `:8080` |
 | `LXSC_DATA_DIR` | 数据目录（数据库、密钥、`sources/`） | `./data`（Docker 为 `/data`） |
-| `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` | 首次启动创建的管理员 | 程序默认 `admin` / `admin`；Compose 要求显式设置密码 |
+| `LXSC_ADMIN_USER` / `LXSC_ADMIN_PASSWORD` | 首次启动创建的管理员 | 用户名 `admin`；无默认密码，首次创建必须设置至少 12 个字符 |
 | `LXSC_PROXY` | 上游代理 `http://` 或 `socks5://` | 空 |
 | `LXSC_SDK_WORKERS` | 搜索/歌词 SDK 的 JS 线程数 | `2` |
 | `LXSC_LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
 | `LXSC_SECRET_KEY` | 用户口令加密密钥（留空自动生成到 `data/secret.key`） | 空 |
+| `LXSC_TRUST_PROXY` | 是否接受可信代理的转发头，启用时必须同时配置可信网段 | `false` |
+| `LXSC_TRUSTED_PROXIES` | 可信反代 CIDR，环境变量用逗号分隔；YAML 为 `trusted_proxies` 数组 | 空 |
 
 运行时设置（搜索平台顺序、播放/封面模式、缓存时间等）在管理页「设置」中修改；榜单展示在「歌单 → 自定义榜单」中配置，保存后立即生效。
+
+反向代理必须覆盖 `X-Forwarded-Proto`，并正确追加或重写 `X-Forwarded-For`；服务端只从明确可信的连接对端开始解析代理链，不再无条件信任 `X-Real-IP` 或客户端自填的首个 XFF。只有真实 TLS 或可信代理标记的 HTTPS 才设置 Secure Cookie。配置文件解析错误会阻止启动，不再静默回退。升级前请检查代理设置，尤其是以前只设置 `trust_proxy: true` 的部署。
 
 ### 榜单展示
 
@@ -149,6 +154,12 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 - **服务端代理转发**（`proxy`）：由服务器拉取并转发音频。
 
 修改对后续播放与下载请求生效，不中断已开始的传输。强制 302 只禁止音频转发；搜索、取链仍在服务器执行，封面方式由独立设置控制。
+
+### 封面代理边界
+
+封面默认仍重定向。启用代理封面时使用独立安全客户端，不读取音源代理配置或环境代理；只连接公网 HTTP(S) 的 80/443 端口，每次重定向及 DNS 结果都重新校验，并连接已校验的 IP。私网、回环、链路本地、元数据和保留地址被拒绝。使用 TUN/fake-IP DNS 的环境需为该进程提供真实公网 DNS 结果，不能通过放行保留地址绕过保护。
+
+单张封面最多 8 MiB、请求最多 12 秒；全局最多 8 路、每用户最多 2 路，不排队。只接受按文件签名识别的 JPEG、PNG、GIF、WebP、BMP、ICO 栅格图片，不转发 SVG/HTML 或上游声明的任意类型，也不转发用户凭据。超载返回 503。此策略不改变音频代理和 WebDAV 的配置。
 
 ### 缓存与播放恢复
 
@@ -181,6 +192,9 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 
 - 网页会话最长保留 7 天，每分钟清理过期项；每用户最多 10 个、全局最多 4096 个，超出时淘汰最早会话。改密和删除用户会撤销已有会话；改密同时撤销该管理员的限时调试令牌。登录按用户名限制每分钟 10 次尝试，成功后清零，超限返回 429 与 `Retry-After`。
 - 脚本 inflate、inflateRaw、gunzip 的解压输出最多 64 MiB，超过后明确报错。
+- Subsonic 失败认证按账户／API Key 摘要每分钟最多 20 次、来源 IP 每分钟最多 60 次；并发先预占额度，成功立即释放，不消耗失败预算。超限返回 429 和 `Retry-After: 60`，保留协议错误结构；失败限频表最多保存 4096 个固定长度摘要键，不保存凭据原文。
+- 音频代理使用独立的全局 32 路／每用户 4 路额度，不排队，从代理准备持续到正文结束；与搜索及取链额度分离。读取或写入连续空闲 30 秒会中止传输，正常持续播放没有总时长限制。性能接口的 `music.admission.media` 展示该额度。
+- 普通请求正文默认最多 2 MiB、读取最多 30 秒、处理与响应最多 60 秒；脚本、歌单导入、备份有单独大小和期限。备份上传仍支持 2 GiB，读取最多 10 分钟，备份操作及响应最多 30 分钟；调试与流式搜索保留更严格的专用限制。连接空闲最多 60 秒。
 - 听歌统计使用最多 2 个独立只读 SQLite 连接，业务写入继续使用单连接；单次统计保持事务快照一致性。
 - `GET /healthz` 无需登录，检查本地数据库和 SDK 初始化状态；健康返回 200，否则返回 503。镜像内置 `lxsc -healthcheck`，每 30 秒检查一次，启动宽限 120 秒；自定义配置使用与主进程相同的 `-config` 或 `LXSC_CONFIG`。该检查不代表第三方平台可用。
 - 管理员登录后可读取 `GET /api/admin/performance`，查看平台搜索、直链解析、播放准备、数据库连接等待、统计查询、SDK 在途调用及内存数据。指标仅保存在当前进程中，不记录查询词或媒体地址。
@@ -192,25 +206,33 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 测量方法、基线和验收范围见 [性能优化验收记录](docs/performance-verification.md)。
 并发与排队默认值、过载测试及第二轮验证见 [并发边界验收记录](docs/overload-verification.md)。
 
+### 数据库维护与静态资源
+
+「设置 → 元数据维护」的清理操作不再隐含 `VACUUM`：释放的空闲页可被后续写入复用，磁盘文件可能不会立即变小。确需回收磁盘空间时，先备份，再在低峰维护窗口点击「维护：压缩数据库」；期间业务写入可能暂停，最长等待 5 分钟，同一进程内的清理／压缩互斥。接口为管理员 `POST /api/admin/metadata/compact`，必须提交 `{"confirm":true}`。启动时自动补齐歌单、收藏、播放历史的引用索引，不删除既有业务数据；首次升级建索引的时间取决于数据规模。
+
+临时歌曲缓存不再生成用完即丢弃的数据库记录及 JSON。前端请求层、用户管理和维护功能拆为独立脚本；嵌入页面自动引用内容版本，版本化资源长期缓存，HTML 和无版本资源重新验证，支持 ETag 与 gzip。未切换前端框架，严格 CSP 的全面改造留待后续消除其余内联事件时实施。
+
+本轮边界、升级注意事项和隔离测试结果见 [安全与资源优化验收](docs/hardening-verification.md)。
+
 ### 开发验证
 
 本次搜歌、网页播放与收藏的交付范围、测试结果及上线边界见 [验收记录](docs/search-playback-verification.md)。
 
 ```bash
-go test ./...
-go test -race ./...
-go vet ./...
-node --test tests/*.test.mjs tests/web/*.test.cjs
-node scripts/licenses.mjs --check
+bash scripts/check.sh
+bash scripts/check.sh --race
+GOTOOLCHAIN=go1.27.0 node scripts/licenses.mjs --check
 ```
 
 许可检查前需用固定 Bun 安装依赖并重建 JS；Node 验证使用 26.8.1，标准库许可归档对应 Go 1.27.0。
 
 自动回归使用临时数据库、可控上游和测试音源，不需要真实音乐资源。Node 仅用于前端测试，不是服务运行或 Go 构建依赖。
 
-本机准备好 Playwright 和 Chromium 后，还可执行真实浏览器验收：
+浏览器验收使用独立锁文件固定 Playwright，不增加服务运行依赖。安装后执行：
 
 ```bash
+npm --prefix tests/web ci --ignore-scripts
+node tests/web/node_modules/playwright/cli.js install chromium
 node tests/web/browser.cjs
 # 若 Playwright 不在默认模块路径，指定其绝对包路径；也可复用已安装的 Chromium：
 LXSC_PLAYWRIGHT_MODULE=/path/to/node_modules/playwright \

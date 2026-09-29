@@ -3,6 +3,7 @@ package subsonic
 import (
 	"context"
 	"crypto/md5"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -48,7 +49,7 @@ func (s *Server) authenticate(r *http.Request) (*db.User, int, string) {
 	}
 	if t, salt := param(r, "t"), param(r, "s"); t != "" && salt != "" {
 		sum := md5.Sum([]byte(pw + salt))
-		if !strings.EqualFold(hex.EncodeToString(sum[:]), t) {
+		if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(strings.ToLower(t))) != 1 {
 			return nil, ErrWrongAuth, "Wrong username or password"
 		}
 		return u, 0, ""
@@ -64,7 +65,7 @@ func (s *Server) authenticate(r *http.Request) (*db.User, int, string) {
 		}
 		p = string(b)
 	}
-	if p != pw {
+	if subtle.ConstantTimeCompare([]byte(p), []byte(pw)) != 1 {
 		return nil, ErrWrongAuth, "Wrong username or password"
 	}
 	return u, 0, ""

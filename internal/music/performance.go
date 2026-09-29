@@ -26,7 +26,7 @@ func (c *Catalog) Performance() map[string]any {
 		search[source] = operation.Snapshot()
 	}
 	out := map[string]any{"search": search, "urlResolve": c.urlMetrics.Snapshot(), "mediaPreparation": c.MediaPreparation.Snapshot(), "urlCache": c.urls.stats(), "searchCache": c.search.stats()}
-	out["admission"] = map[string]any{"requests": c.RequestLimits.Stats(), "upstream": c.workLimits.Stats(), "javascript": js.WorkloadStats()}
+	out["admission"] = map[string]any{"requests": c.RequestLimits.Stats(), "media": c.MediaLimits.Stats(), "upstream": c.workLimits.Stats(), "javascript": js.WorkloadStats()}
 	out["urlPersistence"] = c.urls.persistenceTiming.Snapshot()
 	if c.SDK != nil {
 		out["sdk"] = c.SDK.Performance()

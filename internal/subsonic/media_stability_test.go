@@ -264,6 +264,7 @@ func TestConcurrentProxyRecoverySharesOneRefresh(t *testing.T) {
 	s, user, info := newMediaStabilityServer(t, recoveryScript)
 	// 此用例专门验证二十路共享恢复；默认用户限额由过载用例验证。
 	s.Catalog.RequestLimits = admission.New(32, 32, 32, 32)
+	s.Catalog.MediaLimits = admission.New(32, 0, 32, 0)
 	if _, err := s.Catalog.ResolveURL(context.Background(), info, "320k"); err != nil {
 		t.Fatal(err)
 	}

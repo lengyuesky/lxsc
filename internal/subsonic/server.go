@@ -4,9 +4,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"lxsc/internal/admission"
+	"lxsc/internal/authlimit"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
@@ -23,6 +27,10 @@ type Server struct {
 	Secret      *secret.Box
 	Log         *slog.Logger
 	HTTP        *http.Client // 代理拉流用
+	authLimits  authlimit.Limiter
+	coverOnce   sync.Once
+	coverHTTP   *http.Client
+	coverLimits *admission.Gate
 }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request)
@@ -100,7 +108,17 @@ func (s *Server) Routes() http.Handler {
 			_ = r.ParseForm()
 		}
 		if name != "ping" || param(r, "u") != "" || param(r, "apiKey") != "" {
+			identity := "user:" + param(r, "u")
+			if key := param(r, "apiKey"); key != "" {
+				identity = "key:" + key
+			}
+			finish, allowed := s.authLimits.Begin(identity, r.RemoteAddr, time.Now())
+			if !allowed {
+				writeErr(w, r, ErrAuthLimited, "认证尝试过于频繁，请一分钟后重试")
+				return
+			}
 			u, code, msg := s.authenticate(r)
+			finish(u != nil)
 			if u == nil {
 				if name == "ping" && code == ErrMissingParam {
 					h(w, r)

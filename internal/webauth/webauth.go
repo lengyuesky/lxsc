@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"lxsc/internal/db"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/secret"
 	"lxsc/internal/settings"
 )
@@ -125,7 +126,7 @@ func (m *Manager) User(r *http.Request) *db.User {
 }
 
 func setCookie(w http.ResponseWriter, r *http.Request, token string, maxAge int) {
-	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	secure := httpguard.Secure(r)
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: token, Path: "/", MaxAge: maxAge,
 		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,

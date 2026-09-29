@@ -29,6 +29,7 @@ const (
 	ErrTrial          = 60
 	ErrNotFound       = 70
 	ErrBusy           = -1 // 仅内部区分过载，对外仍使用兼容的通用错误码。
+	ErrAuthLimited    = -2 // 认证限频使用 HTTP 429，协议错误保持兼容。
 )
 
 // M 有序对象：使用 map 但输出时排序键，便于 XML 属性与 JSON 稳定
@@ -55,8 +56,12 @@ func writeOK(w http.ResponseWriter, r *http.Request, name string, payload any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
-	if code == ErrBusy {
-		w.Header().Set("Retry-After", "2")
+	if code == ErrBusy || code == ErrAuthLimited {
+		status, retry := http.StatusServiceUnavailable, "2"
+		if code == ErrAuthLimited {
+			status, retry = http.StatusTooManyRequests, "60"
+		}
+		w.Header().Set("Retry-After", retry)
 		switch detectFormat(r) {
 		case "json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -65,7 +70,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
 		default:
 			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 		}
-		w.WriteHeader(http.StatusServiceUnavailable)
+		w.WriteHeader(status)
 		code = ErrGeneric
 	}
 	writeResp(w, r, "failed", "error", nil, M{"code": code, "message": msg})

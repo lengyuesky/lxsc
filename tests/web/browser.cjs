@@ -138,13 +138,17 @@ async function main() {
     const url = info.url
     browser = await chromium.launch({ headless: true, executablePath: process.env.LXSC_CHROMIUM_PATH || undefined, args: ['--no-sandbox'] })
     admin = await browserRequest.newContext()
-    assert.equal((await admin.post(url + '/api/auth/login', { data: { username: 'admin', password: 'test-password' } })).status(), 200)
+    async function renewAdmin() {
+      // 页面验收会创建超过十个管理员会话；不能依赖最初的控制会话永不被淘汰。
+      assert.equal((await admin.post(url + '/api/auth/login', { data: { username: 'admin', password: 'test-password' } })).status(), 200)
+    }
     async function check(name, action, options = {}) {
       const context = await browser.newContext({ viewport: { width: 1360, height: 900 }, ...options })
       const page = await context.newPage(), errors = []
       page.setDefaultTimeout(8000)
       page.on('pageerror', error => errors.push(error.message))
       try {
+        await renewAdmin()
         await login(page, url)
         await action(page)
         await settle(page)
@@ -159,6 +163,44 @@ async function main() {
         await context.close()
       }
     }
+
+    await check('用户模块事件委托支持创建、编辑与删除', async page => {
+      await adminSettings(page, url)
+      await page.locator('nav [data-tab=users]').click()
+      await page.locator('#createUserForm [name=name]').fill('临时模块验收')
+      await page.locator('#createUserForm [name=password]').fill('test-password')
+      await page.locator('#createUserForm [type=submit]').click()
+      const row = page.locator('#userTable tr').filter({ hasText: '临时模块验收' })
+      await row.locator('[data-user-action=edit]').click()
+      await page.locator('#editUserForm [name=quality]').selectOption('128k')
+      await page.locator('#editUserForm [type=submit]').click()
+      await page.waitForFunction(() => [...document.querySelectorAll('#userTable tr')].some(row => row.textContent.includes('临时模块验收') && row.textContent.includes('128k')))
+      page.once('dialog', dialog => dialog.accept())
+      await row.locator('[data-user-action=delete]').click()
+      await row.waitFor({ state: 'detached' })
+    })
+    await check('清理与压缩分开确认，不自动连带执行', async page => {
+      await adminSettings(page, url)
+      const calls = []
+      await page.route('**/api/admin/metadata/*', route => {
+        calls.push({ url: route.request().url(), body: route.request().postDataJSON() })
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, cleanup: { tracks: 1 } }) })
+      })
+      page.once('dialog', dialog => dialog.dismiss())
+      await page.locator('#compactMetadataButton').click()
+      assert.equal(calls.length, 0)
+      page.once('dialog', dialog => dialog.accept())
+      await page.locator('#cleanupMetadataButton').click()
+      await page.waitForFunction(() => !document.querySelector('#cleanupMetadataButton').disabled)
+      assert.equal(calls.length, 1)
+      assert.ok(calls[0].url.endsWith('/metadata/cleanup'))
+      page.once('dialog', dialog => dialog.accept())
+      await page.locator('#compactMetadataButton').click()
+      await page.waitForFunction(() => !document.querySelector('#compactMetadataButton').disabled)
+      assert.equal(calls.length, 2)
+      assert.ok(calls[1].url.endsWith('/metadata/compact'))
+      assert.deepEqual(calls[1].body, { confirm: true })
+    })
 
     await require('./debug-browser.cjs')({ check, url, artifacts, login })
     await require('./listening-browser.cjs')({ check, url, artifacts, login, search, playSearch, holdResponse })
