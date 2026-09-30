@@ -5,6 +5,8 @@ function sourceCard(s, brief) {
   const st = s.status
   const badge = !s.enabled ? '<span class="badge off">已停用</span>' : !st ? '<span class="badge off">未加载</span>' : st.state === 'ready' ? '<span class="badge ok">就绪</span>' : st.state === 'loading' ? '<span class="badge pri">加载中</span>' : '<span class="badge err">错误</span>'
   const chips = st && st.platforms ? Object.entries(st.platforms).map(([p, c]) => `<span class="chip"><b>${esc(platName[p] || p)}</b><span>${esc((c.qualitys || []).join('/'))}</span></span>`).join('') : ''
+  const h = st?.health
+  const health = h?.samples ? `<div class="note">近一小时最近 ${h.samples} 次解析：成功率 ${Math.round(h.success / h.samples * 100)}% · 平均 ${h.averageMs} ms · 降级 ${h.downgrades} 次<br><small>失败分类：${esc(Object.entries(h.errors || {}).map(([key, count]) => `${({ timeout: '超时', busy: '繁忙', cancelled: '取消', script: '脚本失败' })[key] || key} ${count}`).join(' · ') || '无')}。解析成功不代表客户端实际播放成功；重载后重置。</small></div>` : '<p class="muted hint">暂无近期解析样本</p>'
   const err = st && st.error ? `<div class="note err">${esc(st.error)}</div>` : ''
   const alert = st && st.alert ? `<div class="note warn">脚本提示更新：${esc(st.alert)}</div>` : ''
   const meta = [s.description, s.author, s.homepage ? `<a href="${esc(s.homepage)}" target="_blank" rel="noopener">主页</a>` : ''].map((x, i) => i === 2 ? x : esc(x || '')).filter(Boolean).join(' · ')
@@ -22,7 +24,7 @@ function sourceCard(s, brief) {
       <div class="src-title">${esc(s.name)} ${badge} <span class="ver">v${esc(s.version || st?.version || '')}</span></div>
       ${meta ? `<div class="meta">${meta}</div>` : ''}
     </div></div>
-    <div class="chips">${chips || '<span class="muted hint">无平台信息</span>'}</div>${err}${alert}${actions}</div>`
+    <div class="chips">${chips || '<span class="muted hint">无平台信息</span>'}</div>${err}${alert}${health}${actions}</div>`
 }
 
 async function loadDashboard() {

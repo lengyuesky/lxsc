@@ -28,4 +28,4 @@ function formatTime(value) {
 $('#copyServerURL').addEventListener('click', () => copyText($('#serverUrl').textContent))
 $('#cancelEditUser').addEventListener('click', () => $('#userDialog').close())
 $('#copyAPIKey').addEventListener('click', () => copyText($('#keyValue').value))
-$('#closeAPIKey').addEventListener('click', () => $('#keyDialog').close())
+$('#closeAPIKey').addEventListener('click', () => { clearAPIKeyDialog(); $('#keyDialog').close() })

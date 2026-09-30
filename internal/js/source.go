@@ -82,6 +82,7 @@ type PlatformCap struct {
 
 // SourceStatus 对外展示的音源状态
 type SourceStatus struct {
+	Health    SourceHealth           `json:"health"`
 	ID        int64                  `json:"id"`
 	Name      string                 `json:"name"`
 	Version   string                 `json:"version"`
@@ -96,6 +97,7 @@ type SourceStatus struct {
 
 // loadedSource 已加载的脚本实例
 type loadedSource struct {
+	health    sourceHealth
 	id        int64
 	meta      ScriptMeta
 	priority  int
@@ -304,7 +306,7 @@ func (m *SourceManager) SetPriority(id int64, priority int) {
 }
 
 func (m *SourceManager) statusOf(ls *loadedSource) *SourceStatus {
-	return &SourceStatus{ID: ls.id, Name: ls.meta.Name, Version: ls.meta.Version, Priority: ls.priority, State: ls.state, Error: ls.err, Platforms: ls.platforms, LoadedAt: ls.loadedAt, Alert: ls.alert, Logs: ls.logs.list()}
+	return &SourceStatus{Health: ls.health.snapshot(), ID: ls.id, Name: ls.meta.Name, Version: ls.meta.Version, Priority: ls.priority, State: ls.state, Error: ls.err, Platforms: ls.platforms, LoadedAt: ls.loadedAt, Alert: ls.alert, Logs: ls.logs.list()}
 }
 
 // Status 所有已加载音源状态
@@ -425,7 +427,9 @@ func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string,
 			budget = min(budget, time.Until(deadline)/time.Duration(len(candidates)-index+1))
 		}
 		sourceCtx, cancel := context.WithTimeout(ctx, budget)
+		started := time.Now()
 		result, err := m.musicURLFromSource(sourceCtx, ls, platform, musicInfo, quality)
+		ls.health.record(started, err, result != nil && result.Quality != quality)
 		cancel()
 		if err == nil {
 			return result, nil

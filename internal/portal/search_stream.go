@@ -66,7 +66,7 @@ func (s *Server) searchStream(w http.ResponseWriter, r *http.Request) {
 	if !write(map[string]any{"type": "start", "sources": body.Sources}) {
 		return
 	}
-	s.Catalog.SearchProgress(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Limit: 20}, func(result music.SearchPlatformResult) {
+	s.Catalog.SearchProgress(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Page: body.Page, Limit: 20}, func(result music.SearchPlatformResult) {
 		if r.Context().Err() != nil {
 			return
 		}

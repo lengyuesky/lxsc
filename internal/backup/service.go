@@ -66,10 +66,12 @@ type PendingRestore struct {
 
 // Status 是概览与备份页共用的状态。
 type Status struct {
-	Busy        bool            `json:"busy"`
-	Last        JobStatus       `json:"last"`
-	Pending     *PendingRestore `json:"pending,omitempty"`
-	LastRestore string          `json:"lastRestore,omitempty"`
+	LastSuccessAt int64           `json:"lastSuccessAt"`
+	NextRetryAt   int64           `json:"nextRetryAt"`
+	Busy          bool            `json:"busy"`
+	Last          JobStatus       `json:"last"`
+	Pending       *PendingRestore `json:"pending,omitempty"`
+	LastRestore   string          `json:"lastRestore,omitempty"`
 }
 
 // Service 管理备份生命周期。
@@ -151,6 +153,8 @@ func (s *Service) Status() Status {
 	s.mu.Lock()
 	out := Status{Busy: s.busy, Last: s.last}
 	s.mu.Unlock()
+	out.LastSuccessAt, _ = strconv.ParseInt(s.DB.GetSetting(context.Background(), "backup.webdav.lastSuccessAt", "0"), 10, 64)
+	out.NextRetryAt, _ = strconv.ParseInt(s.DB.GetSetting(context.Background(), "backup.webdav.retryAt", "0"), 10, 64)
 	if b, err := os.ReadFile(s.pendingPath()); err == nil {
 		var p PendingRestore
 		if json.Unmarshal(b, &p) == nil {

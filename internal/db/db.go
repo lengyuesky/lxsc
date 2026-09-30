@@ -67,6 +67,10 @@ func Open(path string) (*DB, error) {
 			return nil, fmt.Errorf("初始化表结构失败: %w (%s)", err, stmt)
 		}
 	}
+	if err := migrate(s); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("数据库迁移失败: %w", err)
+	}
 	if err := initTrackSearch(s); err != nil {
 		s.Close()
 		return nil, err
@@ -301,13 +305,17 @@ func (d *DB) CountUsers(ctx context.Context) (int, error) {
 
 // GetUserByAPIKey 按 API Key 查找用户
 func (d *DB) GetUserByAPIKey(ctx context.Context, key string) (*User, error) {
-	return scanUser(d.sql.QueryRowContext(ctx, `SELECT u.id, u.name, u.password_enc, u.is_admin, u.quality, u.created_at FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.key = ?`, key))
+	digest := keyDigest(key)
+	u, err := scanUser(d.sql.QueryRowContext(ctx, `SELECT u.id, u.name, u.password_enc, u.is_admin, u.quality, u.created_at FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.key=? AND (k.expires_at=0 OR k.expires_at>?)`, digest, now()))
+	if err == nil {
+		_, _ = d.sql.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE key=? AND last_used_at<?`, now(), digest, now()-300)
+	}
+	return u, err
 }
 
 // CreateAPIKey 创建 API Key
 func (d *DB) CreateAPIKey(ctx context.Context, userID int64, key, label string) error {
-	_, err := d.sql.ExecContext(ctx, `INSERT INTO api_keys(key, user_id, label, created_at) VALUES(?,?,?,?)`, key, userID, label, now())
-	return err
+	return d.CreateExpiringAPIKey(ctx, userID, key, label, 0)
 }
 
 // ---------- sources ----------
@@ -428,6 +436,8 @@ func (d *DB) CleanupUnreferencedMetadata(ctx context.Context) (MetadataCleanup, 
 		WHERE NOT EXISTS (SELECT 1 FROM playlist_tracks p WHERE p.track_id = tracks.id)
 		  AND NOT EXISTS (SELECT 1 FROM stars s WHERE s.kind = 'track' AND s.item_id = tracks.id)
 		  AND NOT EXISTS (SELECT 1 FROM history h WHERE h.track_id = tracks.id)
+ AND tracks.id NOT IN (SELECT CAST(j.value AS TEXT) FROM play_queues q JOIN json_each(q.ids) j WHERE j.value IS NOT NULL)
+ AND tracks.id NOT IN (SELECT CAST(j.value AS TEXT) FROM playlist_track_history h JOIN json_each(h.ids) j WHERE j.value IS NOT NULL)
 		  AND tracks.id NOT IN (
 			SELECT CAST(j.value AS TEXT) FROM stars s
 			JOIN albums a ON a.id = s.item_id

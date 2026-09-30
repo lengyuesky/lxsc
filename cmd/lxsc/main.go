@@ -172,6 +172,8 @@ func run(cfgPath string) error {
 
 	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
 	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}
+	stopSubscriptions := portalSrv.StartSubscriptions(ctx)
+	defer stopSubscriptions()
 	webHandler, err := assets.WebHandler()
 	if err != nil {
 		return err

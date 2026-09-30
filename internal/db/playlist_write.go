@@ -79,6 +79,11 @@ func (d *DB) ReplacePlaylistTracksChecked(ctx context.Context, id string, actor 
 	if expectedRevision != nil && *expectedRevision != TracksRevision(current.TrackIDs) {
 		return nil, ErrPlaylistConflict
 	}
+	if !slices.Equal(current.TrackIDs, ids) {
+		if err := savePlaylistHistoryTx(ctx, tx, id, current.TrackIDs); err != nil {
+			return nil, err
+		}
+	}
 	if err := upsertTracksTx(ctx, tx, tracks); err != nil {
 		return nil, err
 	}

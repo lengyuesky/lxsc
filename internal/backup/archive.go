@@ -75,7 +75,7 @@ func (s *Service) CreateArchive(ctx context.Context, password string) (*Archive,
 	}
 
 	now := time.Now()
-	manifest := Manifest{FormatVersion: formatVersion, SchemaVersion: 1, AppVersion: s.Version, CreatedAt: now.Unix(), Encrypted: password != "", Files: map[string]string{}}
+	manifest := Manifest{FormatVersion: formatVersion, SchemaVersion: 3, AppVersion: s.Version, CreatedAt: now.Unix(), Encrypted: password != "", Files: map[string]string{}}
 	stats, _ := s.DB.Statistics(ctx)
 	manifest.Stats = stats
 	if err := filepath.Walk(filesDir, func(path string, info os.FileInfo, walkErr error) error {
@@ -343,7 +343,7 @@ func (s *Service) InspectArchive(ctx context.Context, source, password string) (
 		return Manifest{}, err
 	}
 	manifest.Encrypted = encrypted
-	if manifest.FormatVersion != formatVersion || manifest.SchemaVersion > 1 {
+	if manifest.FormatVersion != formatVersion || manifest.SchemaVersion > 3 {
 		return Manifest{}, errors.New("不支持的备份格式或数据库版本")
 	}
 	if err := validateDatabase(filepath.Join(extract, "files", "database.sqlite")); err != nil {
@@ -389,7 +389,7 @@ func (s *Service) InspectAndStage(ctx context.Context, source, password, sourceN
 		return Manifest{}, err
 	}
 	manifest.Encrypted = encrypted
-	if manifest.FormatVersion != formatVersion || manifest.SchemaVersion > 1 {
+	if manifest.FormatVersion != formatVersion || manifest.SchemaVersion > 3 {
 		return Manifest{}, errors.New("不支持的备份格式或数据库版本")
 	}
 	dbPath := filepath.Join(extract, "files", "database.sqlite")

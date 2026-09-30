@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var backupNamePattern = regexp.MustCompile(`^lxsc-[A-Za-z0-9_.-]+\.lxsc-backup$`)
@@ -333,8 +334,19 @@ func (s *Service) runWebDAVBackupStarted(ctx context.Context, slot string) (err 
 	if warning != "" && s.Log != nil {
 		s.Log.Warn("WebDAV 备份保留清理未完成", "warning", warning)
 	}
+	if err := s.DB.SetSetting(ctx, "backup.webdav.lastSuccessAt", fmt.Sprint(time.Now().Unix())); err != nil {
+		return err
+	}
 	if slot != "" {
-		_ = s.DB.SetSetting(ctx, "backup.webdav.lastSlot", slot)
+		if err := s.DB.SetSetting(ctx, "backup.webdav.lastSlot", slot); err != nil {
+			return err
+		}
+		if err := s.DB.SetSetting(ctx, "backup.webdav.retryAt", "0"); err != nil {
+			return err
+		}
+		if err := s.DB.SetSetting(ctx, "backup.webdav.attempts", "0"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

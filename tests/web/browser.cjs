@@ -143,6 +143,7 @@ async function main() {
       assert.equal((await admin.post(url + '/api/auth/login', { data: { username: 'admin', password: 'test-password' } })).status(), 200)
     }
     async function check(name, action, options = {}) {
+      if (process.env.LXSC_BROWSER_FILTER && !name.includes(process.env.LXSC_BROWSER_FILTER)) return
       const context = await browser.newContext({ viewport: { width: 1360, height: 900 }, ...options })
       await context.addInitScript(() => {
         globalThis.cspViolations = []
@@ -732,6 +733,7 @@ async function main() {
       assert.equal(streams[0].includes('proxy='), false)
     })
 
+    await renewAdmin()
     assert.equal((await admin.put(url + '/api/admin/settings', { data: { streamMode: 'proxy' } })).status(), 200)
     await check('代理真实播放、Range与移动端深色布局', async page => {
       const upstreamRequests = []
@@ -751,6 +753,8 @@ async function main() {
       const last = await page.locator('#searchTable tbody tr').last().boundingBox()
       assert.ok(last.y + last.height <= bar.y + 1, '播放器不应遮挡最后一行')
     }, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', isMobile: true, hasTouch: true })
+    await require('./improvements-browser.cjs')({ check, url, login, search, playSearch, createPlaylist, selectPlaylistUI, artifacts })
+    await require('./six-features-browser.cjs')({ check, url, login, search, playSearch, createPlaylist, selectPlaylistUI, artifacts })
   } finally {
     if (admin) await admin.dispose()
     if (browser) await browser.close()

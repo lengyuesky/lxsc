@@ -14,6 +14,7 @@ type reqCtx struct {
 	ctx           context.Context
 	starred       map[string]int64
 	plays         map[string]int
+	ratings       map[string]int
 	library       []*music.Info
 	libraryLoaded bool
 }
@@ -22,6 +23,7 @@ func (s *Server) newReqCtx(r *http.Request) *reqCtx {
 	rc := &reqCtx{ctx: r.Context()}
 	if u := currentUser(r); u != nil {
 		rc.starred, _ = s.DB.StarredSet(r.Context(), u.ID)
+		rc.ratings, _ = s.DB.Ratings(r.Context(), u.ID)
 	}
 	return rc
 }
@@ -88,6 +90,9 @@ func (s *Server) songObjWithAlbum(rc *reqCtx, in *music.Info, albumOverride stri
 		"displayAlbumArtist": in.PrimarySinger(),
 	}
 	if rc != nil {
+		if rating := rc.ratings[id]; rating > 0 {
+			m["userRating"] = rating
+		}
 		if ts, ok := rc.starred[id]; ok {
 			m["starred"] = fmtTime(ts)
 		}

@@ -32,11 +32,13 @@ func (s *Server) setStar(w http.ResponseWriter, r *http.Request, on bool) {
 			case "track":
 				in, err := s.Catalog.Track(rc.ctx, id)
 				if err != nil {
-					continue
+					writeErr(w, r, ErrGeneric, "读取收藏歌曲失败")
+					return
 				}
 				if err := s.Catalog.RememberSync(rc.ctx, []*music.Info{in}); err != nil {
 					s.Log.Warn("持久化收藏歌曲元数据失败", "id", id, "err", err)
-					continue
+					writeErr(w, r, ErrGeneric, "读取或保存收藏信息失败")
+					return
 				}
 			case "album":
 				var g *albumGroup
@@ -46,11 +48,13 @@ func (s *Server) setStar(w http.ResponseWriter, r *http.Request, on bool) {
 					g = s.albumByID(rc, id)
 				}
 				if g == nil {
-					continue
+					writeErr(w, r, ErrGeneric, "读取或保存收藏信息失败")
+					return
 				}
 				if err := s.Catalog.RememberSync(rc.ctx, g.Songs); err != nil {
 					s.Log.Warn("持久化收藏专辑歌曲失败", "id", id, "err", err)
-					continue
+					writeErr(w, r, ErrGeneric, "读取或保存收藏信息失败")
+					return
 				}
 				ids := make([]string, 0, len(g.Songs))
 				for _, in := range g.Songs {
@@ -58,7 +62,8 @@ func (s *Server) setStar(w http.ResponseWriter, r *http.Request, on bool) {
 				}
 				js, _ := jsonMarshal(ids)
 				if err := s.DB.UpsertAlbum(rc.ctx, id, g.Source, g.Name, g.Artist, js); err != nil {
-					continue
+					writeErr(w, r, ErrGeneric, "读取或保存收藏信息失败")
+					return
 				}
 			case "artist":
 				name, ok := s.Catalog.CachedArtist(id)
@@ -75,16 +80,24 @@ func (s *Server) setStar(w http.ResponseWriter, r *http.Request, on bool) {
 					}
 				}
 				if name == "" {
-					continue
+					writeErr(w, r, ErrGeneric, "读取或保存收藏信息失败")
+					return
 				}
 				js, _ := jsonMarshal(M{"name": name})
 				if err := s.DB.UpsertArtist(rc.ctx, id, "", name, js); err != nil {
-					continue
+					writeErr(w, r, ErrGeneric, "读取或保存收藏信息失败")
+					return
 				}
 			}
-			_ = s.DB.Star(rc.ctx, u.ID, id, kind)
+			if err := s.DB.Star(rc.ctx, u.ID, id, kind); err != nil {
+				writeErr(w, r, ErrGeneric, "保存收藏失败")
+				return
+			}
 		} else {
-			_ = s.DB.Unstar(rc.ctx, u.ID, id)
+			if err := s.DB.Unstar(rc.ctx, u.ID, id); err != nil {
+				writeErr(w, r, ErrGeneric, "取消收藏失败")
+				return
+			}
 		}
 	}
 	writeOK(w, r, "", nil)
@@ -93,7 +106,11 @@ func (s *Server) setStar(w http.ResponseWriter, r *http.Request, on bool) {
 func (s *Server) getStarred(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
-	items, _ := s.DB.ListStarred(rc.ctx, u.ID, "")
+	items, err := s.DB.ListStarred(rc.ctx, u.ID, "")
+	if err != nil {
+		writeErr(w, r, ErrGeneric, "读取收藏失败")
+		return
+	}
 	var trackIDs []string
 	var albums []M
 	var artists []M
@@ -136,6 +153,20 @@ func (s *Server) scrobble(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	submission := param(r, "submission")
 	if submission == "false" {
+		id, client := param(r, "id"), param(r, "c")
+		if len(client) > 200 {
+			writeErr(w, r, ErrGeneric, "客户端名称过长")
+			return
+		}
+		if parsed, ok := music.ParseID(id); !ok || parsed.Kind != music.KindTrack || !music.IsPlatform(parsed.Source) || parsed.Key == "" || len(id) > 1024 {
+			writeErr(w, r, ErrGeneric, "歌曲ID无效")
+			return
+		}
+		if err := s.DB.SetNowPlaying(r.Context(), u.ID, client, id); err != nil {
+			writeErr(w, r, ErrGeneric, "保存正在播放失败")
+			return
+		}
+
 		writeOK(w, r, "", nil)
 		return
 	}
@@ -174,7 +205,10 @@ func (s *Server) scrobble(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		_ = s.DB.AddHistory(r.Context(), u.ID, id, playedAt/1000)
+		if err := s.DB.AddHistory(r.Context(), u.ID, id, playedAt/1000); err != nil {
+			writeErr(w, r, ErrGeneric, "保存播放历史失败")
+			return
+		}
 	}
 	writeOK(w, r, "", nil)
 }

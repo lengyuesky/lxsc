@@ -3,7 +3,7 @@ let usersCache = []
 async function loadUsers() {
   usersCache = await adminAPI('/users')
   $('#userTable tbody').innerHTML = usersCache.length ? usersCache.map(u => `<tr><td class="muted">${u.id}</td><td><b>${esc(u.name)}</b></td><td>${u.isAdmin ? '<span class="badge pri">管理员</span>' : '<span class="badge off">普通用户</span>'}</td><td><code>${esc(u.quality)}</code></td>
-    <td class="actions"><button class="sec sm" data-user-action="edit" data-user-id="${u.id}">编辑</button><button class="sec sm" data-user-action="key" data-user-id="${u.id}">生成 API Key</button><button class="danger sm" data-user-action="delete" data-user-id="${u.id}">删除</button></td></tr>`).join('') : '<tr><td colspan="5" class="muted center">暂无用户</td></tr>'
+    <td class="actions"><button class="sec sm" data-user-action="edit" data-user-id="${u.id}">编辑</button><button class="sec sm" data-user-action="key" data-user-id="${u.id}">管理 API Key</button><button class="danger sm" data-user-action="delete" data-user-id="${u.id}">删除</button></td></tr>`).join('') : '<tr><td colspan="5" class="muted center">暂无用户</td></tr>'
 }
 async function createUser(e) {
   e.preventDefault()
@@ -34,9 +34,46 @@ async function deleteUser(id) {
   if (!confirm('确定删除该用户及其歌单/收藏？')) return
   try { await adminAPI('/users/' + id, { method: 'DELETE' }); toast('用户已删除'); await loadUsers() } catch (err) { if (!isAbort(err)) toast(err.message, true) }
 }
+let keyUserID = 0, keyEpoch = 0
 async function apiKey(id) {
-  try { const r = await adminAPI('/users/' + id + '/apikey', { method: 'POST' }); $('#keyValue').value = r.apiKey; $('#keyDialog').showModal(); $('#keyValue').select() } catch (err) { if (!isAbort(err)) toast(err.message, true) }
+  keyUserID = id; keyEpoch++
+  $('#keyValue').value = ''
+  $('#keyCreateForm').reset()
+  $('#keyDialog').showModal()
+  await loadAPIKeys()
 }
+async function loadAPIKeys() {
+  const userID = keyUserID, epoch = sessionState.epoch, generation = keyEpoch
+  try {
+    const keys = await adminAPI('/users/' + userID + '/apikeys')
+    if (userID !== keyUserID || epoch !== sessionState.epoch || generation !== keyEpoch) return
+    const date = value => value ? new Date(value * 1000).toLocaleString() : '—'
+    $('#keyList').innerHTML = keys.length ? keys.map(key => `<div class="card"><b>${esc(key.label)}</b><p class="muted">创建：${esc(date(key.createdAt))}<br>有效期：${key.expiresAt ? esc(date(key.expiresAt)) : '长期有效'}<br>最近使用：${esc(date(key.lastUsedAt))}</p><button type="button" class="danger sm" data-revoke-key="${esc(key.id)}">撤销</button></div>`).join('') : '<p class="muted">暂无密钥</p>'
+  } catch (error) { if (!isAbort(error)) toast(error.message, true) }
+}
+$('#keyCreateForm').addEventListener('submit', async event => {
+  event.preventDefault()
+  const form = event.currentTarget, button = form.querySelector('button'), userID = keyUserID, generation = keyEpoch
+  button.disabled = true
+  try {
+    const r = await adminAPI('/users/' + userID + '/apikey', { method: 'POST', body: { label: form.elements.label.value, days: Number(form.elements.days.value) } })
+    if (keyUserID !== userID || generation !== keyEpoch || !$('#keyDialog').open) return
+    $('#keyValue').value = r.apiKey; $('#keyValue').select(); await loadAPIKeys()
+  } catch (error) { if (!isAbort(error)) toast(error.message, true) }
+  finally { button.disabled = false }
+})
+$('#keyList').addEventListener('click', async event => {
+  const button = event.target.closest('[data-revoke-key]')
+  if (!button || !confirm('撤销后，使用该密钥的客户端需重新配置。确定撤销？')) return
+  button.disabled = true
+  try { await adminAPI('/users/' + keyUserID + '/apikeys/' + encodeURIComponent(button.dataset.revokeKey), { method: 'DELETE' }); await loadAPIKeys() }
+  catch (error) { if (!isAbort(error)) toast(error.message, true); button.disabled = false }
+})
+function clearAPIKeyDialog() {
+  keyUserID = 0; keyEpoch++; $('#keyValue').value = ''; $('#keyList').replaceChildren()
+}
+$('#keyDialog').addEventListener('close', clearAPIKeyDialog)
+$('#keyDialog').addEventListener('cancel', clearAPIKeyDialog)
 $('#createUserForm').addEventListener('submit', createUser)
 $('#editUserForm').addEventListener('submit', submitUser)
 $('#userTable').addEventListener('click', event => {

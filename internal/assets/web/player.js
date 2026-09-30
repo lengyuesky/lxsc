@@ -23,6 +23,9 @@
       this.onFailure = onFailure
       this.onLoad = onLoad
       this.queue = []
+      this.repeat = 'off'
+      this.shuffle = false
+      this.queueVersion = 0
       this.index = -1
       this.version = 0
       this.playAttempt = 0
@@ -44,7 +47,8 @@
         status: this.status, message: this.message,
         time: Number.isFinite(this.audio.currentTime) ? this.audio.currentTime : 0,
         duration: this.duration, volume: this.audio.volume, muted: this.audio.muted,
-        canPrevious: this.index > 0, canNext: this.index >= 0 && this.index < this.queue.length - 1,
+        repeat: this.repeat, shuffle: this.shuffle, queueVersion: this.queueVersion,
+        canPrevious: this.index > 0 || (this.repeat === 'all' && this.queue.length > 1), canNext: this.index >= 0 && (this.index < this.queue.length - 1 || this.repeat === 'all' || (this.shuffle && this.queue.length > 1) || this.queue.some(track => track.nextRequested)),
       }
     }
     notify() { this.onChange(this.state) }
@@ -53,6 +57,7 @@
       if (!tracks[index] || tracks[index].unavailable) return
       this.index = tracks.slice(0, index).filter(track => !track.unavailable).length
       this.queue = tracks.filter(track => !track.unavailable).map(track => ({ ...track, qualities: [...(track.qualities || [])] }))
+      this.queueVersion++
       this.load()
     }
 
@@ -61,15 +66,16 @@
       this.listeners = []
     }
 
-    load() {
+    load({ autoplay = true, position = 0 } = {}) {
       if (!this.track) return
+      delete this.track.nextRequested
       this.onLoad(this.track)
       const version = ++this.version
       this.unbind()
       this.audio.pause()
-      this.status = 'loading'
+      this.status = autoplay ? 'loading' : 'paused'
       this.message = ''
-      this.wantsPlay = true
+      this.wantsPlay = autoplay
       this.audio.src = this.streamURL(this.track)
       const source = this.audio.src
       const current = () => version === this.version && this.audio.src === source && (!this.audio.currentSrc || this.audio.currentSrc === source)
@@ -88,11 +94,12 @@
       })
       bind('waiting', () => { if (this.wantsPlay) { this.status = 'loading'; this.notify() } })
       bind('timeupdate', () => this.notify())
-      bind('loadedmetadata', () => this.notify())
+      bind('loadedmetadata', () => { if (position > 0) { this.seek(position); position = 0 }; this.notify() })
       bind('durationchange', () => this.notify())
       bind('ended', () => {
         if (!this.audio.ended || !this.wantsPlay || this.status === 'error') return
-        if (this.index < this.queue.length - 1) this.next()
+        if (this.repeat === 'one') this.load()
+        else if (this.state.canNext) this.next()
         else { this.wantsPlay = false; this.status = 'ended'; this.notify() }
       })
       bind('error', () => {
@@ -101,7 +108,7 @@
       this.audio.load()
       this.notify()
       // 在点击处理链中立即调用 play，避免等待异步接口丢失浏览器用户手势。
-      this.resume(version)
+      if (autoplay) this.resume(version)
     }
 
     async resume(version = this.version) {
@@ -148,8 +155,54 @@
         this.notify()
       } else this.resume()
     }
-    previous() { if (this.index > 0) { this.index--; this.load() } }
-    next() { if (this.index >= 0 && this.index < this.queue.length - 1) { this.index++; this.load() } }
+    previous() {
+      if (!this.state.canPrevious) return
+      this.index = this.index > 0 ? this.index - 1 : this.queue.length - 1
+      this.load()
+    }
+    next() {
+      if (!this.state.canNext) return
+      const requested = this.queue.findIndex(track => track.nextRequested)
+      if (requested >= 0) this.index = requested
+      else if (this.shuffle && this.queue.length > 1) this.index = (this.index + 1 + Math.floor(Math.random() * (this.queue.length - 1))) % this.queue.length
+      else this.index = (this.index + 1) % this.queue.length
+      this.load()
+    }
+    setRepeat(value) { if (['off', 'one', 'all'].includes(value)) { this.repeat = value; this.notify() } }
+    setShuffle(value) { this.shuffle = !!value; this.notify() }
+    playAt(index) { if (Number.isInteger(index) && this.queue[index]) { this.index = index; this.load() } }
+    enqueue(track, next = false) {
+      if (!track || track.unavailable || this.queue.length >= 2000) return
+      if (!this.track) return this.playList([track], 0)
+      this.queue.splice(next ? this.index + 1 : this.queue.length, 0, { ...track, nextRequested: next, qualities: [...(track.qualities || [])] })
+      this.queueVersion++; this.notify()
+    }
+    remove(index) {
+      if (!Number.isInteger(index) || !this.queue[index]) return
+      const current = index === this.index, autoplay = this.wantsPlay
+      this.queue.splice(index, 1); this.queueVersion++
+      if (!this.queue.length) return this.clear()
+      if (index < this.index || this.index >= this.queue.length) this.index--
+      if (current) this.load({ autoplay }); else this.notify()
+    }
+    move(from, to) {
+      if (!Number.isInteger(from) || !Number.isInteger(to) || !this.queue[from] || !this.queue[to] || from === to) return
+      const current = this.track
+      this.queue.splice(to, 0, this.queue.splice(from, 1)[0])
+      this.index = this.queue.indexOf(current); this.queueVersion++; this.notify()
+    }
+    snapshot() { return { queue: this.queue, index: this.index, position: this.state.time, repeat: this.repeat, shuffle: this.shuffle, volume: this.audio.volume, muted: this.audio.muted } }
+    restore(saved) {
+      if (!saved || !Array.isArray(saved.queue) || saved.queue.length > 2000 || !Number.isInteger(saved.index) || saved.index < 0 || saved.index >= saved.queue.length) return false
+      if (saved.queue.some(track => !track || typeof track.id !== 'string' || !/^tr-(wy|tx|kw|kg|mg)-.{1,1000}$/.test(track.id))) return false
+      this.queue = saved.queue.map(track => ({ id: track.id, name: String(track.name || ''), singer: String(track.singer || ''), album: String(track.album || ''), source: String(track.source || ''), nextRequested: track.nextRequested === true, duration: Number(track.duration) || 0, qualities: Array.isArray(track.qualities) ? track.qualities : [] }))
+      this.index = saved.index; this.queueVersion++
+      this.repeat = ['off', 'one', 'all'].includes(saved.repeat) ? saved.repeat : 'off'; this.shuffle = !!saved.shuffle
+      if (Number.isFinite(saved.volume)) this.audio.volume = Math.max(0, Math.min(1, saved.volume))
+      this.audio.muted = !!saved.muted
+      this.load({ autoplay: false, position: Number.isFinite(saved.position) ? Math.max(0, saved.position) : 0 })
+      return true
+    }
     seek(time) {
       if (!this.duration || !Number.isFinite(time)) return
       try { this.audio.currentTime = Math.max(0, Math.min(time, this.duration)); this.notify() } catch { /* 媒体尚不可定位时保持现有进度。 */ }
@@ -168,6 +221,9 @@
       this.audio.removeAttribute('src')
       this.audio.load()
       this.queue = []
+      this.queueVersion++
+      this.repeat = 'off'
+      this.shuffle = false
       this.index = -1
       this.status = 'idle'
       this.message = ''

@@ -1,6 +1,9 @@
 // 会话、路由与歌单编辑入口。
 function showLogin() {
   resetDebugSession()
+  resetPlaybackExperience(true)
+  clearAPIKeyDialog()
+  if ($('#keyDialog').open) $('#keyDialog').close()
   $('#login').classList.remove('hidden')
   $('#app').classList.add('hidden')
   sessionState.me = null
@@ -21,6 +24,7 @@ async function initializeSession(data) {
   LXSCSettings.reset()
   sessionState.me = data.user
   sessionState.defaultPublic = !!data.defaultPublic
+  initializePlaybackExperience()
   document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !data.user.isAdmin))
   $('#identity').textContent = data.user.name
   $('#roleTag').textContent = data.user.isAdmin ? 'admin' : 'user'
@@ -209,6 +213,8 @@ function renderDetail() {
   form.elements.public.checked = !!item.public
   for (const control of form.elements) control.disabled = !item.canEdit
   $('#deleteButton').classList.toggle('hidden', !item.canEdit)
+  $('#subscriptionOpen').classList.toggle('hidden', !item.canEdit)
+  $('#playlistHistoryOpen').classList.toggle('hidden', !item.canEdit)
   $('#readonlyNotice').classList.toggle('hidden', item.canEdit)
   $('#searchSection').classList.toggle('hidden', !item.canEdit)
   $('#searchResults').innerHTML = ''
@@ -336,8 +342,10 @@ $('#trackTable').addEventListener('click', event => {
   const row = button.closest('[data-track-index]')
   const index = Number(row.dataset.trackIndex)
   if (button.dataset.trackAction === 'play') { webPlayer.playList(playlistState.draftTracks, index); return }
+  if (button.dataset.trackAction === 'queue') { openQueueAdd(playlistState.draftTracks[index]); return }
   if (!playlistState.current?.canEdit) return
   switch (button.dataset.trackAction) {
+    case 'repair': openRepair(index); break
     case 'up': moveTrack(index, index - 1); break
     case 'down': moveTrack(index, index + 1); break
     case 'remove': playlistState.draftTracks.splice(index, 1); markTracksDirty(); break

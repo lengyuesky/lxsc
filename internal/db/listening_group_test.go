@@ -41,8 +41,15 @@ func awaitListening(t *testing.T, d *DB, calls, waiters int) {
 		for _, c := range d.listening.calls {
 			w += c.waiters
 		}
+		// 等待者取消后会先离开合并表，实际查询随后才归还名额。
+		// 检查恢复时应等待真实工作结束，不能只看等待者数量。
+		idle := true
+		if calls == 0 && waiters == 0 && d.listening.gate != nil {
+			stats := d.listening.gate.Stats()
+			idle = stats.Active == 0 && stats.Queued == 0
+		}
 		d.listening.mu.Unlock()
-		if n == calls && w == waiters {
+		if n == calls && w == waiters && idle {
 			return
 		}
 		time.Sleep(time.Millisecond)

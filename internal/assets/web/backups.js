@@ -8,6 +8,7 @@ async function loadBackups() {
   renderPendingRestore(status)
   fillWebDAVConfig(config)
   renderBackupLast(status.last || {})
+  $('#backupScheduleStatus').textContent = `最近成功上传：${status.lastSuccessAt ? formatTime(status.lastSuccessAt) : '暂无'}${status.last?.error && status.nextRetryAt ? ' · 下次重试不早于：' + formatTime(status.nextRetryAt) : ''}`
   if (config.url) await loadRemoteBackups()
   else $('#remoteBackupTable tbody').innerHTML = '<tr><td colspan="4">请先配置 WebDAV</td></tr>'
 }

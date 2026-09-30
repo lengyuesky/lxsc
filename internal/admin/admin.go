@@ -86,11 +86,14 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/boards", s.getBoards)
 	r.Post("/metadata/cleanup", s.cleanupMetadata)
 	r.Post("/metadata/compact", s.compactMetadata)
+	r.Post("/metadata/history", s.retentionHistory)
 	r.Get("/users", s.listUsers)
 	r.Post("/users", s.createUser)
 	r.Put("/users/{id}", s.updateUser)
 	r.Delete("/users/{id}", s.deleteUser)
 	r.Post("/users/{id}/apikey", s.createAPIKey)
+	r.Get("/users/{id}/apikeys", s.listAPIKeys)
+	r.Delete("/users/{id}/apikeys/{keyID}", s.revokeAPIKey)
 	r.Get("/sources", s.listSources)
 	r.Post("/sources", s.createSource)
 	r.Post("/sources/import", s.importSource)
@@ -320,16 +323,6 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		s.Debug.Tokens.RevokeOwner(id)
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
-}
-
-func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	key := "lxsc_" + secret.RandomToken(24)
-	if err := s.DB.CreateAPIKey(r.Context(), id, key, "admin"); err != nil {
-		fail(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{"apiKey": key})
 }
 
 // ---------- 音源 ----------

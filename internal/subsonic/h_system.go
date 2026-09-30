@@ -69,11 +69,6 @@ func (s *Server) getScanStatus(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, r, "scanStatus", M{"scanning": false, "count": 0})
 }
 
-func (s *Server) getNowPlaying(w http.ResponseWriter, r *http.Request) {
-	writeOK(w, r, "nowPlaying", M{"entry": []M{}})
-}
-
-func (s *Server) getPlayQueue(w http.ResponseWriter, r *http.Request) { writeOK(w, r, "", nil) }
 func (s *Server) getBookmarks(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, r, "bookmarks", M{"bookmark": []M{}})
 }

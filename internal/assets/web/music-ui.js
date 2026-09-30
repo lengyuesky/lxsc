@@ -5,7 +5,7 @@ const playlistDetailGate = new LXSCMusic.RequestGate()
 const playlistListGate = new LXSCMusic.RequestGate()
 let playlistDetailTarget = ''
 const collectGate = new LXSCMusic.RequestGate()
-const songSearchState = { tracks: [] }
+const songSearchState = { smartKind: '', tracks: [], query: '', results: null, pages: {}, busy: false }
 const collectState = { track: null, playlists: [], loading: false, busy: false, error: '' }
 let playbackMarker = ''
 let seekDragging = false
@@ -51,6 +51,7 @@ function renderPlaybackMarkers() {
 }
 
 function renderPlayer(state) {
+  renderPlaybackExperience(state)
   const visible = !!state.track && !!sessionState.me
   $('#playerBar').classList.toggle('hidden', !visible)
   document.body.classList.toggle('has-player', visible)
@@ -137,7 +138,7 @@ function searchMessage(message, error = false) {
 }
 function renderSongResults() {
   if (!songSearchState.tracks.length) return searchMessage('没有找到可用结果，请更换关键词或平台再试')
-  LXSCSearch.appendRows($('#searchTable tbody'), songSearchState.tracks, (track, index) => `<tr data-playing-id="${esc(track.id)}"><td><div class="song-title" title="${esc(track.name)}">${esc(track.name)}</div></td><td>${esc(track.singer)}</td><td class="muted song-album">${esc(track.album)}</td><td><span class="badge">${esc(platName[track.source] || track.source)}</span></td><td class="muted song-duration">${track.duration ? formatSongTime(track.duration) : '—'}</td><td class="muted song-quality">${esc((track.qualities || []).join('/'))}</td><td class="song-actions"><button type="button" class="sec sm" data-song-action="play" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg>播放</button><button type="button" class="sm" data-song-action="collect" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}>收藏到歌单</button></td></tr>`)
+  LXSCSearch.appendRows($('#searchTable tbody'), songSearchState.tracks, (track, index) => `<tr data-playing-id="${esc(track.id)}"><td><div class="song-title" title="${esc(track.name)}">${esc(track.name)}</div></td><td>${esc(track.singer)}</td><td class="muted song-album">${esc(track.album)}</td><td><span class="badge">${esc(platName[track.source] || track.source)}</span></td><td class="muted song-duration">${track.duration ? formatSongTime(track.duration) : '—'}</td><td class="muted song-quality">${esc((track.qualities || []).join('/'))}</td><td class="song-actions"><button type="button" class="sec sm" data-song-action="play" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg>播放</button><button type="button" class="sec sm" data-song-action="queue" data-song-index="${index}">加入队列</button><button type="button" class="sm" data-song-action="collect" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}>收藏到歌单</button></td></tr>`)
   renderPlaybackMarkers()
 }
 $('#songSearchForm').addEventListener('submit', async event => {
@@ -146,6 +147,9 @@ $('#songSearchForm').addEventListener('submit', async event => {
   const query = String(form.get('query') || '').trim()
   const request = songSearchGate.begin()
   songSearchState.tracks = []
+  songSearchState.smartKind = ''; $('#smartSave').disabled = true
+  songSearchState.query = query; songSearchState.pages = {}; songSearchState.results = null; songSearchState.busy = false
+  $('#searchPaging').replaceChildren()
   $('#songSearchStatus').textContent = ''
   if (!query) return searchMessage('请输入歌名或歌手')
   searchMessage('搜索中…')
@@ -156,6 +160,9 @@ $('#songSearchForm').addEventListener('submit', async event => {
       const previousCount = results.tracks.length
       results.accept(event)
       songSearchState.tracks = results.tracks
+      songSearchState.results = results
+      for (const [source, item] of results.platforms) if (item.status === 'ok') songSearchState.pages[source] = 1
+      renderSearchPaging()
       renderSearchStatus('#songSearchStatus', results)
       if (results.tracks.length > previousCount) renderSongResults()
       else if (!results.tracks.length && !results.pending) searchMessage(results.failed ? '平台搜索未全部成功，请稍后重试或更换平台' : '没有找到可用结果，请更换关键词或平台再试', results.failed)
@@ -175,6 +182,7 @@ $('#searchTable tbody').addEventListener('click', event => {
   const track = songSearchState.tracks[index]
   if (!track) return
   if (button.dataset.songAction === 'play') webPlayer.playList(songSearchState.tracks, index)
+  else if (button.dataset.songAction === 'queue') openQueueAdd(track)
   else openCollect(track)
 })
 
@@ -304,6 +312,8 @@ $('#collectForm').addEventListener('submit', async event => {
 })
 
 function resetMusicSession() {
+  resetPlaybackExperience()
+  resetLibraryTools()
   listeningTracker.reset()
   resetListeningSession()
   sessionState.epoch++
@@ -323,6 +333,9 @@ function resetMusicSession() {
   collectState.error = ''
   if ($('#collectDialog').open) $('#collectDialog').close()
   songSearchState.tracks = []
+  songSearchState.smartKind = ''; $('#smartSave').disabled = true
+  songSearchState.results = null; songSearchState.pages = {}; songSearchState.busy = false
+  $('#searchPaging').replaceChildren()
   playlistState.searchResults = []
   $('#songSearchStatus').textContent = ''
   $('#playlistSearchStatus').textContent = ''
@@ -337,3 +350,34 @@ function resetMusicSession() {
 
 // 所有控件与清理逻辑就绪后再恢复登录，避免脚本加载顺序导致旧会话残留。
 authAPI('/me').then(initializeSession).catch(error => { if (!isAbort(error)) showLogin() })
+
+function renderSearchPaging() {
+  const results = songSearchState.results
+  $('#searchPaging').innerHTML = results ? results.sources.map(source => {
+    const item = results.platforms.get(source), page = songSearchState.pages[source] || 0
+    const more = item.status === 'ok', exhausted = more && (item.lastCount === 0 || page >= 100)
+    return `<button class="sec sm" data-search-page="${esc(source)}" ${songSearchState.busy || results.pending || exhausted ? 'disabled' : ''}>${esc(platName[source] || source)} · ${more ? exhausted ? '已到底' : '加载更多' : '重试'}</button>`
+  }).join('') : ''
+}
+$('#searchPaging').addEventListener('click', async event => {
+  const button = event.target.closest('[data-search-page]')
+  if (!button || button.disabled || songSearchState.busy) return
+  const source = button.dataset.searchPage, request = songSearchGate.begin(), results = songSearchState.results
+  const page = (songSearchState.pages[source] || 0) + 1
+  songSearchState.busy = true; renderSearchPaging()
+  try {
+    await playlistAPI('/search/stream', { method: 'POST', signal: request.signal, body: { query: songSearchState.query, sources: [source], page }, onEvent: event => {
+      if (!request.current() || event.type !== 'platform') return
+      const old = results.platforms.get(source), tracks = old.tracks || []
+      if (event.status === 'ok') {
+        const seen = new Set(songSearchState.tracks.map(track => track.id))
+        songSearchState.tracks.push(...event.tracks.filter(track => !seen.has(track.id) && seen.add(track.id)))
+        songSearchState.pages[source] = page
+        results.platforms.set(source, { ...event, tracks: [...tracks, ...event.tracks], lastCount: event.tracks.length })
+        renderSongResults()
+      } else results.platforms.set(source, { ...event, tracks })
+      renderSearchStatus('#songSearchStatus', results)
+    } })
+  } catch (error) { if (request.current() && !isAbort(error)) toast(error.message, true) }
+  finally { if (request.current()) { songSearchState.busy = false; renderSearchPaging() } }
+})

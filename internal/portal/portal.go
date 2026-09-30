@@ -89,6 +89,11 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/playlists", s.listPlaylists)
 	r.Post("/playlists", s.createPlaylist)
 	r.Get("/playlists/{id}", s.getPlaylist)
+	r.Get("/playlists/{id}/history", s.playlistHistory)
+	r.Get("/playlists/{id}/history/{historyID}", s.playlistHistoryTracks)
+	r.Get("/playlists/{id}/subscription", s.getSubscription)
+	r.Put("/playlists/{id}/subscription", s.saveSubscription)
+	r.Post("/playlists/{id}/subscription/sync", s.syncSubscription)
 	r.Put("/playlists/{id}", s.updatePlaylist)
 	r.Put("/playlists/{id}/tracks", s.replacePlaylistTracks)
 	r.Post("/playlists/{id}/tracks", s.addPlaylistTrack)
@@ -98,6 +103,8 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/search", s.search)
 	r.Post("/search/stream", s.searchStream)
 	r.Get("/stream", s.stream)
+	r.Get("/lyrics", s.lyrics)
+	r.Get("/smart", s.smartTracks)
 	r.Post("/listening/progress", s.listeningProgress)
 	r.Get("/listening/stats", s.listeningStats)
 	return r
@@ -459,7 +466,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	infos, err := s.Catalog.SearchChecked(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Limit: 20})
+	infos, err := s.Catalog.SearchChecked(ctx, body.Query, music.SearchOptions{Sources: body.Sources, Page: body.Page, Limit: 20})
 	if errors.Is(err, admission.ErrBusy) {
 		w.Header().Set("Retry-After", "2")
 		fail(w, 503, err.Error())
@@ -473,6 +480,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 type searchBody struct {
+	Page    int      `json:"page"`
 	Query   string   `json:"query"`
 	Sources []string `json:"sources"`
 }
@@ -482,6 +490,13 @@ func (s *Server) readSearch(w http.ResponseWriter, r *http.Request) (searchBody,
 	if err := decodeJSON(w, r, &body); err != nil {
 		fail(w, http.StatusBadRequest, "参数错误: "+err.Error())
 		return body, false
+	}
+	if body.Page < 0 || body.Page > 100 {
+		fail(w, 400, "页码必须为1–100")
+		return body, false
+	}
+	if body.Page == 0 {
+		body.Page = 1
 	}
 	body.Query = strings.TrimSpace(body.Query)
 	if body.Query == "" || utf8.RuneCountInString(body.Query) > 200 {
