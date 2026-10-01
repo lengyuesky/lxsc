@@ -9,7 +9,7 @@ function showLogin() {
   sessionState.me = null
   playlistState.me = null
   resetMusicSession()
-  LXSCBackups.reset()
+  LXSCAdminModules.reset()
   LXSCSettings.reset()
   clearDetail()
 }
@@ -20,7 +20,7 @@ function showApp() {
 async function initializeSession(data) {
   resetDebugSession()
   resetMusicSession()
-  LXSCBackups.reset()
+  LXSCAdminModules.reset()
   LXSCSettings.reset()
   sessionState.me = data.user
   sessionState.defaultPublic = !!data.defaultPublic
@@ -58,8 +58,9 @@ $('#logoutButton').addEventListener('click', async event => {
 })
 
 // ---- 路由 ----
-const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), dashboard: LXSCAdmin.loadDashboard, sources: LXSCAdmin.loadSources, users: loadUsers, backups: LXSCBackups.load, settings: LXSCSettings.load, search: () => {}, logs: LXSCAdmin.loadLogs, debug: () => loadDebug() }
+const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), dashboard: () => LXSCAdminModules.load('admin', 'loadDashboard'), sources: () => LXSCAdminModules.load('admin', 'loadSources'), users: loadUsers, backups: () => LXSCAdminModules.load('backups', 'load'), settings: LXSCSettings.load, search: () => {}, logs: () => LXSCAdminModules.load('admin', 'loadLogs'), debug: () => loadDebug() }
 function route() {
+  LXSCAdminModules.cancelLoad()
   if (!sessionState.me) return
   const fallback = sessionState.me.isAdmin ? 'dashboard' : 'playlists'
   let tab = (location.hash || '#' + fallback).slice(1)

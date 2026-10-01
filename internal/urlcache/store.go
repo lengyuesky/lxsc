@@ -183,10 +183,38 @@ func (s *Store) Put(r Record) error {
 }
 
 func (s *Store) Touch(trackID, quality string, now time.Time) error {
+	return s.TouchBatch([]TouchUpdate{{TrackID: trackID, Quality: quality, At: now}})
+}
+
+type TouchUpdate struct {
+	TrackID, Quality string
+	At               time.Time
+}
+
+// 只推进现存记录的使用时间；迟到的更新不能复活已删除记录或倒退新直链的时间。
+func (s *Store) TouchBatch(updates []TouchUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
 	ctx, cancel := ioContext()
 	defer cancel()
-	_, err := s.db.ExecContext(ctx, `UPDATE playback_urls SET last_used_at=? WHERE track_id=? AND quality=?`, now.UnixNano(), trackID, quality)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `UPDATE playback_urls SET last_used_at=? WHERE track_id=? AND quality=? AND last_used_at<?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, update := range updates {
+		at := update.At.UnixNano()
+		if _, err := stmt.ExecContext(ctx, at, update.TrackID, update.Quality, at); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) Delete(trackID, quality string) error {

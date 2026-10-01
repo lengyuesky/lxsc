@@ -306,11 +306,24 @@ func (d *DB) CountUsers(ctx context.Context) (int, error) {
 // GetUserByAPIKey 按 API Key 查找用户
 func (d *DB) GetUserByAPIKey(ctx context.Context, key string) (*User, error) {
 	digest := keyDigest(key)
-	u, err := scanUser(d.sql.QueryRowContext(ctx, `SELECT u.id, u.name, u.password_enc, u.is_admin, u.quality, u.created_at FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.key=? AND (k.expires_at=0 OR k.expires_at>?)`, digest, now()))
-	if err == nil {
-		_, _ = d.sql.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE key=? AND last_used_at<?`, now(), digest, now()-300)
+	at := now()
+	var u User
+	var admin int
+	var lastUsed int64
+	err := d.sql.QueryRowContext(ctx, `SELECT u.id, u.name, u.password_enc, u.is_admin, u.quality, u.created_at, k.last_used_at FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.key=? AND (k.expires_at=0 OR k.expires_at>?)`, digest, at).
+		Scan(&u.ID, &u.Name, &u.PasswordEnc, &admin, &u.Quality, &u.CreatedAt, &lastUsed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
 	}
-	return u, err
+	if err != nil {
+		return nil, err
+	}
+	u.IsAdmin = admin == 1
+	// 每次认证实时检查有效性；只有超过节流窗口才申请写连接。
+	if lastUsed < at-300 {
+		_, _ = d.sql.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE key=? AND last_used_at<?`, at, digest, at-300)
+	}
+	return &u, nil
 }
 
 // CreateAPIKey 创建 API Key
@@ -726,10 +739,8 @@ func (d *DB) CreatePlaylistWithMetadata(ctx context.Context, id string, userID i
 	if err := upsertTracksTx(ctx, tx, tracks); err != nil {
 		return err
 	}
-	for i, tid := range trackIDs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO playlist_tracks(playlist_id, position, track_id) VALUES(?,?,?)`, id, i, tid); err != nil {
-			return err
-		}
+	if err := insertPlaylistTracksTx(ctx, tx, id, trackIDs); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -751,10 +762,8 @@ func replacePlaylistTracksTx(ctx context.Context, tx *sql.Tx, id string, trackID
 	if _, err := tx.ExecContext(ctx, `DELETE FROM playlist_tracks WHERE playlist_id = ?`, id); err != nil {
 		return err
 	}
-	for i, tid := range trackIDs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO playlist_tracks(playlist_id, position, track_id) VALUES(?,?,?)`, id, i, tid); err != nil {
-			return err
-		}
+	if err := insertPlaylistTracksTx(ctx, tx, id, trackIDs); err != nil {
+		return err
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE playlists SET updated_at = ? WHERE id = ?`, now(), id)
 	if err != nil {

@@ -204,3 +204,41 @@ func TestPlaylistMetadataTransactionsRollback(t *testing.T) {
 		t.Fatalf("失败替换应保留原有列表: %v", p.TrackIDs)
 	}
 }
+
+func TestPlaylistBatchBoundariesAndRollback(t *testing.T) {
+	d, alice, _ := newPlaylistWriteDB(t)
+	ctx := context.Background()
+	ids := make([]string, 2000)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("tr-wy-%d", i%317)
+	}
+	if err := d.CreatePlaylist(ctx, "batch", alice.ID, "批量", ids); err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.GetPlaylist(ctx, "batch")
+	if err != nil || !reflect.DeepEqual(p.TrackIDs, ids) {
+		t.Fatal("跨批次顺序或重复项丢失", err)
+	}
+	// 第二批失败时，第一批和此前的删除也必须回滚。
+	if _, err := d.sql.Exec(`CREATE TRIGGER reject_batch BEFORE INSERT ON playlist_tracks WHEN new.track_id='reject' BEGIN SELECT RAISE(ABORT,'test'); END`); err != nil {
+		t.Fatal(err)
+	}
+	changed := append([]string(nil), ids...)
+	changed[350] = "reject"
+	if err := d.ReplacePlaylistTracks(ctx, "batch", changed); err == nil {
+		t.Fatal("应触发回滚")
+	}
+	p, err = d.GetPlaylist(ctx, "batch")
+	if err != nil || !reflect.DeepEqual(p.TrackIDs, ids) {
+		t.Fatal("失败留下部分歌单", err)
+	}
+	for _, n := range []int{0, 1, 299, 300, 301, 2000} {
+		if err := d.ReplacePlaylistTracks(ctx, "batch", ids[:n]); err != nil {
+			t.Fatal(err)
+		}
+		p, err = d.GetPlaylist(ctx, "batch")
+		if err != nil || len(p.TrackIDs) != n {
+			t.Fatalf("边界 %d: %v", n, err)
+		}
+	}
+}

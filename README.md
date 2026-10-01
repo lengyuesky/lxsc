@@ -231,6 +231,8 @@ Subsonic 列表数量统一限制为 0–500，负数按 0 处理；搜索的零
 
 具体测量、测试与发布边界见 [查询与前端优化验收](docs/query-optimization-verification.md)。
 
+认证写入节流、歌单批量保存、缓存使用时间后台合并与管理页面按需加载的测量和回归范围见 [热点路径优化验收](docs/hot-path-optimization-verification.md)。
+
 ### 开发验证
 
 本次搜歌、网页播放与收藏的交付范围、测试结果及上线边界见 [验收记录](docs/search-playback-verification.md)。

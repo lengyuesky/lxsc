@@ -94,6 +94,23 @@ func TestWebScriptPolicyAndIntegrity(t *testing.T) {
 			t.Fatal("脚本与策略哈希不一致", script[1])
 		}
 	}
+	modules := regexp.MustCompile(`<link data-admin-module="[^"]+" href="([^"?]+)\?v=[a-f0-9]+" integrity="(sha256-[^"]+)"`).FindAllStringSubmatch(response.Body.String(), -1)
+	if len(modules) != 2 {
+		t.Fatal("按需模块缺少版本或完整性校验")
+	}
+	for _, module := range modules {
+		source, err := Web.ReadFile("web/" + module[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(source)
+		if module[2] != "sha256-"+base64.StdEncoding.EncodeToString(sum[:]) {
+			t.Fatal("按需模块完整性错误", module[1])
+		}
+		if strings.Contains(response.Body.String(), `<script src="`+module[1]) {
+			t.Fatal("管理模块不应提前加载")
+		}
+	}
 	html, _ := Web.ReadFile("web/index.html")
 	if regexp.MustCompile(`\son[a-z]+\s*=`).Match(html) {
 		t.Fatal("页面仍包含内联事件")

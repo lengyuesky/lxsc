@@ -1,5 +1,5 @@
 // 备份表单状态仅在本模块内保存，退出时清空敏感输入。
-const LXSCBackups = (() => {
+export function createBackups({ $, adminAPI, esc, formatBytes, formatTime, toast, isAbort, LXSCMusic }) {
 // ---- 备份 ----
 let webdavConfig = null
 async function loadBackups() {
@@ -167,4 +167,6 @@ $('#testWebDAVButton').addEventListener('click', testWebDAV)
 $('#runWebDAVButton').addEventListener('click', runWebDAVBackup)
 
 return { load: loadBackups, reset }
-})()
+}
+
+LXSCAdminModules.register('backups', createBackups)

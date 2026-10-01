@@ -134,3 +134,36 @@ func TestCorruptDatabaseIsMarkedForRebuild(t *testing.T) {
 		t.Fatalf("重建后应为空缓存: %+v %v", rows, err)
 	}
 }
+
+func TestDelayedTouchesNeverRestoreOrRegressRecords(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Reset("test"); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now()
+	record := Record{TrackID: "track", Quality: "320k", SourceID: 1, URL: "https://example.invalid/new", LastUsedAt: at.UnixNano()}
+	if err := s.Put(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchBatch([]TouchUpdate{{"track", "320k", at.Add(-time.Minute)}, {"missing", "320k", at}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.Load("test", 10, at)
+	if err != nil || len(rows) != 1 || rows[0].LastUsedAt != at.UnixNano() {
+		t.Fatal("迟到更新倒退时间或创建记录", rows, err)
+	}
+	if err := s.Delete("track", "320k"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Touch("track", "320k", at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = s.Load("test", 10, at)
+	if err != nil || len(rows) != 0 {
+		t.Fatal("迟到更新复活已删除直链", rows, err)
+	}
+}

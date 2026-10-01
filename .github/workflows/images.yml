@@ -45,6 +45,7 @@ jobs:
           set -o pipefail
           go test ./internal/music ./internal/db -run '^$' -bench 'Benchmark(TemporaryCache|ConcurrentSearch|PersistentURLCacheHit|ListeningWithUserLookups)$' -benchmem -benchtime=100x -count=3 | tee "$RUNNER_TEMP/lxsc-benchmarks.txt"
           go test ./internal/db -run '^$' -bench 'Benchmark(TrackSubstringSearch|LibraryTrackIDs)$' -benchmem -benchtime=20x -count=3 | tee -a "$RUNNER_TEMP/lxsc-benchmarks.txt"
+          go test ./internal/db -run '^$' -bench 'Benchmark(TrackSearchScenarios|PlaylistBatchWrite)$' -benchmem -benchtime=20x -count=3 | tee -a "$RUNNER_TEMP/lxsc-benchmarks.txt"
       - name: 按锁文件构建并核对提交的 JS 产物
         working-directory: js-bridge
         run: |

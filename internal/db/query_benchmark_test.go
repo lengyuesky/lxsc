@@ -102,3 +102,92 @@ func BenchmarkLibraryTrackIDs(b *testing.B) {
 		}
 	})
 }
+
+// 覆盖中文短词、热门词和深分页，索引取舍必须保留原有子串语义。
+func BenchmarkTrackSearchScenarios(b *testing.B) {
+	for _, size := range []int{10000, 100000} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			d, err := Open(filepath.Join(b.TempDir(), "search.db"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer d.Close()
+			_, err = d.sql.Exec(`WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<?)
+    INSERT INTO tracks SELECT 'tr-wy-'||x,'wy',CASE WHEN x%1000=0 THEN '晴天唯一匹配'||x ELSE '普通歌曲'||x END,'周杰伦','专辑','{}',x FROM n`, size)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for _, scenario := range []struct {
+				name, query string
+				offset      int
+			}{
+				{"单字", "晴", 0}, {"双字", "晴天", 0}, {"热门双字", "周杰", 0},
+				{"三字", "周杰伦", 0}, {"稀有长词", "唯一匹配", 0}, {"深分页", "歌曲", 5000},
+			} {
+				b.Run(scenario.name, func(b *testing.B) {
+					b.ReportAllocs()
+					for range b.N {
+						if _, err := d.SearchTracks(context.Background(), scenario.query, 20, scenario.offset); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkPlaylistBatchWrite(b *testing.B) {
+	d, err := Open(filepath.Join(b.TempDir(), "playlist.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer d.Close()
+	ctx := context.Background()
+	u, err := d.CreateUser(ctx, "bench", "enc", false, "320k")
+	if err != nil {
+		b.Fatal(err)
+	}
+	ids := make([]string, 2000)
+	for i := range ids {
+		ids[i] = fmt.Sprint(i)
+	}
+	if err := d.CreatePlaylist(ctx, "bench", u.ID, "基准", nil); err != nil {
+		b.Fatal(err)
+	}
+	for _, batch := range []bool{false, true} {
+		name := "逐首"
+		if batch {
+			name = "批量"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				tx, err := d.sql.BeginTx(ctx, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := tx.Exec(`DELETE FROM playlist_tracks WHERE playlist_id='bench'`); err != nil {
+					tx.Rollback()
+					b.Fatal(err)
+				}
+				if batch {
+					err = insertPlaylistTracksTx(ctx, tx, "bench", ids)
+				} else {
+					for i, id := range ids {
+						if _, err = tx.Exec(`INSERT INTO playlist_tracks VALUES(?,?,?)`, "bench", i, id); err != nil {
+							break
+						}
+					}
+				}
+				if err != nil {
+					tx.Rollback()
+					b.Fatal(err)
+				}
+				if err := tx.Commit(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

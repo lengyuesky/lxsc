@@ -1,6 +1,77 @@
 // 优化回归只使用隔离服务与拦截响应，不访问远程备份或真实音源。
 const assert = require('node:assert/strict')
 module.exports = async ({ check, url, login }) => {
+  await check('管理模块按需加载，退出后的迟到模块不请求旧账号数据', async page => {
+    assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').filter(r => /\/(admin-pages|backups)\.js/.test(r.name)).length), 0)
+    let release, started, scriptRequests = 0, sourceRequests = 0
+    const ready = new Promise(resolve => { started = resolve }), pending = new Promise(resolve => { release = resolve })
+    await page.route('**/admin-pages.js?*', async route => {
+      scriptRequests++; started(); await pending; await route.continue()
+    })
+    page.on('request', request => { if (new URL(request.url()).pathname === '/api/admin/sources') sourceRequests++ })
+    await page.locator('#logoutButton').click()
+    await page.locator('#login:not(.hidden)').waitFor()
+    await login(page, url, 'admin')
+    await page.locator('nav [data-tab=sources]').click()
+    await ready
+    await page.locator('#logoutButton').click()
+    await page.locator('#login:not(.hidden)').waitFor()
+    release()
+    await page.waitForFunction(() => !document.querySelector('script[src*="admin-pages.js"]'))
+    assert.equal(sourceRequests, 0)
+    await login(page, url, 'admin')
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/admin/sources')
+    await page.locator('nav [data-tab=sources]').click()
+    await response
+    assert.equal(scriptRequests, 1, '重新登录复用模块，事件只绑定一次')
+  })
+  await check('管理模块网络失败后可重试', async page => {
+    let attempts = 0
+    await page.route('**/admin-pages.js?*', async route => {
+      if (++attempts === 1) await route.abort('failed')
+      else await route.continue()
+    })
+    await page.locator('#logoutButton').click()
+    await page.locator('#login:not(.hidden)').waitFor()
+    await login(page, url, 'admin')
+    await page.locator('nav [data-tab=sources]').click()
+    await page.locator('#toast').filter({ hasText: '管理页面加载失败' }).waitFor()
+    await page.locator('nav [data-tab=search]').click()
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/admin/sources')
+    await page.locator('nav [data-tab=sources]').click()
+    await response
+    assert.equal(attempts, 2)
+  })
+  await check('2000首歌单排序只更新受影响行并保留重复项和焦点', async page => {
+    await page.locator('nav [data-tab=playlists]').click()
+    await page.locator('#tab-playlists.active').waitFor()
+    const result = await page.evaluate(() => {
+      playlistState.current = { id: 'local-render-test', canEdit: true }
+      playlistState.draftTracks = Array.from({ length: 2000 }, (_, i) => ({ id: 'tr-wy-' + (i % 317), name: '测试' + i, source: 'wy' }))
+      renderTracks()
+      document.querySelector('#detail').classList.remove('hidden')
+      const body = document.querySelector('#trackTable'), original = Array.from(body.children)
+      const focused = original[999].querySelector('[data-track-action=up]')
+      focused.focus({ preventScroll: true })
+      const observer = new MutationObserver(() => {})
+      observer.observe(body, { subtree: true, childList: true, attributes: true, characterData: true })
+      moveTrack(999, 1000)
+      const focusRetained = document.activeElement === focused
+      const mutations = observer.takeRecords().length
+      observer.disconnect()
+      const local = body.children[1000] === original[999] && body.children[999] === original[1000] && body.children[998] === original[998]
+      moveTrack(0, 1999)
+      const endpoints = body.children[1999] === original[0] && body.children[0].querySelector('[data-track-action=up]').disabled && body.children[1999].querySelector('[data-track-action=down]').disabled
+      const order = Array.from(body.children).every((row, i) => row.dataset.trackIndex === String(i) && row.dataset.playingId === playlistState.draftTracks[i].id)
+      playlistState.tracksDirty = false
+      return { local, endpoints, order, focusRetained, mutations, count: body.children.length }
+    })
+    assert.equal(result.local, true); assert.equal(result.endpoints, true); assert.equal(result.order, true)
+    assert.equal(result.count, 2000)
+    assert.equal(result.focusRetained, true)
+    assert(result.mutations < 30, '相邻移动不应刷新整张表')
+  })
+
   await check('CSP 授权静态脚本并阻止内联脚本和事件', async page => {
     const response = await page.request.get(url)
     const policy = response.headers()['content-security-policy']

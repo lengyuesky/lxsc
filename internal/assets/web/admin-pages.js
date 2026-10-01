@@ -1,5 +1,5 @@
 // 概览、音源与日志的事件和实现由本模块管理。
-const LXSCAdmin = (() => {
+export function createAdmin({ $, adminAPI, esc, platName, fmtDur, formatBytes, formatTime, toast, isAbort }) {
 // ---- 概览 ----
 function sourceCard(s, brief) {
   const st = s.status
@@ -105,4 +105,6 @@ $('#refreshDashboard').addEventListener('click', () => loadDashboard().catch(err
 $('#refreshLogs').addEventListener('click', () => loadLogs().catch(error => toast(error.message, true)))
 
 return { loadDashboard, loadSources, loadLogs }
-})()
+}
+
+LXSCAdminModules.register('admin', createAdmin)

@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"lxsc/internal/js"
+	"lxsc/internal/metrics"
 	"lxsc/internal/urlcache"
 )
 
@@ -33,6 +35,15 @@ type urlPersistence struct {
 	store       *urlcache.Store
 	fingerprint func() (string, error)
 	log         *slog.Logger
+	touchMu     sync.Mutex
+	flushMu     sync.Mutex
+	pending     map[urlKey]time.Time
+	touchErr    error
+	touchLimit  int
+	stop        chan struct{}
+	done        chan struct{}
+	stopOnce    sync.Once
+	timing      *metrics.Operation
 }
 
 // EnableURLCache 必须在音源加载和目录导入完成后、接收请求前调用。
@@ -44,7 +55,7 @@ func (c *Catalog) EnableURLCache(dataDir, proxy string) error {
 	if c.urls.persistent != nil {
 		return errors.New("直链持久缓存已启用")
 	}
-	p := &urlPersistence{fingerprint: func() (string, error) { return c.urlCacheFingerprint(proxy) }, log: c.Log}
+	p := &urlPersistence{fingerprint: func() (string, error) { return c.urlCacheFingerprint(proxy) }, log: c.Log, timing: &c.urls.persistenceTiming}
 	fingerprint, err := p.fingerprint()
 	if err != nil {
 		return err
@@ -79,6 +90,14 @@ func (c *Catalog) EnableURLCache(dataDir, proxy string) error {
 		}
 		c.urls.entries.Add(urlKey{record.TrackID, record.Quality}, entry)
 	}
+	p.startTouches(c.urls.capacity, func() {
+		c.urls.mu.Lock()
+		defer c.urls.mu.Unlock()
+		if c.urls.persistent == p {
+			p.disable("批量更新使用时间")
+			c.urls.persistent = nil
+		}
+	})
 	c.urls.persistent = p
 	return nil
 }
@@ -126,6 +145,9 @@ func (c *Catalog) urlCacheFingerprint(proxy string) (string, error) {
 }
 
 func (p *urlPersistence) put(key urlKey, entry timedEntry[js.MusicURLResult]) error {
+	if err := p.pendingError(); err != nil {
+		return err
+	}
 	var expires int64
 	if !entry.expires.IsZero() {
 		expires = entry.expires.UnixMilli()
@@ -138,12 +160,31 @@ func (p *urlPersistence) put(key urlKey, entry timedEntry[js.MusicURLResult]) er
 }
 
 func (p *urlPersistence) touch(key urlKey, now time.Time) error {
-	return p.store.Touch(key.trackID, key.quality, now)
+	p.touchMu.Lock()
+	defer p.touchMu.Unlock()
+	if p.touchErr != nil {
+		return p.touchErr
+	}
+	// 使用时间是可丢弃的 LRU 提示；有界合并，不能拖慢播放命中。
+	if old, ok := p.pending[key]; ok || len(p.pending) < p.touchLimit {
+		if now.After(old) {
+			p.pending[key] = now
+		}
+	}
+	return nil
 }
 
-func (p *urlPersistence) remove(key urlKey) error { return p.store.Delete(key.trackID, key.quality) }
+func (p *urlPersistence) remove(key urlKey) error {
+	if err := p.pendingError(); err != nil {
+		return err
+	}
+	return p.store.Delete(key.trackID, key.quality)
+}
 
 func (p *urlPersistence) clear() error {
+	if err := p.pendingError(); err != nil {
+		return err
+	}
 	fingerprint, err := p.fingerprint()
 	if err != nil {
 		return err
@@ -152,10 +193,88 @@ func (p *urlPersistence) clear() error {
 }
 
 func (p *urlPersistence) disable(stage string) {
+	p.stopTouches()
 	err := p.store.Discard()
 	if p.log != nil {
 		p.log.Warn("直链持久缓存不可用，改用内存缓存", "stage", stage, "resetPending", err == nil)
 	}
 }
 
-func (p *urlPersistence) close() error { return p.store.Close() }
+func (p *urlPersistence) close() error {
+	p.stopTouches()
+	if err := p.flushTouches(); err != nil {
+		return errors.Join(err, p.store.Discard())
+	}
+	return p.store.Close()
+}
+
+func (p *urlPersistence) startTouches(limit int, onError func()) {
+	p.pending = make(map[urlKey]time.Time)
+	p.touchLimit = limit
+	p.stop, p.done = make(chan struct{}), make(chan struct{})
+	go func() {
+		failed := false
+		defer func() {
+			close(p.done)
+			if failed {
+				onError()
+			}
+		}()
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-p.stop:
+				return
+			case <-ticker.C:
+				if p.flushTouches() != nil {
+					failed = true
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (p *urlPersistence) stopTouches() {
+	if p.stop == nil {
+		return
+	}
+	p.stopOnce.Do(func() { close(p.stop) })
+	<-p.done
+}
+
+func (p *urlPersistence) pendingError() error {
+	p.touchMu.Lock()
+	defer p.touchMu.Unlock()
+	return p.touchErr
+}
+
+func (p *urlPersistence) flushTouches() error {
+	p.flushMu.Lock()
+	defer p.flushMu.Unlock()
+	p.touchMu.Lock()
+	if p.touchErr != nil {
+		err := p.touchErr
+		p.touchMu.Unlock()
+		return err
+	}
+	updates := make([]urlcache.TouchUpdate, 0, len(p.pending))
+	for key, at := range p.pending {
+		updates = append(updates, urlcache.TouchUpdate{TrackID: key.trackID, Quality: key.quality, At: at})
+	}
+	clear(p.pending)
+	p.touchMu.Unlock()
+	if len(updates) == 0 {
+		return nil
+	}
+	finish := p.timing.Start()
+	err := p.store.TouchBatch(updates)
+	finish(err)
+	if err != nil {
+		p.touchMu.Lock()
+		p.touchErr = err
+		p.touchMu.Unlock()
+	}
+	return err
+}

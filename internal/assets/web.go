@@ -56,7 +56,7 @@ func WebHandler() (http.Handler, error) {
 		parts := resourceURL.FindSubmatch(match)
 		if asset, ok := files[string(parts[2])]; ok {
 			attribute := string(parts[1]) + string(parts[2]) + "?v=" + asset.version + string(parts[3])
-			if string(parts[1]) == `src="` && strings.HasSuffix(string(parts[2]), ".js") {
+			if strings.HasSuffix(string(parts[2]), ".js") {
 				sum := sha256.Sum256(asset.plain)
 				attribute += ` integrity="sha256-` + base64.StdEncoding.EncodeToString(sum[:]) + `"`
 			}

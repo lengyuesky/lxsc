@@ -8,10 +8,28 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 )
 
 // MaxPlaylistTracks 是网页歌单的歌曲数量上限；旧 Subsonic 整体替换契约不变。
 const MaxPlaylistTracks = 2000
+
+// 每批最多 900 个参数，兼容 SQLite 较低的变量上限；顺序和重复项原样保存。
+func insertPlaylistTracksTx(ctx context.Context, tx *sql.Tx, id string, ids []string) error {
+	const batchSize = 300
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		args := make([]any, 0, (end-start)*3)
+		for i := start; i < end; i++ {
+			args = append(args, id, i, ids[i])
+		}
+		values := strings.TrimSuffix(strings.Repeat("(?,?,?),", end-start), ",")
+		if _, err := tx.ExecContext(ctx, `INSERT INTO playlist_tracks(playlist_id,position,track_id) VALUES `+values, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 var (
 	ErrPlaylistForbidden = errors.New("无权修改该歌单")

@@ -164,7 +164,20 @@ func TestPersistentURLCacheContextAndFaultRecovery(t *testing.T) {
 				afterTouchWindow := time.Now().Add(time.Minute)
 				c.urls.now = func() time.Time { return afterTouchWindow }
 				got, err := c.ResolvePlaybackURL(ctx, stabilityTrack(), "320k")
-				if err != nil || got.Result.URL != old.Result.URL || c.urls.persistent != nil {
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					c.urls.mu.Lock()
+					disabled := c.urls.persistent == nil
+					c.urls.mu.Unlock()
+					if disabled {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("后台写入故障未停止持久化")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				if err != nil || got.Result.URL != old.Result.URL {
 					t.Fatal("缓存数据库故障应退化为内存缓存")
 				}
 				if _, err := os.Stat(filepath.Join(dir, urlcache.Filename) + ".invalid"); err != nil {

@@ -30,7 +30,7 @@ type timedEntry[V any] struct {
 	touched time.Time
 }
 
-// cachePersistence 的操作在缓存锁内执行，保证失效后旧请求不能重新落盘。
+// 直链变更在缓存锁内执行；touch 只排队使用时间，后台更新不能创建记录。
 type cachePersistence[K comparable, V any] interface {
 	put(K, timedEntry[V]) error
 	touch(K, time.Time) error
@@ -162,10 +162,13 @@ func (c *requestCache[K, V]) loadSelected(ctx context.Context, key K, failed *ca
 					c.hits++
 					result := entry.result
 					result.cached = true
-					// 热门歌曲一分钟内只写一次使用时间，内存 LRU 仍每次更新。
+					// 热门歌曲每分钟最多排队一次使用时间，后台合并落盘；内存 LRU 仍每次更新。
 					now := c.now()
 					if c.persistent != nil && now.Sub(entry.touched) >= time.Minute {
-						c.persistLocked("更新使用时间", func(p cachePersistence[K, V]) error { return p.touch(key, now) })
+						if err := c.persistent.touch(key, now); err != nil {
+							c.persistent.disable("更新使用时间")
+							c.persistent = nil
+						}
 						entry.touched = now
 						c.entries.Add(key, entry)
 					}
