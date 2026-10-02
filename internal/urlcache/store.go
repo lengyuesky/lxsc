@@ -63,7 +63,10 @@ func Open(dataDir string) (*Store, error) {
 	}
 	database.SetMaxOpenConns(1)
 	s := &Store{db: database, path: path}
-	ctx, cancel := ioContext()
+	// 首次连接需要初始化 SQLite、启用 WAL 并执行多条建表/迁移语句。
+	// 这发生在接收请求之前，不能套用播放路径单次 I/O 的一秒预算；
+	// 慢磁盘或竞态检测下的调度延迟不应让启动误判为缓存损坏。
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var version int
 	if err := database.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
