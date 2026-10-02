@@ -37,6 +37,37 @@ func objectIDs(raw any) []string {
 	return ids
 }
 
+func TestBoardPlaylistDistinguishesUnloadedAndEmpty(t *testing.T) {
+	f := newDirectoryTestServer(t)
+	if _, err := f.store.Update(context.Background(), map[string]json.RawMessage{"boardSources": json.RawMessage(`["wy"]`)}); err != nil {
+		t.Fatal(err)
+	}
+	trackCalls := 0
+	f.server.Catalog.SetRemoteCallerForTest(func(_ context.Context, path string, _ ...any) (json.RawMessage, error) {
+		if strings.HasSuffix(path, ".getBoards") {
+			return json.RawMessage(`{"list":[{"name":"空榜单","bangid":"empty"}]}`), nil
+		}
+		trackCalls++
+		return json.RawMessage(`{"list":[]}`), nil
+	})
+	count := func() float64 {
+		root := f.boardRequest(t, f.server.getPlaylists, "/rest/getPlaylists?f=json&c=Amcfy")
+		return root["playlists"].(map[string]any)["playlist"].([]any)[0].(map[string]any)["songCount"].(float64)
+	}
+	if count() <= 0 || trackCalls != 0 {
+		t.Fatal("未知数量必须可打开，同时不能提前读取榜单内容")
+	}
+	root := f.boardRequest(t, f.server.getPlaylist, "/rest/getPlaylist?f=json&id=lb-wy-empty")
+	playlist := root["playlist"].(map[string]any)
+	if playlist["songCount"] != float64(0) || len(playlist["entry"].([]any)) != 0 || count() != 0 || trackCalls != 1 {
+		t.Fatalf("真实空榜单必须保持零首，且没有占位歌曲: %+v", playlist)
+	}
+	f.server.Catalog.PurgeMetadataCaches()
+	if count() <= 0 || trackCalls != 1 {
+		t.Fatal("歌曲缓存清除后不能继续用过时的零首阻止客户端重新请求")
+	}
+}
+
 func TestBoardSelectionsMatchAcrossDirectoriesAndPlaylists(t *testing.T) {
 	f := newDirectoryTestServer(t)
 	ctx := context.Background()

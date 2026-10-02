@@ -541,6 +541,28 @@ func (c *Catalog) BoardTracks(ctx context.Context, source, bangID string, page i
 	return c.parseList(ctx, raw, source)
 }
 
+// CachedBoardSummary 只读取已加载的榜单缓存；未知与真正的空榜单分开处理。
+// 与 BoardTracks 共用缓存及过期时间，避免独立计数缓存长期保留过时的空状态。
+func (c *Catalog) CachedBoardSummary(source, bangID string) (count, duration int, ok bool) {
+	raw, ok := c.generic.Get(fmt.Sprintf("board|%s|%s|1", source, bangID))
+	if !ok {
+		return 0, 0, false
+	}
+	var result struct {
+		List []map[string]any `json:"list"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.List == nil {
+		return 0, 0, false
+	}
+	for _, item := range result.List {
+		if item != nil {
+			count++
+			duration += FromMap(item).Duration()
+		}
+	}
+	return count, duration, true
+}
+
 // SongListDetail 在线歌单歌曲
 func (c *Catalog) SongListDetail(ctx context.Context, source, id string, page int) ([]*Info, map[string]any, error) {
 	if page <= 0 {
@@ -602,26 +624,53 @@ func (c *Catalog) HotSearch(ctx context.Context, source string) []string {
 
 // Lyric 获取歌词：SDK 优先，失败回退音源脚本；带缓存
 func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
+	if in == nil {
+		return nil, errors.New("歌曲不存在")
+	}
 	id := in.TrackID()
 	if l, ok := c.lyrics.Get(id); ok {
 		return l, nil
 	}
 	var r js.LyricResult
-	err := c.SDK.Call(ctx, in.Source()+".getLyric", &r, in.Raw)
-	if err != nil || r.Lyric == "" {
-		if sr, serr := c.Sources.Lyric(ctx, in.Source(), c.ScriptInfo(in)); serr == nil && sr.Lyric != "" {
-			r = *sr
-			err = nil
-		} else if err == nil {
-			err = errors.New("歌词为空")
+	err := errors.New("歌词 SDK 未初始化")
+	if c.SDK != nil {
+		// 给音源回退留下时间，不能让慢平台耗尽客户端的全部等待预算。
+		sdkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		err = c.SDK.Call(sdkCtx, in.Source()+".getLyric", &r, in.Raw)
+		cancel()
+	}
+	if err == nil {
+		if l := usableLyrics(r); l != nil {
+			c.lyrics.Add(id, l)
+			return l, nil
+		}
+		err = errors.New("歌词为空")
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if c.Sources != nil {
+		if result, sourceErr := c.Sources.Lyric(ctx, in.Source(), c.ScriptInfo(in)); sourceErr == nil && result != nil {
+			if l := usableLyrics(*result); l != nil {
+				c.lyrics.Add(id, l)
+				return l, nil
+			}
 		}
 	}
-	if err != nil {
-		return nil, err
+	// 空白、仅元信息或仅时间标签都不是可用歌词，不缓存，以便后续请求重试。
+	return nil, err
+}
+
+func usableLyrics(result js.LyricResult) *Lyrics {
+	for _, raw := range []string{result.Lyric, result.LxLyric} {
+		lyrics := ParseLyrics(raw, result.TLyric, result.RLyric)
+		for _, line := range lyrics.Lines {
+			if strings.TrimSpace(line.Value) != "" {
+				return lyrics
+			}
+		}
 	}
-	l := ParseLyrics(r.Lyric, r.TLyric, r.RLyric)
-	c.lyrics.Add(id, l)
-	return l, nil
+	return nil
 }
 
 // Cover 封面 URL：元数据自带 → SDK getPic → 音源脚本 pic

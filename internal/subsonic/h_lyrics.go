@@ -1,24 +1,33 @@
 package subsonic
 
 import (
+	"context"
 	"net/http"
+	"strings"
+	"time"
 
 	"lxsc/internal/music"
 )
 
 func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
+	ctx, cancel := context.WithTimeout(rc.ctx, 12*time.Second)
+	defer cancel()
 	id := param(r, "id")
 	var in *music.Info
 	if id != "" {
-		in, _ = s.Catalog.Track(rc.ctx, id)
+		in, _ = s.Catalog.Track(ctx, id)
 	}
 	if in == nil {
 		artist, title := param(r, "artist"), param(r, "title")
-		if title != "" {
-			res := s.Catalog.Search(rc.ctx, title+" "+artist, music.SearchOptions{Limit: 5})
-			if len(res) > 0 {
-				in = res[0]
+		in = s.Catalog.LocalLyricTrack(ctx, artist, title)
+		if in == nil && strings.TrimSpace(title) != "" {
+			res := s.Catalog.Search(ctx, strings.TrimSpace(title+" "+artist), music.SearchOptions{Limit: 5})
+			for _, candidate := range res {
+				if music.MatchesLyricTrack(candidate, artist, title) {
+					in = candidate
+					break
+				}
 			}
 		}
 	}
@@ -26,7 +35,7 @@ func (s *Server) getLyrics(w http.ResponseWriter, r *http.Request) {
 		writeOK(w, r, "lyrics", M{"value": ""})
 		return
 	}
-	l, err := s.Catalog.Lyric(rc.ctx, in)
+	l, err := s.Catalog.Lyric(ctx, in)
 	if err != nil {
 		writeOK(w, r, "lyrics", M{"artist": in.Singer(), "title": in.Name(), "value": ""})
 		return
@@ -44,13 +53,15 @@ func lineObjs(lines []music.Line) []M {
 
 func (s *Server) getLyricsBySongID(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
+	ctx, cancel := context.WithTimeout(rc.ctx, 12*time.Second)
+	defer cancel()
 	id := param(r, "id")
-	in, err := s.Catalog.Track(rc.ctx, id)
+	in, err := s.Catalog.Track(ctx, id)
 	if err != nil {
 		writeErr(w, r, ErrNotFound, err.Error())
 		return
 	}
-	l, err := s.Catalog.Lyric(rc.ctx, in)
+	l, err := s.Catalog.Lyric(ctx, in)
 	if err != nil {
 		writeOK(w, r, "lyricsList", M{"structuredLyrics": []M{}})
 		return

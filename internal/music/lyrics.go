@@ -31,6 +31,7 @@ var (
 
 // ParseLRC 解析 LRC 文本
 func ParseLRC(lrc string) (lines []Line, offset int, synced bool) {
+	lrc = strings.TrimPrefix(lrc, "\uFEFF")
 	lrc = strings.ReplaceAll(lrc, "\r\n", "\n")
 	lrc = strings.ReplaceAll(lrc, "\r", "\n")
 	for _, raw := range strings.Split(lrc, "\n") {
@@ -135,6 +136,12 @@ func (l *Lyrics) PlainText() string {
 // MergedLRC 生成原文+翻译合并的 LRC（同一时间点两行）
 func (l *Lyrics) MergedLRC() string {
 	var sb strings.Builder
+	if !l.Synced {
+		return l.PlainText()
+	}
+	if l.Offset != 0 {
+		sb.WriteString("[offset:" + strconv.Itoa(l.Offset) + "]\n")
+	}
 	trans := map[int]string{}
 	for _, t := range l.Trans {
 		trans[t.Start] = t.Value

@@ -59,7 +59,7 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 			if len(args) != 2 || fmt.Sprint(args[0]) != "one" || fmt.Sprint(args[1]) != "1" {
 				return nil, fmt.Errorf("榜单参数异常: %v", args)
 			}
-			return json.RawMessage(`{"total":1,"list":[{"source":"wy","songmid":"one","name":"歌曲","singer":"歌手","albumName":"专辑","albumId":"album"}]}`), nil
+			return json.RawMessage(`{"total":2,"list":[{"source":"wy","songmid":"one","name":"歌曲","singer":"歌手","albumName":"专辑","albumId":"album","interval":"00:30"},{"source":"wy","songmid":"two","name":"第二首","singer":"歌手","interval":"00:45"}]}`), nil
 		default:
 			return nil, fmt.Errorf("意外接口: %s", path)
 		}
@@ -89,6 +89,9 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 	if len(playlists) != 1 || playlists[0].(map[string]any)["name"] != "网易云 · 榜单一" {
 		t.Fatalf("原生歌单未显示榜单摘要: %+v", playlists)
 	}
+	if playlists[0].(map[string]any)["songCount"].(float64) <= 0 {
+		t.Fatal("尚未加载的榜单不能标为零首，否则客户端会跳过详情请求")
+	}
 	if len(paths) != 1 || paths[0] != "wy.leaderboard.getBoards" {
 		t.Fatalf("getPlaylists 不应请求榜单歌曲: %v", paths)
 	}
@@ -97,7 +100,7 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 	if playlist["name"] != "网易云 · 榜单一" {
 		t.Fatalf("榜单详情名称异常: %+v", playlist)
 	}
-	if entries, ok := playlist["entry"].([]any); !ok || len(entries) != 1 {
+	if entries, ok := playlist["entry"].([]any); !ok || len(entries) != 2 {
 		t.Fatalf("榜单详情歌曲异常: %+v", playlist["entry"])
 	}
 	if len(paths) != 2 || paths[1] != "wy.leaderboard.getList" {
@@ -106,6 +109,14 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 	_ = request(server.getPlaylist, "/rest/getPlaylist.view?id="+music.BoardID("wy", "one")+"&f=json")
 	if len(paths) != 2 {
 		t.Fatalf("榜单歌曲缓存未生效: %v", paths)
+	}
+	root = request(server.getPlaylists, "/rest/getPlaylists?f=json&c=Amcfy")
+	summary := root["playlists"].(map[string]any)["playlist"].([]any)[0].(map[string]any)
+	if summary["songCount"] != playlist["songCount"] || summary["duration"] != playlist["duration"] || len(paths) != 2 {
+		t.Fatalf("已加载榜单必须复用缓存返回真实数量和时长: %+v", summary)
+	}
+	if summary["songCount"] != float64(2) || summary["duration"] != float64(75) {
+		t.Fatalf("不能继续返回待加载标记或仅第一首的时长: %+v", summary)
 	}
 	after, err := database.Statistics(ctx)
 	if err != nil {

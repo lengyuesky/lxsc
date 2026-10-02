@@ -42,6 +42,7 @@ function song(source, key, query) {
   return {source,songmid:String(key),name:(query ? query+' · ' : '')+names[Number(String(key).replace(/^fail-/,''))-1],singer:'测试歌手',albumName:'合成音频',interval:'00:45',types:[{type:'320k'},{type:'128k'}]};
 }
 globalThis.__sdk_call=(path,args)=> {
+	if (path.endsWith('.getLyric')) return Promise.resolve({lyric:'[00:00.00]测试歌词第一行\n[00:10.00]测试歌词第二行',tlyric:'[00:00.00]First line\n[00:10.00]Second line'});
 	if (args[0]==='渐进测试' && path.startsWith('tx.')) return new Promise(resolve=>setTimeout(()=>resolve({list:[1,2,3].map(id=>song('tx',id,args[0]))}),1500));
 	if (args[0]==='渐进测试' && path.startsWith('mg.')) return Promise.reject(new Error('合成平台故障'));
   if (path.endsWith('.songList.getListDetail')) {

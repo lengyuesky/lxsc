@@ -499,7 +499,7 @@ func (m *SourceManager) Lyric(ctx context.Context, platform string, musicInfo an
 			continue
 		}
 		var r LyricResult
-		if err := json.Unmarshal(out, &r); err != nil || r.Lyric == "" {
+		if err := json.Unmarshal(out, &r); err != nil || (strings.TrimSpace(r.Lyric) == "" && strings.TrimSpace(r.LxLyric) == "") {
 			lastErr = errors.New("歌词数据无效")
 			continue
 		}
