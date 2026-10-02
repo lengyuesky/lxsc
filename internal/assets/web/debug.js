@@ -40,7 +40,7 @@ async function createDebugToken(event) {
     if (epoch !== debugState.epoch || !sessionState.me?.isAdmin || location.hash !== '#debug') return
     debugState.id = data.credential.id
     $('#debugTokenValue').value = data.token
-    $('#debugShareValue').value = `仅分享给受信任的排查者，不要公开。\n部署地址：${location.origin}\n临时凭据：Bearer ${data.token}\n绝对到期：${data.credential.expiresAt}\n权限：${data.credential.scopes.join(', ')}\nAPI：${location.origin}/api/debug/status\n事件：${location.origin}/api/debug/events\n${scopes.includes('probe') ? `主动探测：POST ${location.origin}/api/debug/probe（会向音源发送请求，产生少量流量及链接缓存副作用）\n` : ''}只允许 Authorization 请求头，不能用于管理或播放。仅服务端视角，不证明客户端能播。到期不可续期，需重建；用完请撤销。公网务必 HTTPS。`
+    $('#debugShareValue').value = `仅分享给受信任的排查者，不要公开。\n部署地址：${location.origin}\n临时凭据：Bearer ${data.token}\n绝对到期：${data.credential.expiresAt}\n权限：${data.credential.scopes.join(', ')}\nAPI：${location.origin}/api/debug/status\nAI 排查指南：${location.origin}/api/debug/capabilities\n事件：${location.origin}/api/debug/events\n${scopes.includes('probe') ? `主动探测：POST ${location.origin}/api/debug/probe（音频链接）\n榜单探测：POST ${location.origin}/api/debug/probe/board，JSON：{"boardId":"从事件获取的 lb-平台-ID"}\n歌词探测：POST ${location.origin}/api/debug/probe/lyrics，JSON：{"trackId":"从事件获取的 tr-平台-ID"}\n主动探测会产生少量流量及缓存副作用。\n` : ''}先读取 AI 排查指南，再让用户在箭头音乐中打开问题榜单/歌词，读取事件；根据 endpoint、client、format、result、count、lines、protocolCode 判断。不要把探测事件误当作客户端请求。\n只允许 Authorization 请求头，不能用于管理、播放器登录或播放。仅服务端视角，不证明客户端能播。到期不可续期，需重建；用完请撤销。公网务必 HTTPS。`
     $('#debugSecret').classList.remove('hidden')
     await loadDebug()
   } catch (error) { if (!isAbort(error)) toast(error.message, true) }

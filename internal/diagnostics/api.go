@@ -283,10 +283,13 @@ func (s *Server) Routes() http.Handler {
 	r.Use(SensitiveIO)
 	r.Use(s.authorize)
 	r.Get("/status", s.status)
+	r.Get("/capabilities", s.capabilities)
 	r.Get("/events", func(w http.ResponseWriter, r *http.Request) {
 		output(w, 200, map[string]any{"events": s.Events.List()})
 	})
 	r.Post("/probe", s.probe)
+	r.Post("/probe/board", func(w http.ResponseWriter, r *http.Request) { s.compatibilityProbe(w, r, true) })
+	r.Post("/probe/lyrics", func(w http.ResponseWriter, r *http.Request) { s.compatibilityProbe(w, r, false) })
 	return r
 }
 
@@ -418,7 +421,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if v.URLCacheTTL < 0 {
 		cacheMode = "permanent"
 	}
-	output(w, 200, map[string]any{"version": version, "uptimeSeconds": int64(time.Since(s.StartAt).Seconds()), "streamMode": Mode(v.StreamMode), "urlCacheMode": cacheMode, "platforms": platforms, "sourceHealth": health})
+	output(w, 200, map[string]any{"version": version, "diagnosticsVersion": 2, "uptimeSeconds": int64(time.Since(s.StartAt).Seconds()), "streamMode": Mode(v.StreamMode), "urlCacheMode": cacheMode, "platforms": platforms, "sourceHealth": health})
 }
 
 var contentRange = regexp.MustCompile(`^bytes [0-9]{1,19}-[0-9]{1,19}/([0-9]{1,19}|\*)$`)

@@ -147,3 +147,34 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 恢复回归还覆盖真实 TCP 提前拒绝后响应可读且连接结束、唯一数据库连接被占用时第9个请求拒绝/撤销/到期/默认20秒期限，以及 JS 取链/SDK元数据上游取消和正常播放共享取链不受影响。
 
 覆盖认证隔离、管理员/CSRF/TTL、撤销/到期/创建者失效的在途取消、数量/限频/并发、恶意错误脱敏、DNS绑定与重定向/私网/TLS、无播放持久化副作用、实际 h_media 事件及强制302、前端一次显示/复制失败/撤销/清理。切源回归另覆盖同名不同 ID 脚本、首次/缓存/刷新校验、坏源耗尽、总预算与长音频、候选集合并发隔离、持久缓存身份，以及 probe 收到403仍仅交付原三阶段、不自动切源。浏览器 fixture 的音频在 localhost，主动探测预期返回 `blocked_target`，不会为测试放松生产 SSRF规则。
+
+## 诊断版本 2：箭头音乐与 AI 排查
+
+`GET /api/debug/status` 的 `diagnosticsVersion: 2` 表示支持本节功能。`GET /api/debug/capabilities` 返回机器可读的鉴权说明、端点、请求示例、限制和排查步骤，需要 `read` 权限。管理页复制的分享说明包含这一入口，可直接私下交给 AI。
+
+箭头音乐仍使用自己的普通账号，以 **Subsonic** 类型连接服务端；临时调试 Bearer 仅供 AI 调用 `/api/debug`，不能填入播放器，也不能读取原始日志或管理数据。
+
+### 观察真实客户端请求
+
+让用户先在箭头音乐中打开问题榜单，或进入正在播放歌曲的歌词页，然后读取 `/api/debug/events`。新增 `stage=client_response`，覆盖 `getPlaylists`、`getPlaylist`、`getMusicDirectory`、`getLyrics`、`getLyricsBySongId`、`getSong` 和 `getAlbum`，包括认证失败的协议响应。
+
+- `client`：根据客户端声明的 `c` 参数归类为 `amcfy`、`stream_music`、`other`、`unknown`；仅用于诊断，不作为可信身份。原始客户端字符串不输出。
+- `endpoint`、`format`：固定枚举的接口名及 `json/xml/jsonp`。
+- `result`：`ok/empty/failed/unavailable`；`protocolCode` 单独表示 Subsonic 错误码。HTTP 200 不代表协议成功。
+- `count`：实际响应中的列表条目数（歌单详情为实际歌曲数，非摘要的待加载标记）。`lines`：歌词行数；`synced`：结构化歌词是否含同步轨。字段不存在表示不适用，零表示确实返回空。
+- `trackId`、`boardId`：仅接受固定平台前缀和有界 ID；歌单列表事件还提供最多 10 个公开在线榜单 `boardIds`，便于 AI 在客户端未请求详情时定向探测。不输出自定义歌单 ID、歌曲/歌手名称、歌词正文、用户名、认证字段或任意请求头。
+
+事件只表示服务端生成的协议响应，不证明客户端收到了全部字节或解析成功。没有事件可能是客户端未请求、离线缓存、反向代理未转发、窗口已被最近 200 条事件覆盖或部署版本不支持，不能仅凭事件缺失断言客户端故障。
+
+### 定向主动探测
+
+需要现有的 `read + probe` 权限，共用每凭据每分钟 30 次、全局最多 2 个并发探测、请求总计 20 秒、撤销和到期取消等限制。只用用户指定或事件提供的 ID，不批量扫描：
+
+| 方法/入口 | JSON 请求 | 返回 |
+| --- | --- | --- |
+| `POST /api/debug/probe/board` | `{"boardId":"lb-wy-19723756"}` | `board_probe` 事件、实际第一页歌曲数量、最多 3 个合法歌曲 ID 供后续定向歌词探测 |
+| `POST /api/debug/probe/lyrics` | `{"trackId":"tr-wy-123456"}` | `lyrics_probe` 事件、歌词行数、同步状态或安全错误分类，无歌词正文 |
+
+只返回 `events`、`sampleTrackIds`、`perspective: server_only`、`cacheSideEffects: true`。JSON 拒绝未知/重复字段、URL、非法 ID、null 和尾随内容。榜单探测沿用现有目录缓存；歌词探测优先 SDK、必要时回退音源。两者可能填充短期元数据和歌词缓存，不写入资料库、不记录播放、不修改配置，不执行音频流请求。
+
+AI 应先比较真实 `client_response`：返回空或失败时，再对同一 ID 探测上游；真实响应有歌曲/歌词而客户端不显示时，继续检查客户端版本、连接类型、响应格式与缓存。主动探测不是客户端模拟，不能单独证明兼容问题已修复。部署升级会让旧临时凭据失效，需重新创建；用完只能由管理员在控制台撤销。

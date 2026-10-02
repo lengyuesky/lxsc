@@ -15,19 +15,32 @@ import (
 
 // Event 只接受固定字段；不得加入 URL、用户名、歌曲文本或自由文本错误。
 type Event struct {
-	Time      time.Time `json:"time"`
-	Stage     string    `json:"stage"`
-	TrackID   string    `json:"trackId,omitempty"`
-	Platform  string    `json:"platform,omitempty"`
-	Quality   string    `json:"quality,omitempty"`
-	Mode      string    `json:"mode,omitempty"`
-	Cached    bool      `json:"cached"`
-	Status    int       `json:"status"`
-	Error     string    `json:"error"`
-	ElapsedMS int64     `json:"elapsedMs"`
+	Endpoint     string    `json:"endpoint,omitempty"`
+	Client       string    `json:"client,omitempty"`
+	Format       string    `json:"format,omitempty"`
+	BoardID      string    `json:"boardId,omitempty"`
+	BoardIDs     []string  `json:"boardIds,omitempty"`
+	Result       string    `json:"result,omitempty"`
+	Count        *int      `json:"count,omitempty"`
+	Lines        *int      `json:"lines,omitempty"`
+	Synced       *bool     `json:"synced,omitempty"`
+	ProtocolCode *int      `json:"protocolCode,omitempty"`
+	Time         time.Time `json:"time"`
+	Stage        string    `json:"stage"`
+	TrackID      string    `json:"trackId,omitempty"`
+	Platform     string    `json:"platform,omitempty"`
+	Quality      string    `json:"quality,omitempty"`
+	Mode         string    `json:"mode,omitempty"`
+	Cached       bool      `json:"cached"`
+	Status       int       `json:"status"`
+	Error        string    `json:"error"`
+	ElapsedMS    int64     `json:"elapsedMs"`
 }
 
 var trackPattern = regexp.MustCompile(`^tr-(wy|tx|kw|kg|mg)-[A-Za-z0-9_-]{1,128}$`)
+var boardPattern = regexp.MustCompile(`^lb-(wy|tx|kw|kg|mg)-[A-Za-z0-9_-]{1,128}$`)
+
+func ValidBoardID(id string) bool { return boardPattern.MatchString(id) }
 
 func ValidTrackID(id string) bool { return trackPattern.MatchString(id) }
 func oneOf(value string, values ...string) string {
@@ -100,12 +113,40 @@ func (b *Events) Add(e Event) {
 	if b == nil {
 		return
 	}
-	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe")
+	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe")
 	if e.Stage == "" {
 		return
 	}
 	if !ValidTrackID(e.TrackID) {
 		e.TrackID = ""
+	}
+	e.Endpoint = oneOf(e.Endpoint, "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum")
+	e.Client = oneOf(e.Client, "amcfy", "stream_music", "other", "unknown")
+	e.Format = oneOf(e.Format, "json", "xml", "jsonp")
+	e.Result = oneOf(e.Result, "ok", "failed", "empty", "unavailable")
+	if !ValidBoardID(e.BoardID) {
+		e.BoardID = ""
+	}
+	boardIDs := make([]string, 0, min(10, len(e.BoardIDs)))
+	for _, id := range e.BoardIDs {
+		if ValidBoardID(id) {
+			boardIDs = append(boardIDs, id)
+		}
+		if len(boardIDs) == 10 {
+			break
+		}
+	}
+	e.BoardIDs = boardIDs
+	// 复制指针字段，调用方不能在入环后修改已校验数据。
+	for _, field := range []**int{&e.Count, &e.Lines, &e.ProtocolCode} {
+		if *field != nil {
+			value := min(1000000, max(0, **field))
+			*field = &value
+		}
+	}
+	if e.Synced != nil {
+		value := *e.Synced
+		e.Synced = &value
 	}
 	e.Platform = Platform(e.Platform)
 	e.Quality = Quality(e.Quality)

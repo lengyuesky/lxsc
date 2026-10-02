@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"lxsc/internal/diagnostics"
 )
 
 // APIVersion 声明的协议版本
@@ -63,6 +65,9 @@ func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
 			status, retry = http.StatusTooManyRequests, "60"
 		}
 		w.Header().Set("Retry-After", retry)
+		if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
+			event.Status = status
+		}
 		switch detectFormat(r) {
 		case "json":
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -78,6 +83,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
 }
 
 func writeResp(w http.ResponseWriter, r *http.Request, status, name string, payload any, errObj M) {
+	recordClientResponse(r, status, name, payload, errObj)
 	format := detectFormat(r)
 	root := M{
 		"status":        status,

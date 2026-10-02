@@ -99,6 +99,8 @@ func (s *Server) Routes() http.Handler {
 	dispatch := func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "method")
 		name = strings.TrimSuffix(name, ".view")
+		r, finishDiagnostic := s.beginClientDiagnostic(r, name)
+		defer finishDiagnostic()
 		h, ok := handlers[name]
 		if !ok {
 			writeErr(w, r, ErrGeneric, "Unsupported method: "+name)

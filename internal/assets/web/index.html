@@ -239,12 +239,12 @@
 
     <section id="tab-debug" class="tab admin-only">
       <div class="section-head"><h2>限时安全调试</h2><button id="debugRefresh" class="sec">刷新列表</button></div>
-      <p class="note">仅私下分享给受信任的排查者，不等于公开访问。默认只读状态与结构化播放诊断，不提供原始日志、配置或用户内容。凭据固定绝对到期，不可续期；进程重启全部失效，用完请撤销。</p>
+      <p class="note">可私下交给受信任的 AI 或排查者，诊断箭头音乐、音流的榜单、歌词及播放问题。记录客户端类型、请求接口、返回数量与错误分类，不提供原始日志或歌词正文。播放器仍使用原有账号连接 Subsonic，临时调试凭据只交给排查者。凭据固定绝对到期，不可续期；进程重启全部失效，用完请撤销。</p>
       <p id="debugHTTPSWarning" class="note warn">当前不是 HTTPS。公网分享或调用务必先启用 HTTPS，否则凭据可能被窃取。</p>
       <form id="debugCreateForm" class="card form-card">
         <label>有效期<select id="debugTTL"><option value="900">15 分钟（默认）</option><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="86400">24 小时</option></select></label>
-        <p>固定权限：read（状态 + 最近诊断事件）</p>
-        <label><input type="checkbox" id="debugProbeScope">额外允许 probe 主动探测：会向音源发送请求和少量流量，可能填充元数据/直链缓存；不修改配置或记录播放/收听统计。</label>
+        <p>固定权限：read（状态 + AI 排查指南 + 最近客户端请求与播放事件）</p>
+        <label><input type="checkbox" id="debugProbeScope">额外允许 probe 主动探测：读取在线榜单、歌词或检查音频链接，会产生少量网络流量和缓存副作用；不修改配置或记录播放/收听统计。</label>
         <button id="debugCreateButton" type="submit">创建临时凭据</button>
       </form>
       <div id="debugSecret" class="card hidden">

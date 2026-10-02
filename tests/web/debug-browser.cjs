@@ -32,6 +32,9 @@ module.exports = async function ({ check, url, artifacts, login }) {
     const headers = { Authorization: 'Bearer ' + token }
     assert.equal((await page.request.get(url + '/api/debug/status', { headers })).status(), 200)
     assert.equal((await page.request.get(url + '/api/debug/events', { headers })).status(), 200)
+    const capabilities = await (await page.request.get(url + '/api/debug/capabilities', { headers })).json()
+    assert.equal(capabilities.diagnosticsVersion, 2)
+    assert.equal(capabilities.clientLogin, false)
     assert.equal((await page.request.post(url + '/api/debug/probe', { headers, data: { trackId: 'tr-wy-1', quality: '320k' } })).status(), 403)
     await page.evaluate(() => {
       window.debugCopied = []
@@ -39,7 +42,7 @@ module.exports = async function ({ check, url, artifacts, login }) {
     })
     await page.locator('#debugCopyShare').click()
     const copied = await page.evaluate(() => window.debugCopied[0])
-    for (const part of [url, 'Bearer ' + token, data.credential.expiresAt, '/api/debug/status', 'read']) assert.ok(copied.includes(part))
+    for (const part of [url, 'Bearer ' + token, data.credential.expiresAt, '/api/debug/status', '/api/debug/capabilities', 'read']) assert.ok(copied.includes(part))
     await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('无剪贴板权限') } })
     await page.locator('#debugCopyToken').click()
     assert.equal(await page.locator('#debugTokenValue').evaluate(el => document.activeElement === el && el.selectionStart === 0 && el.selectionEnd === el.value.length), true)
@@ -51,6 +54,18 @@ module.exports = async function ({ check, url, artifacts, login }) {
     const activeCreate = page.waitForResponse(response => response.url() === url + '/api/admin/debug-tokens' && response.request().method() === 'POST')
     await page.locator('#debugCreateButton').click()
     const active = await (await activeCreate).json()
+    const activeHeaders = { Authorization: 'Bearer ' + active.token }
+    for (const [kind, data, field] of [['board', { boardId: 'lb-wy-hot' }, 'count'], ['lyrics', { trackId: 'tr-wy-1' }, 'lines']]) {
+      const response = await page.request.post(url + '/api/debug/probe/' + kind, { headers: activeHeaders, data })
+      assert.equal(response.status(), 200)
+      const body = await response.json()
+      assert.equal(body.events[0].result, 'ok')
+      assert.ok(body.events[0][field] > 0)
+      assert.ok(!JSON.stringify(body).includes('测试歌词'))
+    }
+    await page.request.get(url + '/rest/getLyricsBySongId?u=alice&p=test-password&c=Amcfy&f=json&id=tr-wy-1')
+    const observed = await (await page.request.get(url + '/api/debug/events', { headers: activeHeaders })).json()
+    assert.ok(observed.events.some(event => event.stage === 'client_response' && event.client === 'amcfy' && event.endpoint === 'getLyricsBySongId' && event.lines > 0))
     const probe = await page.request.post(url + '/api/debug/probe', { headers: { Authorization: 'Bearer ' + active.token }, data: { trackId: 'tr-wy-1', quality: '320k' } })
     assert.equal(probe.status(), 200)
     const result = await probe.json()
