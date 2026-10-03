@@ -258,3 +258,45 @@ func TestUpdatePlaylistAddsSongsToFront(t *testing.T) {
 		}
 	}
 }
+
+func TestFullBoardPlaylistAndDirectoryShareAllPages(t *testing.T) {
+	f := newDirectoryTestServer(t)
+	if _, err := f.store.Update(context.Background(), map[string]json.RawMessage{"boardSources": json.RawMessage(`["kg"]`)}); err != nil {
+		t.Fatal(err)
+	}
+	trackCalls := 0
+	f.server.Catalog.SetRemoteCallerForTest(func(_ context.Context, path string, args ...any) (json.RawMessage, error) {
+		if path == "kg.leaderboard.getBoards" {
+			return json.RawMessage(`{"list":[{"name":"测试全榜","bangid":"8888"}]}`), nil
+		}
+		trackCalls++
+		page := args[1].(int)
+		list := []map[string]any{}
+		for id := (page-1)*100 + 1; id <= min(page*100, 205); id++ {
+			list = append(list, map[string]any{"songmid": fmt.Sprint(id), "name": "歌曲", "interval": "00:01"})
+		}
+		return json.Marshal(map[string]any{"list": list, "total": 205, "limit": 100, "page": page})
+	})
+	f.boardRequest(t, f.server.getPlaylists, "/rest/getPlaylists?f=json")
+	if trackCalls != 0 {
+		t.Fatal("歌单列表不能预扫描全部歌曲")
+	}
+	root := f.boardRequest(t, f.server.getPlaylist, "/rest/getPlaylist?f=json&id=lb-kg-8888&c=Amcfy&size=1")
+	playlist := root["playlist"].(map[string]any)
+	entries := playlist["entry"].([]any)
+	if len(entries) != 205 || playlist["songCount"] != float64(205) || playlist["duration"] != float64(205) || trackCalls != 3 {
+		t.Fatalf("原生歌单未返回整榜: count=%d calls=%d", len(entries), trackCalls)
+	}
+	if entries[0].(map[string]any)["id"] != "tr-kg-1" || entries[204].(map[string]any)["id"] != "tr-kg-205" {
+		t.Fatal("榜单顺序错误")
+	}
+	directory := f.directory(t, "lb-kg-8888")
+	if len(directory["child"].([]any)) != 205 || trackCalls != 3 {
+		t.Fatal("目录必须复用完整榜单缓存")
+	}
+	root = f.boardRequest(t, f.server.getPlaylists, "/rest/getPlaylists?f=json")
+	summary := root["playlists"].(map[string]any)["playlist"].([]any)[0].(map[string]any)
+	if summary["songCount"] != float64(205) || trackCalls != 3 {
+		t.Fatal("摘要仍在使用第一页数量")
+	}
+}

@@ -65,7 +65,7 @@ func (s *Server) compatibilityProbe(w http.ResponseWriter, r *http.Request, boar
 		event.BoardID = id
 		_, _, event.Cached = s.Catalog.CachedBoardSummary(parsed.Source, parsed.Key)
 		var tracks []*music.Info
-		tracks, err = s.Catalog.BoardTracks(r.Context(), parsed.Source, parsed.Key, 1)
+		tracks, err = s.Catalog.FullBoardTracks(r.Context(), parsed.Source, parsed.Key)
 		if err == nil {
 			n := len(tracks)
 			event.Count = &n

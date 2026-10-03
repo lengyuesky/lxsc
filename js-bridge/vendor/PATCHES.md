@@ -40,6 +40,8 @@
 
 ## 许可与再上游引用
 
+2026-10-03：`musicSdk/tx/leaderboard.js` 为 QQ 榜单传递页码对应的 `offset`，保留平台 `totalNum`，不再将第一页长度当作整榜总数；`musicSdk/mg/leaderboard.js` 使用 `needAll=1` 读取完整栏目，移除伪分页上限。Go 层按分页读取完整榜单，保持顺序并去重，异常时不返回部分成功结果。
+
 两个上游的完整 LICENSE 和 README 适用协议节已归档到 [`licenses/upstream/`](../../licenses/upstream/)。lxserver LICENSE 末尾原有的 File Browser Contributors 声明未删改。两个 README 均包含明确的补充协议及其优先表述，不能只看 Apache 标签。
 
 `musicSdk/wy/utils/crypto.js` 和 `musicSdk/wy/songList.js` 原有 NeteaseCloudMusicApi 来源注释、`musicSdk/kg/comment.js` 原有 wp_MusicApi 固定提交引用继续保留；相应许可副本、证据边界见 [`THIRD_PARTY_NOTICES.md`](../../THIRD_PARTY_NOTICES.md)。`kg/vendors/infSign.min.js` 按已核对 lxserver 文件保留，未找到它在该上游中另附的独立来源/许可说明，不声称已经完成其更深层权属审计。

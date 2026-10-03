@@ -4052,7 +4052,7 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
         bangid: 128
       }
     ],
-    listDetailRequest(id, period, limit) {
+    listDetailRequest(id, period, limit, offset = 0) {
       return httpFetch("https://u.y.qq.com/cgi-bin/musicu.fcg", {
         method: "post",
         headers: {
@@ -4065,6 +4065,7 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
             param: {
               topid: id,
               num: limit,
+              offset,
               period
             }
           },
@@ -4161,16 +4162,20 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
     getList(bangid, page, retryNum = 0) {
       if (++retryNum > 3) return Promise.reject(new Error("try max num"));
       bangid = parseInt(bangid);
+      page = Math.max(1, Number(page) || 1);
       let info = this.periods[bangid];
       let p = info ? Promise.resolve(info.period) : this.getPeriods(bangid);
       return p.then((period) => {
-        return this.listDetailRequest(bangid, period, this.limit).then((resp) => {
+        return this.listDetailRequest(bangid, period, this.limit, (page - 1) * this.limit).then((resp) => {
+          var _a, _b, _c;
           if (resp.body.code !== 0) return this.getList(bangid, page, retryNum);
+          const data = resp.body.toplist.data;
+          const total = Number((_c = (_b = (_a = data.data) == null ? void 0 : _a.totalNum) != null ? _b : data.totalNum) != null ? _c : NaN);
           return {
-            total: resp.body.toplist.data.songInfoList.length,
-            list: this.filterData(resp.body.toplist.data.songInfoList),
+            total: Number.isFinite(total) && total >= 0 ? total : void 0,
+            list: this.filterData(data.songInfoList),
             limit: this.limit,
-            page: 1,
+            page,
             source: "tx"
           };
         });
@@ -7140,7 +7145,8 @@ ${result.lyric}`;
     }
   ];
   var leaderboard_default5 = {
-    limit: 200,
+    // lxsc 修改（2026-10-03）：按接口的 needAll 获取完整榜单，无分页截断。
+    limit: 0,
     list: [
       {
         id: "mgyyb",
@@ -7194,7 +7200,7 @@ ${result.lyric}`;
       }
     ],
     getUrl(id, page) {
-      return `https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/querycontentbyId.do?columnId=${id}&needAll=0`;
+      return `https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/querycontentbyId.do?columnId=${id}&needAll=1`;
     },
     successCode: "000000",
     requestBoardsObj: null,

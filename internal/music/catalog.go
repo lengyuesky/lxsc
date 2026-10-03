@@ -542,9 +542,9 @@ func (c *Catalog) BoardTracks(ctx context.Context, source, bangID string, page i
 }
 
 // CachedBoardSummary 只读取已加载的榜单缓存；未知与真正的空榜单分开处理。
-// 与 BoardTracks 共用缓存及过期时间，避免独立计数缓存长期保留过时的空状态。
+// 只使用完整榜单缓存，不能把已获取的第一页数量当作整榜数量。
 func (c *Catalog) CachedBoardSummary(source, bangID string) (count, duration int, ok bool) {
-	raw, ok := c.generic.Get(fmt.Sprintf("board|%s|%s|1", source, bangID))
+	raw, ok := c.generic.Get(fullBoardKey(source, bangID))
 	if !ok {
 		return 0, 0, false
 	}

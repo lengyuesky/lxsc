@@ -140,7 +140,7 @@ func (s *Server) getMusicDirectory(w http.ResponseWriter, r *http.Request) {
 	case music.KindBoard:
 		// 旧 lb ID 不受当前目录开关影响，直接深链仍可访问；不附带扫描榜单名称。
 		name := p.Key
-		infos, err := s.Catalog.BoardTracks(rc.ctx, p.Source, p.Key, 1)
+		infos, err := s.Catalog.FullBoardTracks(rc.ctx, p.Source, p.Key)
 		if err != nil {
 			writeErr(w, r, ErrGeneric, err.Error())
 			return

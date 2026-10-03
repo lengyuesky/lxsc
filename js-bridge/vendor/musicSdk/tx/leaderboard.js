@@ -1,4 +1,5 @@
 // lxsc 修改标记（2026-09-06 补记）：在歌曲结果中补充歌手 ID；详见 js-bridge/vendor/PATCHES.md。
+// lxsc 修改（2026-10-03）：榜单支持 offset 分页并保留平台总数，300 仅为每页大小。
 import { httpFetch } from '../../request'
 import { formatPlayTime } from '../../index'
 import { formatSingerName } from '../utils'
@@ -65,7 +66,7 @@ export default {
       bangid: 128,
     },
   ],
-  listDetailRequest(id, period, limit) {
+  listDetailRequest(id, period, limit, offset = 0) {
     // console.log(id, period, limit)
     return httpFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
       method: 'post',
@@ -79,6 +80,7 @@ export default {
           param: {
             topid: id,
             num: limit,
+            offset,
             period,
           },
         },
@@ -198,16 +200,19 @@ export default {
   getList(bangid, page, retryNum = 0) {
     if (++retryNum > 3) return Promise.reject(new Error('try max num'))
     bangid = parseInt(bangid)
+    page = Math.max(1, Number(page) || 1)
     let info = this.periods[bangid]
     let p = info ? Promise.resolve(info.period) : this.getPeriods(bangid)
     return p.then(period => {
-      return this.listDetailRequest(bangid, period, this.limit).then(resp => {
+      return this.listDetailRequest(bangid, period, this.limit, (page - 1) * this.limit).then(resp => {
         if (resp.body.code !== 0) return this.getList(bangid, page, retryNum)
+        const data = resp.body.toplist.data
+        const total = Number(data.data?.totalNum ?? data.totalNum ?? NaN)
         return {
-          total: resp.body.toplist.data.songInfoList.length,
-          list: this.filterData(resp.body.toplist.data.songInfoList),
+          total: Number.isFinite(total) && total >= 0 ? total : undefined,
+          list: this.filterData(data.songInfoList),
           limit: this.limit,
-          page: 1,
+          page,
           source: 'tx',
         }
       })

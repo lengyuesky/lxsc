@@ -83,7 +83,8 @@ const boardList = [
   },
 ]
 export default {
-  limit: 200,
+  // lxsc 修改（2026-10-03）：按接口的 needAll 获取完整榜单，无分页截断。
+  limit: 0,
   list: [
     {
       id: 'mgyyb',
@@ -137,7 +138,7 @@ export default {
     },
   ],
   getUrl(id, page) {
-    return `https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/querycontentbyId.do?columnId=${id}&needAll=0`
+    return `https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/querycontentbyId.do?columnId=${id}&needAll=1`
     // return `http://m.music.migu.cn/migu/remoting/cms_list_tag?nid=${id}&pageSize=${this.limit}&pageNo=${page - 1}`
   },
   successCode: '000000',

@@ -3,7 +3,7 @@
 本目录与根目录 `LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md` 一起随应用分发。镜像位置为 `/usr/share/licenses/lxsc/`，不是将所有组件统一重新授权。
 
 - `manifest.json` 记录固定版本/提交、原文件路径、归档位置与 SHA-256；README 协议摘录另记完整上游 README 摘要及起止行，摘录中的文字未改写。
-- `vendor-provenance.json` 保留 87 个 vendor 文件的两组核对摘要，以及导入版本未知这一边界。新增的补记标记之外，SDK 内容没有改变。
+- `vendor-provenance.json` 保留 87 个 vendor 文件的两组核对摘要，以及导入版本未知这一边界；后续 SDK 修改另记日期、内容和此前本地摘要，详见 `js-bridge/vendor/PATCHES.md`。
 - `GO_SOURCE_NOTICES.txt` 汇总 Linux 双架构运行包源码内的原始版权/许可注释。四个涉及 GNU 头文件的单元另以 `.go.txt` 完整归档，避免只截取声明；它们不参与编译。
 - 归档也保守保留相关模块中的部分额外法律文件（例如 pprof 的 svgpan、memory 的图标声明），不意味着那些额外代码/图标进入了最终应用。
 - Alpine 系统组件另见根目录第三方说明和镜像中的 `ALPINE_PACKAGES.txt`（完整 APK 原始包记录）。`alpine/` 补充保存 GPL-2.0 与初始核对的 OpenSSL、musl、zlib 原文；这里不是基础系统的完整源码/许可审计。

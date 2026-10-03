@@ -172,7 +172,7 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 
 | 方法/入口 | JSON 请求 | 返回 |
 | --- | --- | --- |
-| `POST /api/debug/probe/board` | `{"boardId":"lb-wy-19723756"}` | `board_probe` 事件、实际第一页歌曲数量、最多 3 个合法歌曲 ID 供后续定向歌词探测 |
+| `POST /api/debug/probe/board` | `{"boardId":"lb-wy-19723756"}` | `board_probe` 事件、完整榜单歌曲数量、最多 3 个合法歌曲 ID 供后续定向歌词探测 |
 | `POST /api/debug/probe/lyrics` | `{"trackId":"tr-wy-123456"}` | `lyrics_probe` 事件、歌词行数、同步状态或安全错误分类，无歌词正文 |
 
 只返回 `events`、`sampleTrackIds`、`perspective: server_only`、`cacheSideEffects: true`。JSON 拒绝未知/重复字段、URL、非法 ID、null 和尾随内容。榜单探测沿用现有目录缓存；歌词探测优先 SDK、必要时回退音源。两者可能填充短期元数据和歌词缓存，不写入资料库、不记录播放、不修改配置，不执行音频流请求。

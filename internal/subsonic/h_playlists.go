@@ -154,7 +154,7 @@ func (s *Server) getPlaylist(w http.ResponseWriter, r *http.Request) {
 			boardName = p.Key
 		}
 		name := music.PlatformName(p.Source) + " · " + boardName
-		infos, err := s.Catalog.BoardTracks(rc.ctx, p.Source, p.Key, 1)
+		infos, err := s.Catalog.FullBoardTracks(rc.ctx, p.Source, p.Key)
 		if err != nil {
 			writeErr(w, r, ErrGeneric, err.Error())
 			return

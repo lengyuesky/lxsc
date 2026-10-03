@@ -452,13 +452,20 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/mg/leaderboard.js",
-      "localSha256": "fb6a471fbebef328601304ecd0d1699394d70effca43b0ef084467c9de313dcc",
+      "localSha256": "723f997c6e6560b98456bd1b03ca799a8e2e91776cf28d8ef3088fd401029a2e",
       "referencePath": "src/modules/utils/musicSdk/mg/leaderboard.js",
       "referenceSha256": "fb6a471fbebef328601304ecd0d1699394d70effca43b0ef084467c9de313dcc",
-      "referenceMatch": true,
+      "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/mg/leaderboard.js",
       "currentSha256": "fb6a471fbebef328601304ecd0d1699394d70effca43b0ef084467c9de313dcc",
-      "currentMatch": true
+      "currentMatch": false,
+      "localChanges": [
+        {
+          "date": "2026-10-03",
+          "description": "使用 needAll=1 获取完整栏目，移除伪分页上限",
+          "previousLocalSha256": "fb6a471fbebef328601304ecd0d1699394d70effca43b0ef084467c9de313dcc"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/mg/lyric.js",
@@ -615,14 +622,21 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/tx/leaderboard.js",
-      "localSha256": "13e7a054a5fa985380282b3d550f9389faecad96735f575ee6f5ea54085537cc",
+      "localSha256": "9471b80f9badacfb8623faae74d9e2300d512370557bcf408087f9ea94a7de49",
       "referencePath": "src/modules/utils/musicSdk/tx/leaderboard.js",
       "referenceSha256": "7f71eea0b39db8a34ba1580058452b7355410cbe4ab1a42cae7070b75b361a59",
       "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/tx/leaderboard.js",
       "currentSha256": "d47a2783534418b9d5dd35dcd7d79ba223d4f68a206ab672e5aa3bfed078287e",
       "currentMatch": false,
-      "change": "在歌曲结果中补充歌手 ID"
+      "change": "在歌曲结果中补充歌手 ID",
+      "localChanges": [
+        {
+          "date": "2026-10-03",
+          "description": "为榜单传递 offset 页偏移并保留平台总数，不将第一页长度当作整榜总数",
+          "previousLocalSha256": "13e7a054a5fa985380282b3d550f9389faecad96735f575ee6f5ea54085537cc"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/tx/lyric.js",
