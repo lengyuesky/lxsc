@@ -31,32 +31,36 @@ type Catalog struct {
 	Settings      *settings.Store
 	Log           *slog.Logger
 
-	tracks           *lru.LRU[string, *Info]
-	albums           *lru.LRU[string, []*Info]
-	artists          *lru.LRU[string, string]
-	artistRefs       *lru.LRU[string, ArtistRef]
-	seenArtists      *lru.LRU[string, string]
-	searchedArtists  *lru.LRU[string, string]
-	artistDetails    *lru.LRU[string, ArtistDetail]
-	albumPages       *lru.LRU[string, AlbumPage]
-	albumMetadata    *lru.LRU[string, AlbumMeta]
-	boardNames       *lru.LRU[string, string]
-	failures         *lru.LRU[string, string]
-	flight           requestGroup
-	observeMu        sync.RWMutex
-	observer         func(RemoteRequest)
-	remoteCall       func(context.Context, string, ...any) (json.RawMessage, error)
-	configMu         sync.Mutex
-	urls             *requestCache[urlKey, js.MusicURLResult]
-	urlChecks        *requestCache[urlCheckKey, int]
-	search           *requestCache[searchKey, []*Info]
-	searchCall       func(context.Context, string, ...any) (json.RawMessage, error)
-	urlCall          func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
-	searchMetrics    map[string]*metrics.Operation
-	urlMetrics       metrics.Operation
-	MediaPreparation metrics.Operation
-	lyrics           *lru.LRU[string, *Lyrics]
-	generic          *lru.LRU[string, json.RawMessage]
+	tracks            *lru.LRU[string, *Info]
+	albums            *lru.LRU[string, []*Info]
+	artists           *lru.LRU[string, string]
+	artistRefs        *lru.LRU[string, ArtistRef]
+	seenArtists       *lru.LRU[string, string]
+	searchedArtists   *lru.LRU[string, string]
+	artistDetails     *lru.LRU[string, ArtistDetail]
+	albumPages        *lru.LRU[string, AlbumPage]
+	albumMetadata     *lru.LRU[string, AlbumMeta]
+	boardNames        *lru.LRU[string, string]
+	failures          *lru.LRU[string, string]
+	flight            requestGroup
+	observeMu         sync.RWMutex
+	observer          func(RemoteRequest)
+	remoteCall        func(context.Context, string, ...any) (json.RawMessage, error)
+	configMu          sync.Mutex
+	urls              *requestCache[urlKey, js.MusicURLResult]
+	urlChecks         *requestCache[urlCheckKey, int]
+	search            *requestCache[searchKey, []*Info]
+	searchCall        func(context.Context, string, ...any) (json.RawMessage, error)
+	urlCall           func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
+	searchMetrics     map[string]*metrics.Operation
+	urlMetrics        metrics.Operation
+	MediaPreparation  metrics.Operation
+	lyrics            *lru.LRU[string, *Lyrics]
+	generic           *lru.LRU[string, json.RawMessage]
+	boardStale        *lru.LRU[string, json.RawMessage]
+	boardRefreshMu    sync.Mutex
+	boardRefreshing   map[string]bool
+	boardRefreshState map[string]boardRefreshState
 }
 
 // NewCatalog 创建
@@ -67,23 +71,26 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		MediaLimits:   admission.New(32, 0, 4, 0),
 		workLimits:    admission.New(32, 64, 0, 0),
 		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log,
-		tracks:          lru.NewLRU[string, *Info](5000, nil, time.Hour),
-		albums:          lru.NewLRU[string, []*Info](2000, nil, time.Hour),
-		artists:         lru.NewLRU[string, string](2000, nil, time.Hour),
-		artistRefs:      lru.NewLRU[string, ArtistRef](4000, nil, time.Hour),
-		seenArtists:     lru.NewLRU[string, string](2000, nil, time.Hour),
-		searchedArtists: lru.NewLRU[string, string](2000, nil, time.Hour),
-		artistDetails:   lru.NewLRU[string, ArtistDetail](2000, nil, time.Hour),
-		albumPages:      lru.NewLRU[string, AlbumPage](2000, nil, time.Hour),
-		albumMetadata:   lru.NewLRU[string, AlbumMeta](4000, nil, time.Hour),
-		boardNames:      lru.NewLRU[string, string](2000, nil, 30*time.Minute),
-		failures:        lru.NewLRU[string, string](500, nil, 30*time.Second),
-		urls:            newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
-		urlChecks:       newRequestCache[urlCheckKey, int](1, 0),
-		search:          newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
-		lyrics:          lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
-		generic:         lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
-		searchMetrics:   make(map[string]*metrics.Operation),
+		tracks:            lru.NewLRU[string, *Info](5000, nil, time.Hour),
+		albums:            lru.NewLRU[string, []*Info](2000, nil, time.Hour),
+		artists:           lru.NewLRU[string, string](2000, nil, time.Hour),
+		artistRefs:        lru.NewLRU[string, ArtistRef](4000, nil, time.Hour),
+		seenArtists:       lru.NewLRU[string, string](2000, nil, time.Hour),
+		searchedArtists:   lru.NewLRU[string, string](2000, nil, time.Hour),
+		artistDetails:     lru.NewLRU[string, ArtistDetail](2000, nil, time.Hour),
+		albumPages:        lru.NewLRU[string, AlbumPage](2000, nil, time.Hour),
+		albumMetadata:     lru.NewLRU[string, AlbumMeta](4000, nil, time.Hour),
+		boardNames:        lru.NewLRU[string, string](2000, nil, 30*time.Minute),
+		failures:          lru.NewLRU[string, string](500, nil, 30*time.Second),
+		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
+		urlChecks:         newRequestCache[urlCheckKey, int](1, 0),
+		search:            newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
+		lyrics:            lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
+		generic:           lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
+		boardStale:        lru.NewLRU[string, json.RawMessage](128, nil, 0),
+		boardRefreshing:   map[string]bool{},
+		boardRefreshState: map[string]boardRefreshState{},
+		searchMetrics:     make(map[string]*metrics.Operation),
 	}
 	for _, platform := range []string{"wy", "tx", "kw", "kg", "mg"} {
 		c.searchMetrics[platform] = &metrics.Operation{}
@@ -542,9 +549,14 @@ func (c *Catalog) BoardTracks(ctx context.Context, source, bangID string, page i
 }
 
 // CachedBoardSummary 只读取已加载的榜单缓存；未知与真正的空榜单分开处理。
-// 只使用完整榜单缓存，不能把已获取的第一页数量当作整榜数量。
+// 只使用完整榜单缓存，不能把已获取的第一页数量当作整榜数量；
+// 过期的旧完整快照（含持久化回放）仍可用于摘要，刷新由打开详情时触发。
 func (c *Catalog) CachedBoardSummary(source, bangID string) (count, duration int, ok bool) {
-	raw, ok := c.generic.Get(fullBoardKey(source, bangID))
+	key := fullBoardKey(source, bangID)
+	raw, ok := c.generic.Get(key)
+	if !ok {
+		raw, ok = c.boardSnapshot(source, bangID)
+	}
 	if !ok {
 		return 0, 0, false
 	}
@@ -713,6 +725,17 @@ func (c *Catalog) PurgeMetadataCaches() {
 	c.albumMetadata.Purge()
 	c.boardNames.Purge()
 	c.failures.Purge()
+	c.boardStale.Purge()
+	c.boardRefreshMu.Lock()
+	c.boardRefreshState = map[string]boardRefreshState{}
+	c.boardRefreshMu.Unlock()
+	if c.DB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := c.DB.ClearBoardSnapshots(ctx); err != nil && c.Log != nil {
+			c.Log.Debug("清理持久化榜单快照失败", "err", err)
+		}
+		cancel()
+	}
 	c.search.purge()
 	c.generic.Purge()
 }

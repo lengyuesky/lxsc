@@ -21,7 +21,7 @@ func migrate(s *sql.DB) error {
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 3 {
+	if version > 4 {
 		return fmt.Errorf("数据库版本 %d 高于当前程序支持版本", version)
 	}
 	if version < 1 {
@@ -84,6 +84,16 @@ func migrate(s *sql.DB) error {
 			`CREATE TABLE playlist_track_history(id INTEGER PRIMARY KEY AUTOINCREMENT, playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE, created_at INTEGER NOT NULL, ids TEXT NOT NULL)`,
 			`CREATE INDEX idx_playlist_track_history ON playlist_track_history(playlist_id,id DESC)`,
 			`INSERT INTO schema_migrations(version) VALUES(3)`,
+		} {
+			if _, err = tx.Exec(statement); err != nil {
+				return err
+			}
+		}
+	}
+	if version < 4 {
+		for _, statement := range []string{
+			`CREATE TABLE board_snapshots(board_key TEXT PRIMARY KEY, raw TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+			`INSERT INTO schema_migrations(version) VALUES(4)`,
 		} {
 			if _, err = tx.Exec(statement); err != nil {
 				return err
