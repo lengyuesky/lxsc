@@ -130,13 +130,16 @@ func (s *Server) getMusicDirectory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		children := make([]M, 0, len(boards))
+		var visible []music.Board
 		for _, board := range boards {
 			if !display.allows(board) {
 				continue
 			}
+			visible = append(visible, board)
 			children = append(children, M{"id": music.BoardID(p.Source, board.BangID), "parent": id, "isDir": true, "title": board.Name, "name": board.Name})
 		}
 		writeOK(w, r, "directory", M{"id": id, "parent": "1", "name": music.PlatformName(p.Source) + "榜单", "child": children})
+		s.Catalog.WarmVisibleBoards(visible)
 	case music.KindBoard:
 		// 旧 lb ID 不受当前目录开关影响，直接深链仍可访问；不附带扫描榜单名称。
 		name := p.Key

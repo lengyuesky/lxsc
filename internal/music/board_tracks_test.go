@@ -395,3 +395,63 @@ func TestFullBoardServesPersistedSnapshotAfterRestart(t *testing.T) {
 		t.Fatal("重启后第一次打开被上游刷新阻塞，未立即回放持久化快照")
 	}
 }
+
+func TestWarmVisibleBoardsPrefetchesMissingSnapshots(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	c.EnableBoardWarm()
+	var mu sync.Mutex
+	calls := map[string]int{}
+	c.SetRemoteCallerForTest(func(_ context.Context, path string, _ ...any) (json.RawMessage, error) {
+		mu.Lock()
+		calls[path]++
+		mu.Unlock()
+		return boardPageJSON(1, 100, 1), nil
+	})
+	// 已有可回放快照的榜单不重复预读：内存快照与持久化快照各一个。
+	c.boardStale.Add(fullBoardKey("kg", "mem"), json.RawMessage(`{"list":[]}`))
+	c.persistBoardSnapshot(fullBoardKey("tx", "db"), json.RawMessage(`{"list":[]}`))
+	boards := []Board{{Source: "wy", BangID: "one"}, {Source: "kg", BangID: "mem"}, {Source: "tx", BangID: "db"}, {Source: "wy", BangID: "two"}}
+	c.WarmVisibleBoards(boards)
+	waitBoard := func(source, id string) {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			if _, _, ok := c.CachedBoardSummary(source, id); ok {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("榜单 %s|%s 未被预热", source, id)
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	waitBoard("wy", "one")
+	waitBoard("wy", "two")
+	mu.Lock()
+	loads := calls["wy.leaderboard.getList"] + calls["kg.leaderboard.getList"] + calls["tx.leaderboard.getList"]
+	mu.Unlock()
+	if loads != 2 {
+		t.Fatalf("只应预读缺少快照的 2 个榜单: %v", calls)
+	}
+	// 重复预热不得重复请求。
+	c.WarmVisibleBoards(boards)
+	time.Sleep(30 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if calls["wy.leaderboard.getList"] != 2 {
+		t.Fatalf("重复预热重复请求: %v", calls)
+	}
+}
+
+func TestRoundRobinBoardsOrder(t *testing.T) {
+	got := roundRobinBoards([]Board{{Source: "wy", BangID: "1"}, {Source: "wy", BangID: "2"}, {Source: "tx", BangID: "3"}, {Source: "kg", BangID: "4"}, {Source: "wy", BangID: "5"}})
+	want := []string{"wy|1", "tx|3", "kg|4", "wy|2", "wy|5"}
+	flat := make([]string, 0, len(got))
+	for _, board := range got {
+		flat = append(flat, board.Source+"|"+board.BangID)
+	}
+	if !reflect.DeepEqual(flat, want) {
+		t.Fatalf("轮转顺序异常: %v", flat)
+	}
+}

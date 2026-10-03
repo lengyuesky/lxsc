@@ -55,12 +55,12 @@ func boardPlaylistObj(board music.Board) (M, bool) {
 }
 
 // boardPlaylistObjects 并行读取各平台榜单名称，保持配置的平台顺序。
-// 每个平台只请求榜单目录，不请求任何榜单歌曲。
-func (s *Server) boardPlaylistObjects(rc *reqCtx) []M {
+// 每个平台只请求榜单目录，不请求任何榜单歌曲；同时返回可见榜单供后台预热。
+func (s *Server) boardPlaylistObjects(rc *reqCtx) ([]M, []music.Board) {
 	display := newBoardVisibility(s.Settings.Get())
 	sources := display.sources
 	if len(sources) == 0 {
-		return nil
+		return nil, nil
 	}
 	type result struct {
 		index  int
@@ -82,6 +82,7 @@ func (s *Server) boardPlaylistObjects(rc *reqCtx) []M {
 	wg.Wait()
 
 	out := make([]M, 0)
+	var visible []music.Board
 	seen := map[string]bool{}
 	for _, result := range results {
 		if result.err != nil {
@@ -104,9 +105,10 @@ func (s *Server) boardPlaylistObjects(rc *reqCtx) []M {
 				obj["songCount"], obj["duration"] = count, duration
 			}
 			out = append(out, obj)
+			visible = append(visible, board)
 		}
 	}
-	return out
+	return out, visible
 }
 
 func (s *Server) getPlaylists(w http.ResponseWriter, r *http.Request) {
@@ -127,8 +129,11 @@ func (s *Server) getPlaylists(w http.ResponseWriter, r *http.Request) {
 		out = append(out, s.playlistObj(rc, p, songs))
 	}
 	// 榜单只在这里加载名称；不会为了生成歌单摘要请求榜单歌曲。
-	out = append(out, s.boardPlaylistObjects(rc)...)
+	boardObjs, visibleBoards := s.boardPlaylistObjects(rc)
+	out = append(out, boardObjs...)
 	writeOK(w, r, "playlists", M{"playlist": out})
+	// 响应之后预热尚无快照的可见榜单，客户端第一次点开不再等待现场分页。
+	s.Catalog.WarmVisibleBoards(visibleBoards)
 }
 
 func canReadPlaylist(u *db.User, p *db.Playlist) bool {

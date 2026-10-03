@@ -14,6 +14,8 @@ func fullBoardKey(source, id string) string { return "board-full|" + source + "|
 const (
 	// boardLoadBudget 整榜读取（含后台刷新）的时间预算。
 	boardLoadBudget = 45 * time.Second
+	// boardWarmConcurrency 后台预热与刷新榜单的并发上限，避免集中冲击上游。
+	boardWarmConcurrency = 3
 	// boardParallelPageLimit 已知总数时最多并行读取的页数，超出回退顺序读取。
 	boardParallelPageLimit = 64
 	// boardRefreshFailCooldown 后台刷新失败后的冷却时间，避免反复冲击故障上游。
@@ -44,7 +46,7 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 	}
 	if raw, ok := c.boardSnapshot(source, id); ok {
 		// 仍持有完整旧快照：先让客户端立刻看到歌曲，后台刷新，失败保留旧快照。
-		c.refreshBoardDetached(source, id)
+		c.loadBoardDetached(source, id)
 		return c.parseList(ctx, raw, source)
 	}
 	// 合并整个榜单的加载，避免多个客户端各自拼接分页。用户离开页面时
@@ -111,9 +113,9 @@ func (c *Catalog) persistBoardSnapshot(key string, raw json.RawMessage) {
 	}
 }
 
-// refreshBoardDetached 后台刷新一个榜单：与在途加载合并，失败记录短暂冷却；
-// 冷却期间继续返回旧快照，不阻断客户端。
-func (c *Catalog) refreshBoardDetached(source, id string) {
+// loadBoardDetached 后台加载或刷新一个榜单：与在途加载合并，失败记录短暂冷却；
+// 冷却期间继续返回旧快照，不阻断客户端；后台并发受预热闸门限制。
+func (c *Catalog) loadBoardDetached(source, id string) {
 	key := fullBoardKey(source, id)
 	c.boardRefreshMu.Lock()
 	if c.boardRefreshing[key] {
@@ -137,6 +139,8 @@ func (c *Catalog) refreshBoardDetached(source, id string) {
 			delete(c.boardRefreshing, key)
 			c.boardRefreshMu.Unlock()
 		}()
+		c.boardWarmGate <- struct{}{}
+		defer func() { <-c.boardWarmGate }()
 		ctx, cancel := context.WithTimeout(context.Background(), boardLoadBudget)
 		defer cancel()
 		_, err := c.loadFullBoardMerged(ctx, source, id)
@@ -341,6 +345,94 @@ func (c *Catalog) loadFullBoardSequential(ctx context.Context, source, id string
 				return nil, err
 			}
 			return acc.marshal()
+		}
+	}
+}
+
+// EnableBoardWarm 启用后台榜单预热。生产入口在启动时调用一次；
+// 默认关闭让测试的上游调用计数保持确定。
+func (c *Catalog) EnableBoardWarm() {
+	if c == nil {
+		return
+	}
+	c.boardRefreshMu.Lock()
+	c.boardWarmEnabled = true
+	c.boardRefreshMu.Unlock()
+}
+
+// WarmVisibleBoards 预读可见但尚无可用快照的榜单，让客户端第一次点开时直接命中快照。
+// 按平台轮转排队，各平台靠前的榜单最先完成；新鲜缓存、可回放快照、在途加载
+// 与失败冷却中的榜单都会跳过。只做后台加载，不阻塞调用方。
+func (c *Catalog) WarmVisibleBoards(boards []Board) {
+	if c == nil || len(boards) == 0 {
+		return
+	}
+	c.boardRefreshMu.Lock()
+	enabled := c.boardWarmEnabled
+	c.boardRefreshMu.Unlock()
+	if !enabled {
+		return
+	}
+	persisted := c.persistedBoardKeys()
+	for _, board := range roundRobinBoards(boards) {
+		if !IsPlatform(board.Source) || !validPlatformID(board.BangID) {
+			continue
+		}
+		key := fullBoardKey(board.Source, board.BangID)
+		if _, ok := c.generic.Get(key); ok {
+			continue
+		}
+		if _, ok := c.boardStale.Get(key); ok {
+			continue
+		}
+		if persisted[key] {
+			continue
+		}
+		c.loadBoardDetached(board.Source, board.BangID)
+	}
+}
+
+// persistedBoardKeys 返回 7 天内可回放的持久化快照键；读取失败时按无快照处理。
+func (c *Catalog) persistedBoardKeys() map[string]bool {
+	keys := map[string]bool{}
+	if c.DB == nil {
+		return keys
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	rows, err := c.DB.BoardSnapshotKeys(ctx)
+	if err != nil {
+		return keys
+	}
+	for key, at := range rows {
+		if time.Since(time.UnixMilli(at)) <= boardPersistMaxAge {
+			keys[key] = true
+		}
+	}
+	return keys
+}
+
+// roundRobinBoards 按平台轮转重排榜单，保证各平台靠前的榜单最先预热。
+func roundRobinBoards(boards []Board) []Board {
+	groups := map[string][]Board{}
+	var order []string
+	for _, board := range boards {
+		if _, ok := groups[board.Source]; !ok {
+			order = append(order, board.Source)
+		}
+		groups[board.Source] = append(groups[board.Source], board)
+	}
+	out := make([]Board, 0, len(boards))
+	for index := 0; ; index++ {
+		added := false
+		for _, source := range order {
+			if index < len(groups[source]) {
+				out = append(out, groups[source][index])
+				added = true
+			}
+		}
+		if !added {
+			return out
 		}
 	}
 }

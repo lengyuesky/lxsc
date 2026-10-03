@@ -171,6 +171,10 @@ func run(cfgPath string) error {
 	defer catalog.CloseURLCache()
 
 	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
+	warmCtx, stopWarmup := context.WithCancel(ctx)
+	defer stopWarmup()
+	// 启动后预热可见榜单快照，客户端第一次点开榜单直接命中，不再现场分页。
+	sub.StartBoardWarmup(warmCtx)
 	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}
 	stopSubscriptions := portalSrv.StartSubscriptions(ctx)
 	defer stopSubscriptions()

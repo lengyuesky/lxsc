@@ -61,6 +61,8 @@ type Catalog struct {
 	boardRefreshMu    sync.Mutex
 	boardRefreshing   map[string]bool
 	boardRefreshState map[string]boardRefreshState
+	boardWarmGate     chan struct{}
+	boardWarmEnabled  bool
 }
 
 // NewCatalog 创建
@@ -90,6 +92,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		boardStale:        lru.NewLRU[string, json.RawMessage](128, nil, 0),
 		boardRefreshing:   map[string]bool{},
 		boardRefreshState: map[string]boardRefreshState{},
+		boardWarmGate:     make(chan struct{}, boardWarmConcurrency),
 		searchMetrics:     make(map[string]*metrics.Operation),
 	}
 	for _, platform := range []string{"wy", "tx", "kw", "kg", "mg"} {

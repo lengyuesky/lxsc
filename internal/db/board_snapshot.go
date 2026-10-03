@@ -38,3 +38,22 @@ func (d *DB) ClearBoardSnapshots(ctx context.Context) error {
 	_, err := d.sql.ExecContext(ctx, `DELETE FROM board_snapshots`)
 	return err
 }
+
+// BoardSnapshotKeys 返回全部持久化快照的键与更新时间（毫秒）。
+func (d *DB) BoardSnapshotKeys(ctx context.Context) (map[string]int64, error) {
+	rows, err := d.read.QueryContext(ctx, `SELECT board_key, updated_at FROM board_snapshots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var key string
+		var at int64
+		if err := rows.Scan(&key, &at); err != nil {
+			return nil, err
+		}
+		out[key] = at
+	}
+	return out, rows.Err()
+}
