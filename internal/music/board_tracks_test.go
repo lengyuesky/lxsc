@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func boardPageJSON(total, limit int, ids ...int) json.RawMessage {
@@ -131,5 +134,93 @@ func TestFullBoardSupportsSDKPaginationVariants(t *testing.T) {
 				t.Fatal(keys, calls)
 			}
 		})
+	}
+}
+
+func TestFullBoardRetryDoesNotReuseIncompletePages(t *testing.T) {
+	for _, failure := range []string{"上游失败", "榜单变更"} {
+		t.Run(failure, func(t *testing.T) {
+			c := newDirectoryTestCatalog(t)
+			attempt, calls := 1, 0
+			c.SetRemoteCallerForTest(func(_ context.Context, _ string, args ...any) (json.RawMessage, error) {
+				calls++
+				page := args[1].(int)
+				if attempt == 1 {
+					if page == 1 {
+						return boardPageJSON(3, 2, 1, 2), nil
+					}
+					if failure == "上游失败" {
+						return nil, errors.New("临时不可用")
+					}
+					return boardPageJSON(4, 2, 3, 4), nil
+				}
+				if page == 1 {
+					return boardPageJSON(4, 2, 5, 6), nil
+				}
+				return boardPageJSON(4, 2, 7, 8), nil
+			})
+			if _, err := c.FullBoardTracks(context.Background(), "kg", "8888"); err == nil {
+				t.Fatal("首次不完整读取应失败")
+			}
+			attempt = 2
+			list, err := c.FullBoardTracks(context.Background(), "kg", "8888")
+			if err != nil || len(list) != 4 {
+				t.Fatalf("上游恢复后应重新读取完整榜单，不能继续复用失败或旧分页: count=%d err=%v", len(list), err)
+			}
+			if list[0].Key() != "5" || list[3].Key() != "8" || calls != 4 {
+				t.Fatalf("重试混用了两次读取的分页: first=%s last=%s calls=%d", list[0].Key(), list[3].Key(), calls)
+			}
+		})
+	}
+}
+
+func TestFullBoardFinishesForReopeningAfterCallerLeaves(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	var calls atomic.Int32
+	c.SetRemoteCallerForTest(func(ctx context.Context, _ string, args ...any) (json.RawMessage, error) {
+		calls.Add(1)
+		if args[1].(int) == 1 {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return boardPageJSON(3, 2, 1, 2), nil
+		}
+		return boardPageJSON(3, 2, 3), nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := c.FullBoardTracks(ctx, "kg", "8888"); done <- err }()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("离开页面应立即取消等待: %v", err)
+	}
+	once.Do(func() { close(release) })
+	deadline := time.After(3 * time.Second)
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if count, _, ok := c.CachedBoardSummary("kg", "8888"); ok {
+			if count != 3 {
+				t.Fatalf("只能发布整榜缓存: %d", count)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("离开页面后整榜未继续完成，再次打开仍需重复等待")
+		case <-tick.C:
+		}
+	}
+	list, err := c.FullBoardTracks(context.Background(), "kg", "8888")
+	if err != nil || len(list) != 3 || calls.Load() != 2 {
+		t.Fatalf("重新打开应直接使用完整缓存: count=%d calls=%d err=%v", len(list), calls.Load(), err)
 	}
 }

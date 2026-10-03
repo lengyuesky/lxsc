@@ -11,6 +11,29 @@ function sdk(source, globals = {}) {
   return ctx.board
 }
 
+test('酷我榜单的数字歌手 ID 不得使整页歌曲解析失败', () => {
+  // 使用真实实体解码器，避免把它替换成恒等函数而漏掉数字字段崩溃。
+  const helpers = vm.createContext({})
+  vm.runInContext(fs.readFileSync(new URL('../js-bridge/vendor/index.js', import.meta.url), 'utf8')
+    .replace(/export const /g, 'globalThis.'), helpers)
+  const board = sdk('kw', {
+    decodeName: helpers.decodeName, formatPlayTime: helpers.formatPlayTime,
+    formatSinger: value => value.replace(/&/g, '、'), formatPic: value => value,
+  })
+  const list = board.filterData([
+    { id: 1, artistid: 12345, artist: '甲&amp;乙', name: '歌曲&lt;一&gt;', album: '专辑', n_minfo: '', duration: 180 },
+    { id: 2, artistId: '67890', artist: '丙', name: '歌曲二', album: null, n_minfo: '', duration: 120 },
+    { id: 3, artist: '丁', name: '歌曲三', n_minfo: '', duration: 60 },
+  ])
+  assert.equal(list.length, 3)
+  assert.equal(list[0].singerId, '12345')
+  assert.equal(list[0].singer, '甲、乙')
+  assert.equal(list[0].name, '歌曲<一>')
+  assert.equal(list[1].singerId, '67890')
+  assert.equal(list[1].albumName, '')
+  assert.equal(list[2].singerId, '')
+})
+
 test('QQ 榜单逐页传递 offset，整榜总数不取第一页长度', async () => {
   const requests = []
   const board = sdk('tx', { httpFetch: (_url, options) => {

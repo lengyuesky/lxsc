@@ -43,7 +43,8 @@ func boardPlaylistObj(board music.Board) (M, bool) {
 	id := music.BoardID(source, bangID)
 	return M{
 		"id": id, "name": music.PlatformName(source) + " · " + boardName,
-		"comment": "在线榜单，打开后加载歌曲（数量待加载）", "owner": "榜单", "public": true,
+		// 箭头音乐打开详情后仍显示列表的 comment，不能把瞬时加载状态写进简介。
+		"comment": "在线榜单，只读", "owner": "榜单", "public": true,
 		// Subsonic 没有“数量未知”的表示。0 会让箭头音乐直接当作空歌单，
 		// 不再请求详情；用 1 表示待加载入口，不创建占位歌曲。详情及缓存命中
 		// 后的摘要均返回实际数量，仍不在列表阶段批量请求全部榜单歌曲。
@@ -101,7 +102,6 @@ func (s *Server) boardPlaylistObjects(rc *reqCtx) []M {
 			seen[boardID] = true
 			if count, duration, ok := s.Catalog.CachedBoardSummary(board.Source, board.BangID); ok {
 				obj["songCount"], obj["duration"] = count, duration
-				obj["comment"] = "在线榜单，打开后加载歌曲"
 			}
 			out = append(out, obj)
 		}

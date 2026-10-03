@@ -13,6 +13,9 @@ func fullBoardKey(source, id string) string { return "board-full|" + source + "|
 // FullBoardTracks 按平台分页读完榜单，不按固定歌曲数截断。
 // 只有完整结果才能进入整榜缓存；空页、重复页和失败不能伪装成完整榜单。
 func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*Info, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !IsPlatform(source) || !validPlatformID(id) {
 		return nil, errors.New("无效的榜单ID")
 	}
@@ -20,8 +23,27 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 	if raw, ok := c.generic.Get(key); ok {
 		return c.parseList(ctx, raw, source)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
+	// 合并整个榜单的加载，避免多个客户端各自拼接分页。用户离开页面时
+	// 已开始的整榜仍在预算内完成并缓存，下一次打开可以直接复用。
+	raw, err := c.flight.do(ctx, key, func() (json.RawMessage, error) {
+		if raw, ok := c.generic.Get(key); ok {
+			return raw, nil
+		}
+		loadCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		raw, err := c.loadFullBoard(loadCtx, source, id)
+		if err == nil {
+			c.generic.Add(key, raw)
+		}
+		return raw, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return c.parseList(ctx, raw, source)
+}
+
+func (c *Catalog) loadFullBoard(ctx context.Context, source, id string) (json.RawMessage, error) {
 	all := make([]map[string]any, 0)
 	seen := map[string]bool{}
 	expected := -1
@@ -30,7 +52,9 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		raw, err := c.cachedCallRaw(ctx, fmt.Sprintf("board|%s|%s|%d", source, id, page), source+".leaderboard.getList", id, page)
+		// 重试必须从新快照的第一页开始，不能混用此前失败时留下的旧页，
+		// 也不能让某次临时失败阻断客户端随后重新打开榜单。
+		raw, err := c.callRaw(ctx, fmt.Sprintf("board|%s|%s|%d", source, id, page), source+".leaderboard.getList", id, page)
 		if err != nil {
 			return nil, err
 		}
@@ -94,12 +118,7 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			raw, err := json.Marshal(map[string]any{"list": all})
-			if err != nil {
-				return nil, err
-			}
-			c.generic.Add(key, raw)
-			return c.parseList(ctx, raw, source)
+			return json.Marshal(map[string]any{"list": all})
 		}
 		if len(result.List) == 0 || added == 0 || result.Limit == 0 {
 			return nil, errors.New("平台未返回完整榜单，请稍后重试")

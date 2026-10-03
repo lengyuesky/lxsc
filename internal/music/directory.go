@@ -163,21 +163,10 @@ func (c *Catalog) cachedCallRaw(ctx context.Context, key, path string, args ...a
 		if message, ok := c.failures.Get(key); ok {
 			return nil, errors.New(message)
 		}
-		c.observeMu.RLock()
-		caller := c.remoteCall
-		c.observeMu.RUnlock()
-		if caller == nil {
-			if c.SDK == nil {
-				return nil, errors.New("sdk 未初始化")
-			}
-			caller = c.SDK.CallRaw
-		}
-		request := RemoteRequest{Key: key, Path: path, Args: append([]any(nil), args...)}
-		c.observeRequest(request)
 		// 共享请求不绑定首个客户端生命周期，任一等待者取消都不会拖累其他请求。
 		remoteCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		value, err := caller(remoteCtx, path, args...)
+		value, err := c.callRaw(remoteCtx, key, path, args...)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, admission.ErrBusy) {
 				c.failures.Add(key, err.Error())
@@ -187,6 +176,21 @@ func (c *Catalog) cachedCallRaw(ctx context.Context, key, path string, args ...a
 		c.generic.Add(key, value)
 		return value, nil
 	})
+}
+
+// callRaw 执行一次可观察的上游请求；整榜加载在完整读取后统一缓存，不能缓存中间页。
+func (c *Catalog) callRaw(ctx context.Context, key, path string, args ...any) (json.RawMessage, error) {
+	c.observeMu.RLock()
+	caller := c.remoteCall
+	c.observeMu.RUnlock()
+	if caller == nil {
+		if c.SDK == nil {
+			return nil, errors.New("sdk 未初始化")
+		}
+		caller = c.SDK.CallRaw
+	}
+	c.observeRequest(RemoteRequest{Key: key, Path: path, Args: append([]any(nil), args...)})
+	return caller(ctx, path, args...)
 }
 
 func artistCacheKey(source, name string) string {

@@ -40,6 +40,8 @@
 
 ## 许可与再上游引用
 
+2026-10-03：`index.js` 的 `decodeName` 在解码实体前把非空值转成字符串。实测酷我热歌榜的 `artistid` 返回数字，旧实现直接调用 `replace` 会使整页歌曲解析失败；现保留数字 ID，并保持原有空值和 HTML 实体行为。
+
 2026-10-03：`musicSdk/tx/leaderboard.js` 为 QQ 榜单传递页码对应的 `offset`，保留平台 `totalNum`，不再将第一页长度当作整榜总数；`musicSdk/mg/leaderboard.js` 使用 `needAll=1` 读取完整栏目，移除伪分页上限。Go 层按分页读取完整榜单，保持顺序并去重，异常时不返回部分成功结果。
 
 两个上游的完整 LICENSE 和 README 适用协议节已归档到 [`licenses/upstream/`](../../licenses/upstream/)。lxserver LICENSE 末尾原有的 File Browser Contributors 声明未删改。两个 README 均包含明确的补充协议及其优先表述，不能只看 Apache 标签。

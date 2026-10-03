@@ -40,14 +40,21 @@
     },
     {
       "path": "js-bridge/vendor/index.js",
-      "localSha256": "68f18fa2ac1fe0d35e6eb891c55df9c66a210cb6c7d1c84f9b62baeb67d76a90",
+      "localSha256": "3e0601fcb1a984d6fbf6854df111789a0a44f79a6216e686c2ff515aecbeee71",
       "referencePath": "src/modules/utils/index.js",
       "referenceSha256": "f1772c56d0e7dac72d1fc1fe6a3ff87c898644b8e7913b37de25112ece91d76c",
       "referenceMatch": false,
       "currentPath": "src/modules/utils/index.js",
       "currentSha256": "f1772c56d0e7dac72d1fc1fe6a3ff87c898644b8e7913b37de25112ece91d76c",
       "currentMatch": false,
-      "change": "添加调用宿主哈希的 toMD5"
+      "change": "添加调用宿主哈希的 toMD5",
+      "localChanges": [
+        {
+          "date": "2026-10-03",
+          "description": "实体解码兼容平台数字 ID，修复酷我榜单歌手 ID 使整页解析失败",
+          "previousLocalSha256": "68f18fa2ac1fe0d35e6eb891c55df9c66a210cb6c7d1c84f9b62baeb67d76a90"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/message.js",

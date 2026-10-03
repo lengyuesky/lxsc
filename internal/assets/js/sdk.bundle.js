@@ -603,7 +603,7 @@
       "&apos;": "'",
       "&nbsp;": " "
     };
-    return str.replace(/&[a-zA-Z]+;/g, (match) => entities[match] || match);
+    return String(str).replace(/&[a-zA-Z]+;/g, (match) => entities[match] || match);
   };
   var formatPlayTime = (time) => {
     let m = Math.trunc(time / 60);

@@ -1,4 +1,5 @@
 // lxsc 修改标记（2026-09-06 补记）：添加调用宿主哈希的 toMD5；详见 js-bridge/vendor/PATCHES.md。
+// lxsc 修改（2026-10-03）：实体解码兼容平台返回的数字 ID，避免单个字段使整页歌曲解析失败。
 
 export const sizeFormate = (size) => {
     if (!size) return '0 B'
@@ -20,7 +21,7 @@ export const decodeName = (str) => {
         '&apos;': "'",
         '&nbsp;': ' '
     }
-    return str.replace(/&[a-zA-Z]+;/g, match => entities[match] || match)
+    return String(str).replace(/&[a-zA-Z]+;/g, match => entities[match] || match)
 }
 
 /**

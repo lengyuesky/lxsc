@@ -118,6 +118,9 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 	if summary["songCount"] != float64(2) || summary["duration"] != float64(75) {
 		t.Fatalf("不能继续返回待加载标记或仅第一首的时长: %+v", summary)
 	}
+	if summary["comment"] != playlist["comment"] || summary["comment"] != "在线榜单，只读" || playlists[0].(map[string]any)["comment"] != summary["comment"] {
+		t.Fatal("箭头音乐会继续显示列表中的简介，加载前后的简介不能包含瞬时加载提示")
+	}
 	after, err := database.Statistics(ctx)
 	if err != nil {
 		t.Fatal(err)
