@@ -37,18 +37,23 @@ func objectIDs(raw any) []string {
 	return ids
 }
 
-func TestBoardPlaylistDistinguishesUnloadedAndEmpty(t *testing.T) {
+func TestBoardPlaylistDoesNotTurnEmptyResultIntoEmptyPlaylist(t *testing.T) {
 	f := newDirectoryTestServer(t)
 	if _, err := f.store.Update(context.Background(), map[string]json.RawMessage{"boardSources": json.RawMessage(`["wy"]`)}); err != nil {
 		t.Fatal(err)
 	}
 	trackCalls := 0
+	empty := true
 	f.server.Catalog.SetRemoteCallerForTest(func(_ context.Context, path string, _ ...any) (json.RawMessage, error) {
 		if strings.HasSuffix(path, ".getBoards") {
 			return json.RawMessage(`{"list":[{"name":"空榜单","bangid":"empty"}]}`), nil
 		}
 		trackCalls++
-		return json.RawMessage(`{"list":[]}`), nil
+		if empty {
+			// 上游瞬时返回空榜单，不能被当成"这个榜单没有歌曲"长期复用。
+			return json.RawMessage(`{"list":[]}`), nil
+		}
+		return json.RawMessage(`{"list":[{"songmid":"1","name":"歌曲","interval":"00:30"}],"total":1,"limit":100,"page":1}`), nil
 	})
 	count := func() float64 {
 		root := f.boardRequest(t, f.server.getPlaylists, "/rest/getPlaylists?f=json&c=Amcfy")
@@ -59,12 +64,25 @@ func TestBoardPlaylistDistinguishesUnloadedAndEmpty(t *testing.T) {
 	}
 	root := f.boardRequest(t, f.server.getPlaylist, "/rest/getPlaylist?f=json&id=lb-wy-empty")
 	playlist := root["playlist"].(map[string]any)
-	if playlist["songCount"] != float64(0) || len(playlist["entry"].([]any)) != 0 || count() != 0 || trackCalls != 1 {
-		t.Fatalf("真实空榜单必须保持零首，且没有占位歌曲: %+v", playlist)
+	if playlist["songCount"] != float64(0) || len(playlist["entry"].([]any)) != 0 {
+		t.Fatalf("详情必须按实际数量返回空歌曲: %+v", playlist)
 	}
-	f.server.Catalog.PurgeMetadataCaches()
-	if count() <= 0 || trackCalls != 1 {
-		t.Fatal("歌曲缓存清除后不能继续用过时的零首阻止客户端重新请求")
+	// 空结果不落缓存：列表继续显示待加载标记，箭头音乐才会重新请求详情。
+	if count() <= 0 {
+		t.Fatal("空结果被当成零首歌单，客户端会跳过详情请求")
+	}
+	if _, _, err := f.database.GetBoardSnapshot(context.Background(), "board-full|wy|empty"); err == nil {
+		t.Fatal("空榜单不能落盘")
+	}
+	// 上游恢复后重新打开即可拿到歌曲，不需要等缓存过期或反复重进。
+	empty = false
+	root = f.boardRequest(t, f.server.getPlaylist, "/rest/getPlaylist?f=json&id=lb-wy-empty")
+	playlist = root["playlist"].(map[string]any)
+	if playlist["songCount"] != float64(1) || len(playlist["entry"].([]any)) != 1 {
+		t.Fatalf("上游恢复后应重新读取完整榜单: %+v", playlist)
+	}
+	if trackCalls != 2 {
+		t.Fatalf("空结果被复用: %d", trackCalls)
 	}
 }
 

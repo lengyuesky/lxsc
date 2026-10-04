@@ -408,8 +408,9 @@ func TestWarmVisibleBoardsPrefetchesMissingSnapshots(t *testing.T) {
 		return boardPageJSON(1, 100, 1), nil
 	})
 	// 已有可回放快照的榜单不重复预读：内存快照与持久化快照各一个。
-	c.boardStale.Add(fullBoardKey("kg", "mem"), json.RawMessage(`{"list":[]}`))
-	c.persistBoardSnapshot(fullBoardKey("tx", "db"), json.RawMessage(`{"list":[]}`))
+	// 预读只认真正含歌曲的快照，空负载不算已有快照。
+	c.boardStale.Add(fullBoardKey("kg", "mem"), boardPageJSON(1, 100, 7))
+	c.persistBoardSnapshot(fullBoardKey("tx", "db"), boardPageJSON(1, 100, 8))
 	boards := []Board{{Source: "wy", BangID: "one"}, {Source: "kg", BangID: "mem"}, {Source: "tx", BangID: "db"}, {Source: "wy", BangID: "two"}}
 	c.WarmVisibleBoards(boards)
 	waitBoard := func(source, id string) {
@@ -441,6 +442,120 @@ func TestWarmVisibleBoardsPrefetchesMissingSnapshots(t *testing.T) {
 	defer mu.Unlock()
 	if calls["wy.leaderboard.getList"] != 2 {
 		t.Fatalf("重复预热重复请求: %v", calls)
+	}
+}
+
+func TestFullBoardDoesNotCacheEmptyResult(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	var mu sync.Mutex
+	empty, calls := true, 0
+	c.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if empty {
+			return boardPageJSON(0, 100), nil
+		}
+		return boardPageJSON(2, 2, 1, 2), nil
+	})
+	list, err := c.FullBoardTracks(context.Background(), "wy", "3778678")
+	if err != nil || len(list) != 0 {
+		t.Fatalf("空结果应正常返回: %v %v", list, err)
+	}
+	if _, _, ok := c.CachedBoardSummary("wy", "3778678"); ok {
+		t.Fatal("空结果不能进入缓存或摘要")
+	}
+	if raw, _, err := c.DB.GetBoardSnapshot(context.Background(), fullBoardKey("wy", "3778678")); err == nil && len(raw) > 0 {
+		t.Fatal("空结果不能落盘")
+	}
+	// 上游恢复后必须重新读取，而不是复用过一次的空歌单。
+	mu.Lock()
+	empty = false
+	mu.Unlock()
+	list, err = c.FullBoardTracks(context.Background(), "wy", "3778678")
+	if err != nil || len(list) != 2 {
+		t.Fatalf("上游恢复后应重新读取完整榜单: %v %v", list, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("空结果被复用: %d", calls)
+	}
+}
+
+func TestFullBoardIgnoresEmptySnapshots(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	ctx := context.Background()
+	// 历史空快照：内存与数据库各一份，都不能回放也不能当摘要。
+	c.boardStale.Add(fullBoardKey("kg", "mem"), json.RawMessage(`{"list":[]}`))
+	if err := c.DB.PutBoardSnapshot(ctx, fullBoardKey("tx", "db"), json.RawMessage(`{"list":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	c.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
+		calls.Add(1)
+		return boardPageJSON(1, 100, 5), nil
+	})
+	for _, board := range [][2]string{{"kg", "mem"}, {"tx", "db"}} {
+		if _, _, ok := c.CachedBoardSummary(board[0], board[1]); ok {
+			t.Fatalf("空快照不能作为摘要: %s|%s", board[0], board[1])
+		}
+		list, err := c.FullBoardTracks(ctx, board[0], board[1])
+		if err != nil || len(list) != 1 {
+			t.Fatalf("空快照必须改为重新读取 %s|%s: %v %v", board[0], board[1], list, err)
+		}
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("空快照被复用: %d", calls.Load())
+	}
+	if raw, _, err := c.DB.GetBoardSnapshot(ctx, fullBoardKey("tx", "db")); err != nil || !boardSnapshotHasTracks(raw) {
+		t.Fatal("历史空快照没有被重新读取的完整快照替换")
+	}
+}
+
+func TestPruneInvalidBoardSnapshots(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	ctx := context.Background()
+	valid, empty := fullBoardKey("wy", "3778678"), fullBoardKey("kg", "mem")
+	if err := c.DB.PutBoardSnapshot(ctx, valid, boardPageJSON(2, 2, 1, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DB.PutBoardSnapshot(ctx, empty, json.RawMessage(`{"list":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if removed := c.PruneInvalidBoardSnapshots(ctx); removed != 1 {
+		t.Fatalf("应只清理空快照: %d", removed)
+	}
+	keys, err := c.DB.BoardSnapshotKeys(ctx)
+	if _, ok := keys[valid]; err != nil || len(keys) != 1 || !ok {
+		t.Fatalf("清理结果异常: %v %v", keys, err)
+	}
+}
+
+func TestWarmVisibleBoardsCoolsDownAfterEmptyResult(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	c.EnableBoardWarm()
+	var calls atomic.Int32
+	c.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
+		calls.Add(1)
+		return boardPageJSON(0, 100), nil
+	})
+	boards := []Board{{Source: "wy", BangID: "one"}}
+	c.WarmVisibleBoards(boards)
+	deadline := time.After(3 * time.Second)
+	for calls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("空榜单未被预读")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	// 等后台记录冷却状态后再触发一次预读：空结果不缓存，但不能每个列表请求都重读上游。
+	time.Sleep(50 * time.Millisecond)
+	c.WarmVisibleBoards(boards)
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("空结果未进入冷却，重复冲击上游: %d", calls.Load())
 	}
 }
 

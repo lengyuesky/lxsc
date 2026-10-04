@@ -21,6 +21,13 @@ func (s *Server) StartBoardWarmup(ctx context.Context) {
 	}
 	s.Catalog.EnableBoardWarm()
 	go func() {
+		// 先清掉历史空快照：它们会被预热当成已有快照而跳过，客户端首次点开
+		// 仍需现场分页，正是"点开没有歌曲"的来源。
+		pruneCtx, cancelPrune := context.WithTimeout(ctx, 30*time.Second)
+		if removed := s.Catalog.PruneInvalidBoardSnapshots(pruneCtx); removed > 0 && s.Log != nil {
+			s.Log.Info("清理无效榜单快照", "count", removed)
+		}
+		cancelPrune()
 		for _, delay := range boardWarmupSchedule {
 			select {
 			case <-ctx.Done():

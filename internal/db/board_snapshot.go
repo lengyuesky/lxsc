@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -36,6 +37,21 @@ func (d *DB) PutBoardSnapshot(ctx context.Context, key string, raw []byte) error
 // ClearBoardSnapshots 清空全部持久化榜单快照；随元数据清理一起失效。
 func (d *DB) ClearBoardSnapshots(ctx context.Context) error {
 	_, err := d.sql.ExecContext(ctx, `DELETE FROM board_snapshots`)
+	return err
+}
+
+// DeleteBoardSnapshots 删除指定榜单快照，用于清理不含歌曲的无效快照。
+func (d *DB) DeleteBoardSnapshots(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	placeholders := make([]string, 0, len(keys))
+	args := make([]any, 0, len(keys))
+	for _, key := range keys {
+		placeholders = append(placeholders, "?")
+		args = append(args, key)
+	}
+	_, err := d.sql.ExecContext(ctx, `DELETE FROM board_snapshots WHERE board_key IN (`+strings.Join(placeholders, ",")+`)`, args...)
 	return err
 }
 

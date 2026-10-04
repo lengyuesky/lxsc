@@ -11,6 +11,23 @@ import (
 
 func fullBoardKey(source, id string) string { return "board-full|" + source + "|" + id }
 
+// boardSnapshotHasTracks 判断快照负载是否真的含歌曲。上游偶发返回空列表时，
+// 空快照会被客户端当成空歌单长期缓存，因此空负载一律不作为可用快照。
+func boardSnapshotHasTracks(raw json.RawMessage) bool {
+	var result struct {
+		List []map[string]any `json:"list"`
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return false
+	}
+	for _, item := range result.List {
+		if item != nil {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	// boardLoadBudget 整榜读取（含后台刷新）的时间预算。
 	boardLoadBudget = 45 * time.Second
@@ -55,10 +72,14 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 }
 
 // boardSnapshot 返回可立即返回的完整快照：先内存后持久化，并回放到内存。
+// 空负载既不回放也不返回：把"瞬时没有歌曲"当成榜单内容会让客户端一直开空页。
 func (c *Catalog) boardSnapshot(source, id string) (json.RawMessage, bool) {
 	key := fullBoardKey(source, id)
 	if raw, ok := c.boardStale.Get(key); ok {
-		return raw, true
+		if boardSnapshotHasTracks(raw) {
+			return raw, true
+		}
+		c.boardStale.Remove(key)
 	}
 	if c.DB == nil {
 		return nil, false
@@ -70,6 +91,11 @@ func (c *Catalog) boardSnapshot(source, id string) (json.RawMessage, bool) {
 		return nil, false
 	}
 	if time.Since(time.UnixMilli(at)) > boardPersistMaxAge {
+		return nil, false
+	}
+	if !boardSnapshotHasTracks(raw) {
+		// 历史空快照：删掉，由打开或预热重新完整读取。
+		c.deleteBoardSnapshots([]string{key})
 		return nil, false
 	}
 	stale := json.RawMessage(raw)
@@ -89,9 +115,15 @@ func (c *Catalog) loadFullBoardMerged(ctx context.Context, source, id string) ([
 		defer cancel()
 		raw, err := c.loadFullBoard(loadCtx, source, id)
 		if err == nil {
-			c.generic.Add(key, raw)
-			c.boardStale.Add(key, raw)
-			c.persistBoardSnapshot(key, raw)
+			// 只缓存确实含歌曲的完整榜单：空结果进缓存后客户端会把它当成
+			// 空歌单，且要等缓存过期才可能恢复。
+			if boardSnapshotHasTracks(raw) {
+				c.generic.Add(key, raw)
+				c.boardStale.Add(key, raw)
+				c.persistBoardSnapshot(key, raw)
+			} else if c.Log != nil {
+				c.Log.Warn("榜单没有歌曲，不缓存空结果", "source", source, "id", id)
+			}
 		}
 		return raw, err
 	})
@@ -102,8 +134,9 @@ func (c *Catalog) loadFullBoardMerged(ctx context.Context, source, id string) ([
 }
 
 // persistBoardSnapshot 尽力保存完整快照，失败只影响下次重启后的回放。
+// 空榜单不落盘：重启后回放空快照同样会让客户端显示空歌单。
 func (c *Catalog) persistBoardSnapshot(key string, raw json.RawMessage) {
-	if c.DB == nil {
+	if c.DB == nil || !boardSnapshotHasTracks(raw) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -143,12 +176,13 @@ func (c *Catalog) loadBoardDetached(source, id string) {
 		defer func() { <-c.boardWarmGate }()
 		ctx, cancel := context.WithTimeout(context.Background(), boardLoadBudget)
 		defer cancel()
-		_, err := c.loadFullBoardMerged(ctx, source, id)
+		raw, err := c.loadFullBoardMerged(ctx, source, id)
 		if err != nil && c.Log != nil {
 			c.Log.Debug("榜单后台刷新失败", "source", source, "err", err)
 		}
 		c.boardRefreshMu.Lock()
-		c.boardRefreshState[key] = boardRefreshState{at: time.Now(), ok: err == nil}
+		// 空结果按失败冷却：它不会进入缓存，不能让每次列表请求都重新冲击上游。
+		c.boardRefreshState[key] = boardRefreshState{at: time.Now(), ok: err == nil && len(raw) > 0}
 		c.boardRefreshMu.Unlock()
 	}()
 }
@@ -389,6 +423,45 @@ func (c *Catalog) WarmVisibleBoards(boards []Board) {
 			continue
 		}
 		c.loadBoardDetached(board.Source, board.BangID)
+	}
+}
+
+// PruneInvalidBoardSnapshots 删除不含歌曲的持久化快照。历史版本会把上游瞬时的
+// 空结果落盘，这类快照既不能回放，又会让预热跳过对应榜单，必须清掉后重建。
+func (c *Catalog) PruneInvalidBoardSnapshots(ctx context.Context) int {
+	if c == nil || c.DB == nil {
+		return 0
+	}
+	keys, err := c.DB.BoardSnapshotKeys(ctx)
+	if err != nil {
+		return 0
+	}
+	var invalid []string
+	for key := range keys {
+		if ctx.Err() != nil {
+			break
+		}
+		raw, _, err := c.DB.GetBoardSnapshot(ctx, key)
+		if err != nil {
+			continue
+		}
+		if !boardSnapshotHasTracks(raw) {
+			invalid = append(invalid, key)
+		}
+	}
+	c.deleteBoardSnapshots(invalid)
+	return len(invalid)
+}
+
+// deleteBoardSnapshots 尽力删除快照；失败只影响下次预热是否重复读取。
+func (c *Catalog) deleteBoardSnapshots(keys []string) {
+	if c.DB == nil || len(keys) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.DB.DeleteBoardSnapshots(ctx, keys); err != nil && c.Log != nil {
+		c.Log.Debug("删除无效榜单快照失败", "err", err)
 	}
 }
 

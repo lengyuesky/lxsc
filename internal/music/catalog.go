@@ -551,9 +551,10 @@ func (c *Catalog) BoardTracks(ctx context.Context, source, bangID string, page i
 	return c.parseList(ctx, raw, source)
 }
 
-// CachedBoardSummary 只读取已加载的榜单缓存；未知与真正的空榜单分开处理。
+// CachedBoardSummary 只读取已加载的榜单缓存；未知与空快照都按未知处理。
 // 只使用完整榜单缓存，不能把已获取的第一页数量当作整榜数量；
 // 过期的旧完整快照（含持久化回放）仍可用于摘要，刷新由打开详情时触发。
+// 零首不返回：箭头音乐把 0 当成空歌单而跳过详情请求，空快照必须显示为待加载。
 func (c *Catalog) CachedBoardSummary(source, bangID string) (count, duration int, ok bool) {
 	key := fullBoardKey(source, bangID)
 	raw, ok := c.generic.Get(key)
@@ -567,6 +568,9 @@ func (c *Catalog) CachedBoardSummary(source, bangID string) (count, duration int
 		List []map[string]any `json:"list"`
 	}
 	if json.Unmarshal(raw, &result) != nil || result.List == nil {
+		return 0, 0, false
+	}
+	if !boardSnapshotHasTracks(raw) {
 		return 0, 0, false
 	}
 	for _, item := range result.List {
