@@ -59,12 +59,32 @@ func writeOK(w http.ResponseWriter, r *http.Request, name string, payload any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
+	status, retry := 0, ""
 	if code == ErrBusy || code == ErrAuthLimited {
-		status, retry := http.StatusServiceUnavailable, "2"
+		status, retry = http.StatusServiceUnavailable, "2"
 		if code == ErrAuthLimited {
 			status, retry = http.StatusTooManyRequests, "60"
 		}
+		code = ErrGeneric
+	} else if r.Method == http.MethodHead {
+		// HEAD 没有协议正文，必须用 HTTP 状态表示失败，不能返回空的 200 错误页。
+		switch code {
+		case ErrMissingParam, ErrClientOld, ErrServerOld, 43:
+			status = http.StatusBadRequest
+		case ErrWrongAuth, ErrTokenAuthNotOK, 44:
+			status = http.StatusUnauthorized
+		case ErrNotAuthorized:
+			status = http.StatusForbidden
+		case ErrNotFound:
+			status = http.StatusNotFound
+		default:
+			status = http.StatusBadGateway
+		}
+	}
+	if retry != "" {
 		w.Header().Set("Retry-After", retry)
+	}
+	if status != 0 {
 		if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
 			event.Status = status
 		}
@@ -76,8 +96,14 @@ func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
 		default:
 			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		w.WriteHeader(status)
-		code = ErrGeneric
+	}
+	if r.Method == http.MethodHead {
+		recordClientResponse(r, "failed", "error", nil, M{"code": code})
+		return
 	}
 	writeResp(w, r, "failed", "error", nil, M{"code": code, "message": msg})
 }

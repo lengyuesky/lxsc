@@ -25,8 +25,9 @@ var (
 )
 
 // prepareMedia 只在响应提交前恢复：固定候选快照、每源至多一次过期刷新，失败排除仅限本次请求。
-// 代理返回尚未读取的响应体；302 只做最小 Range 头校验，不把调试 probe 纳入恢复流程。
-func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy bool) (result music.URLResolution, response *http.Response, resultErr error) {
+// 代理返回尚未读取的响应体；302/HEAD 只做最小 Range 头校验，不把调试 probe 纳入恢复流程。
+// proxy/headMetadata 使用入口的设置快照，避免设置变更让同一请求混用播放方式。
+func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
 	finish := s.Catalog.MediaPreparation.Start()
 	defer func() { finish(resultErr) }()
 	if s.Catalog.Sources == nil {
@@ -64,7 +65,19 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		started = time.Now()
 		status := 0
 		var resp *http.Response
-		if proxy {
+		if headMetadata {
+			checkCtx, cancel := context.WithTimeout(ctx, music.URLCheckTimeout)
+			resp, err = s.inspectMedia(checkCtx, in, resolution.Result.URL)
+			cancel()
+			if resp != nil {
+				status = resp.StatusCode
+			}
+			checkStage := "url_check"
+			if resolution.Cached {
+				checkStage = "cache_check"
+			}
+			s.mediaEvent(checkStage, in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, status, started, err)
+		} else if proxy {
 			headCtx, cancel := context.WithTimeout(ctx, mediaHeaderTimeout)
 			resp, err = s.openMedia(headCtx, r, in, resolution.Result.URL)
 			cancel()
@@ -91,7 +104,7 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			}
 			return music.URLResolution{}, nil, context.Canceled
 		}
-		if err == nil && (status == http.StatusOK || status == http.StatusPartialContent || (proxy && status == http.StatusRequestedRangeNotSatisfiable)) {
+		if err == nil && (status == http.StatusOK || status == http.StatusPartialContent || (proxy && !headMetadata && status == http.StatusRequestedRangeNotSatisfiable)) {
 			return resolution, resp, nil
 		}
 		if resp != nil {
@@ -102,7 +115,7 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			if errors.Is(err, errInvalidMediaURL) || errors.Is(err, httpguard.ErrNonAudioResponse) {
 				s.Catalog.InvalidatePlaybackURL(resolution)
 				rejectedURLs[resolution.Result.URL] = struct{}{}
-			} else if !proxy {
+			} else if !proxy && !headMetadata {
 				// 网络失败不证明客户端必定失败；候选只存于本次请求，最后排除已明确拒绝的地址。
 				uncertain = append(uncertain, resolution)
 			}

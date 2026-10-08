@@ -395,7 +395,7 @@ func TestMediaRecoveryTotalBudget(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 			defer cancel()
 			started := time.Now()
-			resolution, resp, err := s.prepareMedia(ctx, mediaStabilityRequest(user, info, ""), info, "320k", proxy)
+			resolution, resp, err := s.prepareMedia(ctx, mediaStabilityRequest(user, info, ""), info, "320k", proxy, false)
 			if time.Since(started) > time.Second || gets.Load() != 1 || resp != nil {
 				t.Fatal("预算结束后不能继续尝试其他源")
 			}
@@ -445,7 +445,7 @@ func TestMediaProxyBodyOutlivesRecoveryBudget(t *testing.T) {
 			budget, stop := context.WithTimeout(parent, 150*time.Millisecond)
 			defer stop()
 			req := mediaStabilityRequest(user, info, "&proxy=1").WithContext(withUser(parent, user))
-			resolution, resp, err := s.prepareMedia(budget, req, info, "320k", true)
+			resolution, resp, err := s.prepareMedia(budget, req, info, "320k", true, false)
 			if err != nil {
 				t.Fatal(err)
 			}

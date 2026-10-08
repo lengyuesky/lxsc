@@ -32,13 +32,10 @@ func TestMediaHEADRoutesRespectModeWithoutPlayback(t *testing.T) {
 				var calls, reads, closed atomic.Int32
 				s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					calls.Add(1)
-					wantMethod := http.MethodGet
-					if mode == "proxy" {
-						wantMethod = http.MethodHead
-					} else if req.Header.Get("Range") != "bytes=0-0" {
+					if req.Header.Get("Range") != "bytes=0-0" {
 						t.Error("重定向预检只能请求最小 Range")
 					}
-					if req.Method != wantMethod || req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
+					if req.Method != http.MethodGet || req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
 						t.Errorf("上游预检方法或凭据隔离错误: %s", req.Method)
 					}
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/mpeg"}, "Content-Length": {"123456"}, "Accept-Ranges": {"bytes"}}, Body: &countedMediaBody{Reader: strings.NewReader("不得读取"), reads: &reads, closed: &closed}, Request: req}, nil
@@ -51,9 +48,9 @@ func TestMediaHEADRoutesRespectModeWithoutPlayback(t *testing.T) {
 				router.Mount("/rest", s.Routes())
 				rec := httptest.NewRecorder()
 				router.ServeHTTP(rec, httptest.NewRequest(http.MethodHead, "/rest/"+endpoint+"?"+params.Encode(), nil))
-				wantStatus := http.StatusFound
-				if mode == "proxy" {
-					wantStatus = http.StatusOK
+				wantStatus := http.StatusOK
+				if mode == "force_redirect" {
+					wantStatus = http.StatusFound
 				}
 				if rec.Code != wantStatus {
 					t.Fatalf("媒体 HEAD 预检状态错误: got=%d want=%d", rec.Code, wantStatus)
@@ -61,9 +58,9 @@ func TestMediaHEADRoutesRespectModeWithoutPlayback(t *testing.T) {
 				if rec.Body.Len() != 0 || reads.Load() != 0 || calls.Load() != 1 || closed.Load() != 1 {
 					t.Fatalf("HEAD 不得读取或转发正文，必须关闭上游: body=%d reads=%d calls=%d closed=%d", rec.Body.Len(), reads.Load(), calls.Load(), closed.Load())
 				}
-				if mode == "proxy" {
+				if mode != "force_redirect" {
 					if rec.Header().Get("Content-Type") != "audio/mpeg" || rec.Header().Get("Content-Length") != "123456" || rec.Header().Get("Accept-Ranges") != "bytes" || rec.Header().Get("Location") != "" {
-						t.Fatal("代理 HEAD 必须返回实际媒体头")
+						t.Fatal("HEAD 必须返回实际媒体头")
 					}
 				} else if rec.Header().Get("Location") != "https://cdn.example/1" {
 					t.Fatal("重定向 HEAD 必须保持原播放方式")
@@ -103,7 +100,11 @@ func TestMediaHEADStillRequiresAuthenticationAndRejectsMutations(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer lxdbg_synthetic_not_a_player_key")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
-		if rec.Code == http.StatusMethodNotAllowed || rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
+		wantStatus := http.StatusBadRequest
+		if key != "" {
+			wantStatus = http.StatusUnauthorized
+		}
+		if rec.Code != wantStatus || rec.Header().Get("Location") != "" || rec.Body.Len() != 0 {
 			t.Fatal("媒体 HEAD 必须进入原有 Subsonic 认证")
 		}
 		events := s.Diagnostics.List()

@@ -83,9 +83,12 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	}
 	quality := pickQuality(r, u.Quality)
 	mode := s.Settings.Get().StreamMode
+	// 普通模式在本站完成 HEAD 预检，避免客户端继续向只支持 GET 的音源发 HEAD。
+	// 强制 302 仍遵守管理员选择的重定向契约。
+	headMetadata := headOnly && mode != "force_redirect"
 	// 强制 302 优先于客户端的 proxy 参数，播放和下载均禁止服务器转发。
 	proxy := mode != "force_redirect" && (mode == "proxy" || param(r, "proxy") == "1")
-	if proxy {
+	if proxy && !headMetadata {
 		transferRelease, err := s.Catalog.MediaLimits.Acquire(ctx, u.ID)
 		if err != nil {
 			if r.Context().Err() == nil {
@@ -95,7 +98,7 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 		}
 		defer transferRelease()
 	}
-	res, resp, err := s.prepareMedia(ctx, r, in, quality, proxy)
+	res, resp, err := s.prepareMedia(ctx, r, in, quality, proxy, headMetadata)
 	release()
 	// 预算只覆盖取得可用响应头之前的工作，不能截断已经开始的整首音频传输。
 	cancel()
@@ -108,6 +111,10 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 		if r.Context().Err() == nil {
 			fail(w, r, ErrGeneric, "无法获取可用的播放地址")
 		}
+		return
+	}
+	if headMetadata {
+		s.writeMediaHead(w, r, res, resp)
 		return
 	}
 	persist := func() {
@@ -167,9 +174,18 @@ func expiredMediaStatus(status int) bool {
 
 // checkMedia 使用最小 Range 校验，不读取或转发音频正文，也不继承客户端凭据。
 func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string) (int, error) {
+	resp, err := s.inspectMedia(ctx, in, address)
+	if resp == nil {
+		return 0, err
+	}
+	return resp.StatusCode, err
+}
+
+// inspectMedia 在响应头到达后立即关闭正文，保留真实媒体头供 HEAD 预检使用。
+func (s *Server) inspectMedia(ctx context.Context, in *music.Info, address string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
-		return 0, errInvalidMediaURL
+		return nil, errInvalidMediaURL
 	}
 	ref, ua := refererFor(in.Source())
 	req.Header.Set("User-Agent", ua)
@@ -180,10 +196,14 @@ func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string)
 	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
-		return 0, err
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, err
 	}
-	defer resp.Body.Close()
-	return resp.StatusCode, httpguard.CheckMediaResponse(resp)
+	_ = resp.Body.Close()
+	resp.Body = http.NoBody
+	return resp, httpguard.CheckMediaResponse(resp)
 }
 
 // openMedia 取得响应头后解除恢复预算，但始终保留父请求取消和正文关闭的生命周期。
@@ -192,11 +212,7 @@ func (s *Server) openMedia(ctx context.Context, r *http.Request, in *music.Info,
 		return nil, err
 	}
 	bodyCtx, cancel := context.WithCancel(r.Context())
-	method := http.MethodGet
-	if r.Method == http.MethodHead {
-		method = http.MethodHead
-	}
-	req, err := http.NewRequestWithContext(bodyCtx, method, address, nil)
+	req, err := http.NewRequestWithContext(bodyCtx, http.MethodGet, address, nil)
 	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
 		cancel()
 		return nil, errInvalidMediaURL

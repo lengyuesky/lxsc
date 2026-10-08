@@ -68,7 +68,7 @@ func recordClientResponse(r *http.Request, status, name string, payload any, err
 	event.Result = status
 	if event.Status == 0 {
 		event.Status = 200
-	} // 常规协议失败仍以 HTTP 200 返回，限流/繁忙例外。
+	} // 常规 GET/POST 协议失败仍以 HTTP 200 返回；HEAD、限流、繁忙使用实际 HTTP 错误状态。
 	if errObj != nil {
 		if code, ok := errObj["code"].(int); ok {
 			event.ProtocolCode = &code

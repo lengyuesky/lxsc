@@ -20,7 +20,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 			{"method": "POST", "path": "/api/debug/probe/board", "body": map[string]string{"boardId": "lb-wy-19723756"}},
 			{"method": "POST", "path": "/api/debug/probe/lyrics", "body": map[string]string{"trackId": "tr-wy-123456"}},
 		},
-		"workflow":    []string{"确认 status.version 为预期部署版本", "请用户在箭头音乐中打开问题榜单、重试播放并打开歌曲歌词", "读取 events，对比 client、endpoint、method、format、result、count、lines 和 protocolCode；stream/download 的 HEAD 是客户端预检，不是播放", "HTTP 200/206 仍需检查 error；non_audio 表示上游返回了非音频类型，缺少媒体头不能证明音频有效", "仅在具备 probe 权限时，用用户指定或事件内的 boardId/trackId 进行针对性探测", "客户端请求记录和主动探测有不同 stage；主动探测成功不证明客户端显示或播放成功"},
+		"workflow":    []string{"确认 status.version 为预期部署版本", "请用户在箭头音乐中打开问题榜单、重试播放并打开歌曲歌词", "读取 events，对比 client、endpoint、method、format、result、count、lines 和 protocolCode；stream/download 的 HEAD 是客户端预检，不是播放，普通302/代理模式成功时应返回200媒体头，强制302除外", "HTTP 200/206 仍需检查 error；non_audio 表示上游返回了非音频类型，缺少媒体头不能证明音频有效", "仅在具备 probe 权限时，用用户指定或事件内的 boardId/trackId 进行针对性探测", "客户端请求记录和主动探测有不同 stage；主动探测成功不证明客户端显示或播放成功"},
 		"limits":      map[string]any{"events": 200, "requestsPerMinute": 30, "concurrentProbes": 2, "requestTimeoutSeconds": 20},
 		"perspective": "server_only", "clientLogin": false,
 		"privacy": "不返回原始请求、认证参数、用户名、自定义歌单ID、歌曲文本、歌词正文或音频链接；用完由管理员撤销临时凭据",
