@@ -54,6 +54,8 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, persistPlayb
 }
 
 func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, persistPlayback bool, fail mediaErrorWriter) {
+	headOnly := r.Method == http.MethodHead
+	persistPlayback = persistPlayback && !headOnly
 	ctx, cancel := context.WithTimeout(r.Context(), mediaRecoveryTimeout)
 	defer cancel()
 	u := currentUser(r)
@@ -125,11 +127,14 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	if r.Context().Err() != nil {
 		return
 	}
-	// 重定向成功即可交由客户端直连上游，此时记录播放。
-	s.Log.Info("播放", "user", u.Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", res.Result.Quality, "via", res.Result.Source)
+	// HEAD 只校验链接，不将预检记为播放。
+	if !headOnly {
+		s.Log.Info("播放", "user", u.Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", res.Result.Quality, "via", res.Result.Source)
+	}
 	persist()
 	w.Header().Set("Cache-Control", "no-store")
 	s.mediaEvent("redirect", id, in.Source(), res.Result.Quality, res.Cached, http.StatusFound, time.Now(), nil)
+	recordMediaResponse(r, http.StatusFound)
 	http.Redirect(w, r, res.Result.URL, http.StatusFound)
 }
 
@@ -178,7 +183,7 @@ func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string)
 		return 0, err
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode, nil
+	return resp.StatusCode, httpguard.CheckMediaResponse(resp)
 }
 
 // openMedia 取得响应头后解除恢复预算，但始终保留父请求取消和正文关闭的生命周期。
@@ -187,7 +192,11 @@ func (s *Server) openMedia(ctx context.Context, r *http.Request, in *music.Info,
 		return nil, err
 	}
 	bodyCtx, cancel := context.WithCancel(r.Context())
-	req, err := http.NewRequestWithContext(bodyCtx, http.MethodGet, address, nil)
+	method := http.MethodGet
+	if r.Method == http.MethodHead {
+		method = http.MethodHead
+	}
+	req, err := http.NewRequestWithContext(bodyCtx, method, address, nil)
 	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
 		cancel()
 		return nil, errInvalidMediaURL
@@ -247,7 +256,11 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 		w.Header().Set("Content-Type", ct)
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	recordMediaResponse(r, resp.StatusCode)
 	w.WriteHeader(resp.StatusCode)
+	if r.Method == http.MethodHead {
+		return false
+	}
 	copyStarted := time.Now()
 	_, err := httpguard.CopyIdle(w, resp.Body, 30*time.Second)
 	s.mediaEvent("proxy_copy", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, resp.StatusCode, copyStarted, err)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"lxsc/internal/admission"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/music"
 )
 
@@ -69,6 +70,9 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			cancel()
 			if resp != nil {
 				status = resp.StatusCode
+				if err == nil {
+					err = httpguard.CheckMediaResponse(resp)
+				}
 			}
 			s.mediaEvent("proxy_response", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, status, started, err)
 		} else {
@@ -95,7 +99,7 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		}
 		id := resolution.Result.SourceID
 		if err != nil {
-			if errors.Is(err, errInvalidMediaURL) {
+			if errors.Is(err, errInvalidMediaURL) || errors.Is(err, httpguard.ErrNonAudioResponse) {
 				s.Catalog.InvalidatePlaybackURL(resolution)
 				rejectedURLs[resolution.Result.URL] = struct{}{}
 			} else if !proxy {

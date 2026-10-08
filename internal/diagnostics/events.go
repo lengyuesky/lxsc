@@ -11,11 +11,14 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"lxsc/internal/httpguard"
 )
 
 // Event 只接受固定字段；不得加入 URL、用户名、歌曲文本或自由文本错误。
 type Event struct {
 	Endpoint     string    `json:"endpoint,omitempty"`
+	Method       string    `json:"method,omitempty"`
 	Client       string    `json:"client,omitempty"`
 	Format       string    `json:"format,omitempty"`
 	BoardID      string    `json:"boardId,omitempty"`
@@ -74,6 +77,9 @@ func ErrorCode(err error) string {
 	if errors.Is(err, errRedirectLimit) {
 		return "redirect_limit"
 	}
+	if errors.Is(err, httpguard.ErrNonAudioResponse) {
+		return "non_audio"
+	}
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
 		if dns.Timeout() {
@@ -120,9 +126,10 @@ func (b *Events) Add(e Event) {
 	if !ValidTrackID(e.TrackID) {
 		e.TrackID = ""
 	}
-	e.Endpoint = oneOf(e.Endpoint, "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum")
+	e.Endpoint = oneOf(e.Endpoint, "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum", "stream", "download")
+	e.Method = oneOf(e.Method, "GET", "POST", "HEAD")
 	e.Client = oneOf(e.Client, "amcfy", "stream_music", "other", "unknown")
-	e.Format = oneOf(e.Format, "json", "xml", "jsonp")
+	e.Format = oneOf(e.Format, "json", "xml", "jsonp", "binary")
 	e.Result = oneOf(e.Result, "ok", "failed", "empty", "unavailable")
 	if !ValidBoardID(e.BoardID) {
 		e.BoardID = ""
@@ -151,7 +158,7 @@ func (b *Events) Add(e Event) {
 	e.Platform = Platform(e.Platform)
 	e.Quality = Quality(e.Quality)
 	e.Mode = Mode(e.Mode)
-	e.Error = oneOf(e.Error, "none", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "upstream_error")
+	e.Error = oneOf(e.Error, "none", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error")
 	if e.Error == "" {
 		e.Error = "upstream_error"
 	}

@@ -69,6 +69,7 @@ unset DEBUG_TOKEN DEBUG_BASE
 | `cancelled` | 客户端取消、撤销、创建者失效等引起的取消 |
 | `blocked_target` | 主动探测拒绝不安全协议、端口、IP或DNS结果 |
 | `redirect_limit` | 主动探测重定向超过 3 跳 |
+| `non_audio` | 上游虽返回 200/206，但类型明确为文本、图片或 JSON/XML，不能作为音频；普通播放会尝试其他音源，主动探测只报告 |
 | `upstream_error` | 无法安全细分的上游错误，不输出原始错误字符串 |
 
 例如 `cache_check status=0 error=dns` 后出现 `redirect status=302`，表示服务器可能在尝试备选后仍无法验证音频，但保留了未被明确拒绝的客户端直连机会，并不表示服务端成功请求了音频。`403/404/410` 会触发每源至多一次刷新，仍失败则尝试其他脚本；普通播放新增的 `source_fallback` 只表示备选取链阶段，不暴露脚本 ID 或名称。平台 `tx` 等代号也不是音源脚本身份。`200/206` 只证明服务端拿到了这些响应头，可能仍是错误内容、编解码不支持、客户端网络/CORS/混合内容或签名绑定问题。
@@ -156,15 +157,19 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 
 ### 观察真实客户端请求
 
-让用户先在箭头音乐中打开问题榜单，或进入正在播放歌曲的歌词页，然后读取 `/api/debug/events`。新增 `stage=client_response`，覆盖 `getPlaylists`、`getPlaylist`、`getMusicDirectory`、`getLyrics`、`getLyricsBySongId`、`getSong` 和 `getAlbum`，包括认证失败的协议响应。
+让用户先在箭头音乐中打开问题榜单、重试播放或进入歌曲的歌词页，然后读取 `/api/debug/events`。`stage=client_response` 覆盖 `getPlaylists`、`getPlaylist`、`getMusicDirectory`、`getLyrics`、`getLyricsBySongId`、`getSong`、`getAlbum`、`stream` 和 `download`，包括认证失败的协议响应。
 
 - `client`：根据客户端声明的 `c` 参数归类为 `amcfy`、`stream_music`、`other`、`unknown`；仅用于诊断，不作为可信身份。原始客户端字符串不输出。
-- `endpoint`、`format`：固定枚举的接口名及 `json/xml/jsonp`。
+- `endpoint`、`method`、`format`：固定枚举的接口名、`GET/POST/HEAD` 及 `json/xml/jsonp/binary`。媒体成功响应（含 302）标记 `binary`，协议错误保留原格式。`stream/download` 的 `HEAD` 是客户端链接预检，不能当作真实播放；它与独立 `probe` 也不同。
 - `result`：`ok/empty/failed/unavailable`；`protocolCode` 单独表示 Subsonic 错误码。HTTP 200 不代表协议成功。
 - `count`：实际响应中的列表条目数（歌单详情为实际歌曲数，非摘要的待加载标记）。`lines`：歌词行数；`synced`：结构化歌词是否含同步轨。字段不存在表示不适用，零表示确实返回空。
 - `trackId`、`boardId`：仅接受固定平台前缀和有界 ID；歌单列表事件还提供最多 10 个公开在线榜单 `boardIds`，便于 AI 在客户端未请求详情时定向探测。不输出自定义歌单 ID、歌曲/歌手名称、歌词正文、用户名、认证字段或任意请求头。
 
 事件只表示服务端生成的协议响应，不证明客户端收到了全部字节或解析成功。没有事件可能是客户端未请求、离线缓存、反向代理未转发、窗口已被最近 200 条事件覆盖或部署版本不支持，不能仅凭事件缺失断言客户端故障。
+
+媒体接口支持带或不带 `.view` 的 `HEAD`，沿用普通播放器认证、音质和播放方式。重定向模式仍返回 302；代理模式只向上游请求 HEAD 并返回响应头，不读取或转发音频正文，也不记为播放。其他 Subsonic 接口不新增 HEAD 操作。旧版仅注册 GET/POST，媒体 HEAD 会在进入诊断前返回 405，单看旧版的成功 GET 事件无法排除这一问题。
+
+链接校验与代理准备只检查响应头，不读取错误页正文。明确的非音频类型会以 `non_audio` 记入诊断、丢弃对应失败缓存并限次换源；强制 302 不会自动代理。主动探测使用同一类型判断，但只报告原三阶段，不执行刷新或换源。未声明类型或通用二进制类型继续兼容，返回 200/206 或空的 `mediaHeaders` 仍不能证明内容或客户端解码正常。
 
 ### 定向主动探测
 

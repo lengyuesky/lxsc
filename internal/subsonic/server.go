@@ -135,6 +135,16 @@ func (s *Server) Routes() http.Handler {
 	}
 	r.Get("/{method}", dispatch)
 	r.Post("/{method}", dispatch)
+	// 播放器可能先用 HEAD 校验链接；只为媒体开放，避免预检触发修改接口。
+	r.Head("/{method}", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSuffix(chi.URLParam(r, "method"), ".view")
+		if name != "stream" && name != "download" {
+			w.Header().Set("Allow", "GET, POST")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		dispatch(w, r)
+	})
 	return r
 }
 

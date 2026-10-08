@@ -14,7 +14,7 @@ type clientDiagnosticKey struct{}
 // 只摘取响应的数量和状态，不保存请求正文、认证参数或任何歌曲/歌词文本。
 func (s *Server) beginClientDiagnostic(r *http.Request, endpoint string) (*http.Request, func()) {
 	switch endpoint {
-	case "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum":
+	case "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum", "stream", "download":
 	default:
 		return r, func() {}
 	}
@@ -32,7 +32,7 @@ func (s *Server) beginClientDiagnostic(r *http.Request, endpoint string) (*http.
 	case strings.Contains(client, "streammusic") || strings.Contains(client, "stream music") || strings.Contains(client, "音流"):
 		category = "stream_music"
 	}
-	event := &diagnostics.Event{Stage: "client_response", Endpoint: endpoint, Client: category, Format: detectFormat(r), Result: "unavailable", Error: "none"}
+	event := &diagnostics.Event{Stage: "client_response", Endpoint: endpoint, Method: r.Method, Client: category, Format: detectFormat(r), Result: "unavailable", Error: "none"}
 	id := param(r, "id")
 	if diagnostics.ValidTrackID(id) {
 		event.TrackID = id
@@ -46,6 +46,17 @@ func (s *Server) beginClientDiagnostic(r *http.Request, endpoint string) (*http.
 			event.Error = diagnostics.ErrorCode(r.Context().Err())
 		}
 		s.Diagnostics.Add(*event)
+	}
+}
+
+func recordMediaResponse(r *http.Request, status int) {
+	event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event)
+	if event == nil {
+		return
+	}
+	event.Status, event.Format, event.Result = status, "binary", "ok"
+	if status >= http.StatusBadRequest {
+		event.Result = "failed"
 	}
 }
 

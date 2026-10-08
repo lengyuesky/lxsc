@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"lxsc/internal/db"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/music"
 	"lxsc/internal/settings"
@@ -500,6 +501,7 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
 				if err == nil {
 					status = resp.StatusCode
 					headers = mediaHeaders(resp.Header)
+					err = httpguard.CheckMediaResponse(resp)
 					_ = resp.Body.Close()
 				}
 			}
