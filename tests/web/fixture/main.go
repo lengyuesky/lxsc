@@ -142,7 +142,11 @@ func run() error {
 	defer sources.UnloadAll()
 	script := fmt.Sprintf(`lx.on(lx.EVENT_NAMES.request, ({info}) => Promise.resolve(%q+'/tone.wav?id='+info.musicInfo.songmid+'&quality='+info.type));
 lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'music',actions:['musicUrl'],qualitys:['128k','320k']},tx:{name:'测试',type:'music',actions:['musicUrl'],qualitys:['128k','320k']}}});`, upstream.URL)
-	if _, err := sources.Load(ctx, 1, 1, script); err != nil {
+	source, err := database.CreateSource(ctx, &db.Source{Name: "浏览器测试音源", Script: script, Enabled: true, Priority: 1})
+	if err != nil {
+		return err
+	}
+	if _, err := sources.Load(ctx, source.ID, source.Priority, script); err != nil {
 		return err
 	}
 	catalog := music.NewCatalog(database, pool, sources, store, log)

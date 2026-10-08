@@ -192,6 +192,13 @@
 
     <section id="tab-sources" class="tab admin-only">
       <div class="page-head"><div><h2>音源脚本</h2><p>上传或导入洛雪自定义音源，用于解析播放直链</p></div></div>
+      <div id="sourceStatsPanel" class="card source-statistics" aria-label="音源调用统计">
+        <div class="source-stats-head"><div><h3>音源调用统计</h3><p class="muted hint">查看调用表现与失败分布，及时发现异常音源</p></div><div class="source-stats-filters"><label>音源<select id="sourceStatsSource" aria-label="统计音源"><option value="">全部音源</option></select></label><label>时间范围<select id="sourceStatsWindow" aria-label="调用统计时间范围"><option value="1h">近 1 小时</option><option value="24h">近 24 小时</option></select></label><button id="refreshSourceStats" class="sec" type="button" aria-label="刷新音源调用统计"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div></div>
+        <p id="sourceStatsStatus" class="muted hint" role="status"></p>
+        <div id="sourceStatsBody"><p class="empty">正在读取调用统计…</p></div>
+        <p class="source-stats-footnote">每 30 秒更新。按音源的一次取链、歌词或封面请求计数，音质重试计入尝试次数；包含测试调用，缓存命中与平台搜索不计入。取消不计入成功率。成功率 ≥95% 为正常，80%–95% 为波动，低于 80% 为异常。解析成功不代表实际播放成功。</p>
+        <p class="source-stats-footnote">统计按 5 分钟汇总，保留近 24 小时；每个音源最多保留最近 100 条调用明细。重载、停用保留统计，服务重启后清零。</p>
+      </div>
       <div class="grid2">
         <form id="uploadSourceForm" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-upload"/></svg>上传脚本</h4><input type="file" name="file" accept=".js,text/javascript" required><input name="name" placeholder="名称（可选，默认取脚本 @name）"><button type="submit">上传</button></form>
         <form id="importSourceForm" class="card form-card"><h4 class="card-title"><svg class="icon"><use href="#i-link"/></svg>从 URL 导入</h4><input name="url" placeholder="https://example.com/source.js" required><button type="submit">导入</button></form>

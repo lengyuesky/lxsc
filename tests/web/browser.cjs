@@ -755,6 +755,7 @@ async function main() {
     }, { viewport: { width: 390, height: 844 }, colorScheme: 'dark', isMobile: true, hasTouch: true })
     await require('./improvements-browser.cjs')({ check, url, login, search, playSearch, createPlaylist, selectPlaylistUI, artifacts })
     await require('./six-features-browser.cjs')({ check, url, login, search, playSearch, createPlaylist, selectPlaylistUI, artifacts })
+    await require('./source-statistics-browser.cjs')({ check, url, login, artifacts })
   } finally {
     if (admin) await admin.dispose()
     if (browser) await browser.close()

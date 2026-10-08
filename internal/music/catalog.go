@@ -50,6 +50,7 @@ type Catalog struct {
 	urls              *requestCache[urlKey, js.MusicURLResult]
 	urlChecks         *requestCache[urlCheckKey, int]
 	search            *requestCache[searchKey, []*Info]
+	metadataSearch    *requestCache[metadataSearchKey, metadataSearchResult]
 	searchCall        func(context.Context, string, ...any) (json.RawMessage, error)
 	urlCall           func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
 	searchMetrics     map[string]*metrics.Operation
@@ -87,6 +88,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
 		urlChecks:         newRequestCache[urlCheckKey, int](1, 0),
 		search:            newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
+		metadataSearch:    newRequestCache[metadataSearchKey, metadataSearchResult](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:            lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
 		generic:           lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
 		boardStale:        lru.NewLRU[string, json.RawMessage](128, nil, 0),
@@ -99,6 +101,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		c.searchMetrics[platform] = &metrics.Operation{}
 	}
 	c.urls.gate, c.search.gate, c.urlChecks.gate, c.flight.gate = c.workLimits, c.workLimits, c.workLimits, c.workLimits
+	c.metadataSearch.gate = c.workLimits
 	c.searchCall = func(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
 		if c.SDK == nil {
 			return nil, errors.New("sdk 未初始化")
@@ -744,6 +747,7 @@ func (c *Catalog) PurgeMetadataCaches() {
 		cancel()
 	}
 	c.search.purge()
+	c.metadataSearch.purge()
 	c.generic.Purge()
 }
 
@@ -754,4 +758,5 @@ func (c *Catalog) RefreshTTL() {
 	v := c.Settings.Get()
 	c.urls.configure(time.Duration(v.URLCacheTTL) * time.Second)
 	c.search.configure(time.Duration(v.SearchCacheTTL) * time.Second)
+	c.metadataSearch.configure(time.Duration(v.SearchCacheTTL) * time.Second)
 }

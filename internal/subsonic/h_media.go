@@ -337,6 +337,12 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 			if g := s.artistByID(rc, id); g != nil && len(g.Songs) > 0 {
 				url = s.Catalog.Cover(rc.ctx, g.Songs[0])
 			}
+		case music.KindSingerDir:
+			if locator, parsed := music.ParseSingerDirectoryID(id); parsed {
+				if ref, ok := s.Catalog.KnownArtistRef(locator.Source, locator.Name); ok {
+					url = ref.Avatar
+				}
+			}
 		case music.KindBoard:
 			// 榜单目录项没有稳定封面；不要为封面请求隐式扫描榜单歌曲。
 		case music.KindPlaylist:

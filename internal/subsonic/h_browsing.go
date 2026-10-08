@@ -483,6 +483,10 @@ func (s *Server) artistByName(rc *reqCtx, name string) *artistGroup {
 func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
 	rc := s.newReqCtx(r)
 	id := param(r, "id")
+	if locator, ok := music.ParseSingerDirectoryID(id); ok {
+		s.getOnlineArtist(w, r, rc, id, locator)
+		return
+	}
 	g := s.artistByID(rc, id)
 	if g == nil {
 		writeErr(w, r, ErrNotFound, "artist not found")
@@ -568,6 +572,10 @@ func (s *Server) getAlbum(w http.ResponseWriter, r *http.Request) {
 			parent = music.ArtistID(g.Artist)
 		}
 		obj["parent"] = parent
+		if _, artist := music.ParseSingerDirectoryID(parent); artist {
+			obj["artistId"] = parent
+			obj["artists"] = []M{{"id": parent, "name": g.Artist}}
+		}
 		obj["song"] = songListWithAlbum(s, rc, g.Songs, id)
 	} else {
 		obj["song"] = songList(s, rc, g.Songs)

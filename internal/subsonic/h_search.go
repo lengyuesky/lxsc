@@ -1,11 +1,8 @@
 package subsonic
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"lxsc/internal/admission"
 	"lxsc/internal/music"
@@ -76,6 +73,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	artistCount := paramCount(r, "artistCount", 20)
 	artistOffset := paramOffset(r, "artistOffset")
 	windowSize := max(songCount, albumCount, artistCount)
+	if query != "" && !local {
+		s.searchOnline(w, r, rc, query, sources, songCount, songOffset, albumCount, albumOffset, artistCount, artistOffset)
+		return
+	}
 
 	var infos []*music.Info
 	if query == "" {
@@ -91,44 +92,6 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			if in, err := music.ParseInfo(t.JSON); err == nil {
 				infos = append(infos, in)
 			}
-		}
-	} else {
-		// 聚合搜索共享五秒预算；单平台搜索仍允许完整的上游超时。
-		searchCtx := rc.ctx
-		if len(sources) > 1 {
-			var cancel context.CancelFunc
-			searchCtx, cancel = context.WithTimeout(searchCtx, 5*time.Second)
-			defer cancel()
-		}
-		// 在线搜索：按 offset 推算页码（每平台 limit 条），把多页合并
-		limit := s.Settings.Get().SearchLimit
-		if windowSize > limit*len(sources) && len(sources) > 0 {
-			limit = (windowSize + len(sources) - 1) / len(sources)
-			if limit > 50 {
-				limit = 50
-			}
-		}
-		perPage := limit * len(sources)
-		if perPage == 0 {
-			perPage = limit
-		}
-		startPage := songOffset/perPage + 1
-		endPage := (songOffset+windowSize-1)/perPage + 1
-		for page := startPage; page <= endPage && page <= startPage+2; page++ {
-			list, err := s.Catalog.SearchChecked(searchCtx, query, music.SearchOptions{Sources: sources, Page: page, Limit: limit})
-			if errors.Is(err, admission.ErrBusy) && len(infos) == 0 {
-				writeErr(w, r, ErrBusy, err.Error())
-				return
-			}
-			infos = append(infos, list...)
-		}
-		infos = dedupe(infos)
-		// 相对本次起始页的偏移
-		rel := songOffset - (startPage-1)*perPage
-		if rel < len(infos) {
-			infos = infos[rel:]
-		} else {
-			infos = nil
 		}
 	}
 	songStart := 0
@@ -155,6 +118,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	for _, a := range artists {
 		artistObjs = append(artistObjs, s.artistObj(rc, a))
 	}
+	s.writeSearch(w, r, songList(s, rc, songs), albumObjs, artistObjs)
+}
+
+func (s *Server) writeSearch(w http.ResponseWriter, r *http.Request, songs, albums, artists []M) {
 	name := "searchResult3"
 	method := strings.TrimSuffix(r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], ".view")
 	switch method {
@@ -163,7 +130,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	case "search":
 		name = "searchResult"
 	}
-	writeOK(w, r, name, M{"song": songList(s, rc, songs), "album": albumObjs, "artist": artistObjs})
+	writeOK(w, r, name, M{"song": songs, "album": albums, "artist": artists})
 }
 
 func slicePage[T any](list []T, offset, count int) []T {

@@ -539,9 +539,18 @@ func albumMetaFromMap(ref ArtistRef, item map[string]any) AlbumMeta {
 	if value := anyToString(item["singer"]); value != "" {
 		meta.Artist = value
 	}
+	if value := anyToString(item["artistName"]); value != "" {
+		meta.Artist = value
+	}
+	if value := anyToString(item["artistId"]); value != "" {
+		meta.ArtistID = value
+	}
 	meta.PublishTime = anyToString(item["publishTime"])
 	if count, err := fmt.Sscan(anyToString(item["total"]), &meta.SongCount); count == 0 || err != nil {
 		_, _ = fmt.Sscan(anyToString(item["count"]), &meta.SongCount)
+	}
+	if meta.SongCount == 0 {
+		meta.SongCount = anyToInt(item["size"])
 	}
 	if info, ok := item["info"].(map[string]any); ok {
 		if value := anyToString(info["name"]); value != "" {

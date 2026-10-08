@@ -98,6 +98,7 @@ type SourceStatus struct {
 // loadedSource 已加载的脚本实例
 type loadedSource struct {
 	health    sourceHealth
+	calls     *sourceCalls
 	id        int64
 	meta      ScriptMeta
 	priority  int
@@ -112,18 +113,19 @@ type loadedSource struct {
 
 // SourceManager 管理所有音源脚本
 type SourceManager struct {
-	mu       sync.RWMutex
-	loaded   map[int64]*loadedSource
-	prelude  string
-	http     *http.Client
-	httpIns  *http.Client
-	log      *slog.Logger
-	CallTime time.Duration
+	mu         sync.RWMutex
+	loaded     map[int64]*loadedSource
+	statistics map[int64]*sourceCalls
+	prelude    string
+	http       *http.Client
+	httpIns    *http.Client
+	log        *slog.Logger
+	CallTime   time.Duration
 }
 
 // NewSourceManager 创建管理器
 func NewSourceManager(prelude string, secure, insecure *http.Client, log *slog.Logger) *SourceManager {
-	return &SourceManager{loaded: map[int64]*loadedSource{}, prelude: prelude, http: secure, httpIns: insecure, log: log, CallTime: 20 * time.Second}
+	return &SourceManager{loaded: map[int64]*loadedSource{}, statistics: map[int64]*sourceCalls{}, prelude: prelude, http: secure, httpIns: insecure, log: log, CallTime: 20 * time.Second}
 }
 
 // Load 加载（或重载）一个脚本；返回其能力
@@ -134,6 +136,13 @@ func (m *SourceManager) Load(ctx context.Context, id int64, priority int, script
 		meta.Name = fmt.Sprintf("音源#%d", id)
 	}
 	ls := &loadedSource{id: id, meta: meta, priority: priority, platforms: map[string]PlatformCap{}, state: "loading", loadedAt: time.Now(), logs: newRingLog(200)}
+	m.mu.Lock()
+	ls.calls = m.statistics[id]
+	if ls.calls == nil {
+		ls.calls = &sourceCalls{since: ls.loadedAt}
+		m.statistics[id] = ls.calls
+	}
+	m.mu.Unlock()
 	inited := make(chan string, 1)
 	w, err := New(Options{
 		Name:         fmt.Sprintf("source-%d", id),
@@ -153,7 +162,9 @@ func (m *SourceManager) Load(ctx context.Context, id int64, priority int, script
 				Updated string `json:"updateUrl"`
 			}
 			_ = json.Unmarshal([]byte(p), &d)
+			m.mu.Lock()
 			ls.alert = p
+			m.mu.Unlock()
 			m.log.Warn("音源提示更新", "source", meta.Name, "info", p)
 		},
 		OnConsole: func(level, msg string) { ls.logs.add(fmt.Sprintf("[%s] %s", level, msg)) },
@@ -167,6 +178,8 @@ func (m *SourceManager) Load(ctx context.Context, id int64, priority int, script
 	m.mu.Unlock()
 
 	fail := func(e error) (*SourceStatus, error) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
 		ls.state = "error"
 		ls.err = e.Error()
 		m.log.Error("音源加载失败", "source", meta.Name, "err", e)
@@ -191,6 +204,7 @@ func (m *SourceManager) Load(ctx context.Context, id int64, priority int, script
 		if err := json.Unmarshal([]byte(p), &d); err != nil || d.Sources == nil {
 			return fail(errors.New("inited 数据缺少 sources"))
 		}
+		platforms := map[string]PlatformCap{}
 		for _, pf := range append(append([]string{}, AllPlatforms...), "local") {
 			raw, ok := d.Sources[pf]
 			if !ok {
@@ -200,16 +214,21 @@ func (m *SourceManager) Load(ctx context.Context, id int64, priority int, script
 			if !ok {
 				continue
 			}
-			ls.platforms[pf] = cap
+			platforms[pf] = cap
 		}
-		if len(ls.platforms) == 0 {
+		if len(platforms) == 0 {
 			return fail(errors.New("脚本未声明任何受支持的平台"))
 		}
+		m.mu.Lock()
+		ls.platforms = platforms
+		m.mu.Unlock()
 	case <-time.After(3 * time.Second):
 		return fail(errors.New("初始化超时，请确保脚本调用了 lx.send('inited', ...)"))
 	case <-ctx.Done():
 		return fail(ctx.Err())
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	ls.state = "ready"
 	m.log.Info("音源已加载", "source", meta.Name, "version", meta.Version, "platforms", platformKeys(ls.platforms))
 	return m.statusOf(ls), nil
@@ -428,7 +447,13 @@ func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string,
 		}
 		sourceCtx, cancel := context.WithTimeout(ctx, budget)
 		started := time.Now()
-		result, err := m.musicURLFromSource(sourceCtx, ls, platform, musicInfo, quality)
+		ls.calls.begin()
+		result, attempts, err := m.musicURLFromSource(sourceCtx, ls, platform, musicInfo, quality)
+		call := SourceCall{Platform: platform, Action: "musicUrl", RequestedQuality: quality, Attempts: attempts}
+		if result != nil {
+			call.Quality, call.Downgraded = result.Quality, result.Quality != quality
+		}
+		ls.calls.finish(started, call, musicInfo, err)
 		ls.health.record(started, err, result != nil && result.Quality != quality)
 		cancel()
 		if err == nil {
@@ -445,12 +470,14 @@ func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string,
 	return nil, lastErr
 }
 
-func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
-	var lastErr error = ErrScriptFailed
+func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, int, error) {
+	var lastErr error = ErrNoQuality
+	attempts := 0
 	for _, q := range downgradeChain(quality, ls.platforms[platform].Qualitys) {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return nil, attempts, ctx.Err()
 		}
+		attempts++
 		out, err := ls.worker.CallJSON(ctx, "__lx_request", map[string]any{
 			"source": platform, "action": "musicUrl",
 			"info": map[string]any{"type": q, "musicInfo": musicInfo},
@@ -458,7 +485,7 @@ func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource
 		if err != nil {
 			lastErr = err
 			if errors.Is(err, admission.ErrBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				return nil, err
+				return nil, attempts, err
 			}
 			// 音质不支持仍允许降级，日志不输出可能携带签名地址的错误原文。
 			m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q)
@@ -466,13 +493,13 @@ func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource
 		}
 		var result MusicURLResult
 		if err := json.Unmarshal(out, &result); err != nil || result.URL == "" {
-			lastErr = errors.New("返回数据无效")
+			lastErr = errInvalidSourceResponse
 			continue
 		}
 		result.Quality, result.Source, result.SourceID = q, ls.meta.Name, ls.id
-		return &result, nil
+		return &result, attempts, nil
 	}
-	return nil, lastErr
+	return nil, attempts, lastErr
 }
 
 // LyricResult 歌词结果
@@ -491,16 +518,21 @@ func (m *SourceManager) Lyric(ctx context.Context, platform string, musicInfo an
 	}
 	var lastErr error = ErrScriptFailed
 	for _, ls := range cands {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		started := time.Now()
+		ls.calls.begin()
 		cctx, cancel := context.WithTimeout(ctx, m.CallTime)
 		out, err := ls.worker.CallJSON(cctx, "__lx_request", map[string]any{"source": platform, "action": "lyric", "info": map[string]any{"musicInfo": musicInfo}})
 		cancel()
+		var r LyricResult
+		if err == nil && (json.Unmarshal(out, &r) != nil || (strings.TrimSpace(r.Lyric) == "" && strings.TrimSpace(r.LxLyric) == "")) {
+			err = errInvalidSourceResponse
+		}
+		ls.calls.finish(started, SourceCall{Platform: platform, Action: "lyric", Attempts: 1}, musicInfo, err)
 		if err != nil {
 			lastErr = err
-			continue
-		}
-		var r LyricResult
-		if err := json.Unmarshal(out, &r); err != nil || (strings.TrimSpace(r.Lyric) == "" && strings.TrimSpace(r.LxLyric) == "") {
-			lastErr = errors.New("歌词数据无效")
 			continue
 		}
 		return &r, nil
@@ -516,16 +548,21 @@ func (m *SourceManager) Pic(ctx context.Context, platform string, musicInfo any)
 	}
 	var lastErr error = ErrScriptFailed
 	for _, ls := range cands {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		started := time.Now()
+		ls.calls.begin()
 		cctx, cancel := context.WithTimeout(ctx, m.CallTime)
 		out, err := ls.worker.CallJSON(cctx, "__lx_request", map[string]any{"source": platform, "action": "pic", "info": map[string]any{"musicInfo": musicInfo}})
 		cancel()
+		var s string
+		if err == nil && (json.Unmarshal(out, &s) != nil || strings.TrimSpace(s) == "") {
+			err = errInvalidSourceResponse
+		}
+		ls.calls.finish(started, SourceCall{Platform: platform, Action: "pic", Attempts: 1}, musicInfo, err)
 		if err != nil {
 			lastErr = err
-			continue
-		}
-		var s string
-		if err := json.Unmarshal(out, &s); err != nil || s == "" {
-			lastErr = errors.New("封面数据无效")
 			continue
 		}
 		return s, nil

@@ -95,6 +95,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/users/{id}/apikeys", s.listAPIKeys)
 	r.Delete("/users/{id}/apikeys/{keyID}", s.revokeAPIKey)
 	r.Get("/sources", s.listSources)
+	r.Get("/sources/statistics", s.sourceStatistics)
 	r.Post("/sources", s.createSource)
 	r.Post("/sources/import", s.importSource)
 	r.Put("/sources/{id}", s.updateSource)
@@ -543,6 +544,7 @@ func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
+	s.Sources.ForgetCallStatistics(id)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -602,7 +604,7 @@ func (s *Server) testSource(w http.ResponseWriter, r *http.Request) {
 		}
 		in := infos[0]
 		t := time.Now()
-		res, err := s.Sources.MusicURL(ctx, p, s.Catalog.ScriptInfo(in), body.Quality)
+		res, err := s.Sources.MusicURLForSources(ctx, p, s.Catalog.ScriptInfo(in), body.Quality, []int64{id})
 		if err != nil {
 			results[p] = map[string]any{"ok": false, "song": in.Name() + " - " + in.Singer(), "error": err.Error(), "ms": time.Since(t).Milliseconds()}
 			continue

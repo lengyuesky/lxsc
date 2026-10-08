@@ -146,6 +146,7 @@ module.exports = async ({ check, url, login }) => {
   await check('音源模块通过事件委托切换状态与优先级', async page => {
     const source = { id: 99, name: '测试音源', enabled: true, priority: 5, status: { state: 'ready', platforms: {} } }
     await page.route('**/api/admin/sources**', async route => {
+      if (new URL(route.request().url()).pathname.endsWith('/statistics')) return route.continue()
       if (route.request().method() === 'PUT') Object.assign(source, route.request().postDataJSON())
       const list = new URL(route.request().url()).pathname.endsWith('/sources')
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(list ? [source] : source) })
