@@ -17,6 +17,7 @@ import (
 	"lxsc/internal/db"
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
+	"lxsc/internal/logbuf"
 	"lxsc/internal/music"
 	"lxsc/internal/settings"
 	"lxsc/internal/webauth"
@@ -24,18 +25,22 @@ import (
 
 // Server 不复用 Subsonic 或管理员认证，不读取 logbuf。
 type Server struct {
-	DB         *db.DB
-	Auth       *webauth.Manager
-	Catalog    *music.Catalog
-	Sources    *js.SourceManager
-	Settings   *settings.Store
-	Version    string
-	StartAt    time.Time
-	Tokens     *Tokens
-	Events     *Events
-	client     *http.Client
-	concurrent chan struct{}
-	probes     chan struct{}
+	DB                *db.DB
+	Auth              *webauth.Manager
+	Catalog           *music.Catalog
+	Sources           *js.SourceManager
+	Settings          *settings.Store
+	Version           string
+	StartAt           time.Time
+	Tokens            *Tokens
+	Events            *Events
+	Logs              *logbuf.Buffer
+	RuntimeInfo       map[string]any
+	ProtocolProbe     ProtocolProbeFunc
+	ProtocolEndpoints []string
+	client            *http.Client
+	concurrent        chan struct{}
+	probes            chan struct{}
 }
 
 func New(database *db.DB, auth *webauth.Manager, catalog *music.Catalog, sources *js.SourceManager, settings *settings.Store, version string, start time.Time) *Server {
@@ -111,7 +116,11 @@ func objectBody(w http.ResponseWriter, r *http.Request, allowed ...string) (map[
 	if err != nil || media != "application/json" {
 		return nil, false
 	}
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048))
+	limit := int64(2048)
+	if hasScope(requestScopes(r), "inspect") {
+		limit = 16 << 10
+	}
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	first, err := d.Token()
 	if err != nil || first != json.Delim('{') {
 		return nil, false
@@ -181,7 +190,11 @@ func SensitiveIO(next http.Handler) http.Handler {
 			// 不留待 handler 返回后再写 chunk 结束标记；Flush 覆盖全部响应字节。
 			w.Header().Set("Transfer-Encoding", "identity")
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		timeout := 20 * time.Second
+		if strings.HasPrefix(r.URL.Path, "/api/debug/") {
+			timeout = 60 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		defer limitIO(w, ctx)()
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, ioKey{}, true)))
@@ -247,13 +260,14 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400, "有效期仅支持15分钟、1小时、6小时或24小时")
 		return
 	}
-	scopes := []string{"read"}
+	scopes := MaximumScopes()
 	if raw, exists := values["scopes"]; exists && json.Unmarshal(raw, &scopes) != nil {
 		failure(w, 400, "无效权限")
 		return
 	}
-	if !(len(scopes) == 1 && scopes[0] == "read") && !(len(scopes) == 2 && ((scopes[0] == "read" && scopes[1] == "probe") || (scopes[0] == "probe" && scopes[1] == "read"))) {
-		failure(w, 400, "权限必须为read，可额外选择probe")
+	scopes, scopeErr := normalizeScopes(scopes)
+	if scopeErr != nil {
+		failure(w, 400, scopeErr.Error())
 		return
 	}
 	u := s.Auth.User(r)
@@ -261,7 +275,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		failure(w, 403, "管理员会话无效")
 		return
 	}
-	view, plain, err := s.Tokens.Create(u.ID, seconds, len(scopes) == 2)
+	view, plain, err := s.Tokens.CreateScoped(u.ID, seconds, scopes)
 	if err != nil {
 		if errors.Is(err, errTokenLimit) {
 			busy(w, "60")
@@ -286,11 +300,16 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/status", s.status)
 	r.Get("/capabilities", s.capabilities)
 	r.Get("/events", func(w http.ResponseWriter, r *http.Request) {
-		output(w, 200, map[string]any{"events": s.Events.List()})
+		limit := 200
+		if hasScope(requestScopes(r), "inspect") {
+			limit = 2000
+		}
+		output(w, 200, map[string]any{"events": s.Events.Recent(limit)})
 	})
 	r.Post("/probe", s.probe)
 	r.Post("/probe/board", func(w http.ResponseWriter, r *http.Request) { s.compatibilityProbe(w, r, true) })
 	r.Post("/probe/lyrics", func(w http.ResponseWriter, r *http.Request) { s.compatibilityProbe(w, r, false) })
+	s.advancedRoutes(r)
 	return r
 }
 
@@ -318,7 +337,7 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			failure(w, 401, "invalid_debug_token")
 			return
 		}
-		deadline := time.Now().Add(20 * time.Second)
+		deadline := time.Now().Add(scopeTimeout(view.Scopes))
 		if view.ExpiresAt.Before(deadline) {
 			deadline = view.ExpiresAt
 		}
@@ -379,7 +398,10 @@ func (s *Server) authorize(next http.Handler) http.Handler {
 			failure(w, 401, "invalid_debug_token")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, scopeKey{}, view.Scopes)))
+		authorizedCtx := context.WithValue(ctx, scopeKey{}, view.Scopes)
+		authorizedCtx = context.WithValue(authorizedCtx, ownerKey{}, u)
+		authorizedCtx = context.WithValue(authorizedCtx, tokenIDKey{}, view.ID)
+		next.ServeHTTP(w, r.WithContext(authorizedCtx))
 	})
 }
 
@@ -422,7 +444,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if v.URLCacheTTL < 0 {
 		cacheMode = "permanent"
 	}
-	output(w, 200, map[string]any{"version": version, "diagnosticsVersion": 2, "uptimeSeconds": int64(time.Since(s.StartAt).Seconds()), "streamMode": Mode(v.StreamMode), "urlCacheMode": cacheMode, "platforms": platforms, "sourceHealth": health})
+	output(w, 200, map[string]any{"version": version, "diagnosticsVersion": DiagnosticsVersion, "uptimeSeconds": int64(time.Since(s.StartAt).Seconds()), "streamMode": Mode(v.StreamMode), "urlCacheMode": cacheMode, "platforms": platforms, "sourceHealth": health, "administratorOnly": true, "scopes": requestScopes(r)})
 }
 
 var contentRange = regexp.MustCompile(`^bytes [0-9]{1,19}-[0-9]{1,19}/([0-9]{1,19}|\*)$`)
@@ -446,9 +468,7 @@ func mediaHeaders(h http.Header) map[string]string {
 	return out
 }
 func (s *Server) probe(w http.ResponseWriter, r *http.Request) {
-	scopes, _ := r.Context().Value(scopeKey{}).([]string)
-	if len(scopes) != 2 {
-		failure(w, 403, "probe_scope_required")
+	if !requireScopes(w, r, "probe") {
 		return
 	}
 	values, ok := objectBody(w, r, "trackId", "quality")

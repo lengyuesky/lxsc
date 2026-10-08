@@ -39,9 +39,10 @@ type token struct {
 	windowCalls int
 }
 type Audit struct {
-	Time   time.Time `json:"time"`
-	ID     string    `json:"id"`
-	Action string    `json:"action"`
+	Time      time.Time `json:"time"`
+	ID        string    `json:"id"`
+	Action    string    `json:"action"`
+	Operation string    `json:"operation,omitempty"`
 }
 
 // Tokens 所有索引、计数、撤销都使用同一把锁；不持有明文密钥。
@@ -57,7 +58,7 @@ func (m *Tokens) auditLocked(id, action string) {
 		copy(m.audit, m.audit[1:])
 		m.audit = m.audit[:127]
 	}
-	m.audit = append(m.audit, Audit{time.Now().UTC(), id, action})
+	m.audit = append(m.audit, Audit{Time: time.Now().UTC(), ID: id, Action: action})
 }
 func cloneView(t *token) TokenView {
 	v := t.TokenView
@@ -80,6 +81,18 @@ func (m *Tokens) cleanupLocked(now time.Time) {
 	}
 }
 func (m *Tokens) Create(owner int64, seconds int64, probe bool) (TokenView, string, error) {
+	scopes := []string{"read"}
+	if probe {
+		scopes = append(scopes, "probe")
+	}
+	return m.CreateScoped(owner, seconds, scopes)
+}
+
+func (m *Tokens) CreateScoped(owner int64, seconds int64, scopes []string) (TokenView, string, error) {
+	scopes, err := normalizeScopes(scopes)
+	if err != nil {
+		return TokenView{}, "", err
+	}
 	if seconds != 900 && seconds != 3600 && seconds != 21600 && seconds != 86400 {
 		return TokenView{}, "", errors.New("无效有效期")
 	}
@@ -106,10 +119,7 @@ func (m *Tokens) Create(owner int64, seconds int64, probe bool) (TokenView, stri
 		return TokenView{}, "", errTokenLimit
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t := &token{TokenView: TokenView{ID: hex.EncodeToString(id), Scopes: []string{"read"}, CreatedAt: now, ExpiresAt: now.Add(time.Duration(seconds) * time.Second)}, owner: owner, digest: sha256.Sum256([]byte(plain)), ctx: ctx, cancel: cancel}
-	if probe {
-		t.Scopes = append(t.Scopes, "probe")
-	}
+	t := &token{TokenView: TokenView{ID: hex.EncodeToString(id), Scopes: scopes, CreatedAt: now, ExpiresAt: now.Add(time.Duration(seconds) * time.Second)}, owner: owner, digest: sha256.Sum256([]byte(plain)), ctx: ctx, cancel: cancel}
 	t.timer = time.AfterFunc(time.Until(t.ExpiresAt), cancel)
 	m.entries[t.ID] = t
 	m.auditLocked(t.ID, "created")
@@ -178,7 +188,7 @@ func (m *Tokens) acquire(plain string) (*token, TokenView, int) {
 			t.window = now
 			t.windowCalls = 0
 		}
-		if t.windowCalls >= callsPerMinute {
+		if t.windowCalls >= scopeRate(t.Scopes) {
 			return nil, TokenView{}, 429
 		}
 		t.windowCalls++
@@ -188,6 +198,19 @@ func (m *Tokens) acquire(plain string) (*token, TokenView, int) {
 		return t, cloneView(t), 200
 	}
 	return nil, TokenView{}, 401
+}
+
+func (m *Tokens) RecordOperation(id, operation string) {
+	if oneOf(operation, "cache_clear", "source_reload", "settings_update") == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.entries[id] == nil {
+		return
+	}
+	m.auditLocked(id, "maintenance")
+	m.audit[len(m.audit)-1].Operation = operation
 }
 
 // Close 只用于进程/隔离测试退出；所有凭据失效。

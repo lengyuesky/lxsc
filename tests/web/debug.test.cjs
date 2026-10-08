@@ -16,6 +16,7 @@ function fixture() {
     return elements.get(selector)
   }
   $('#debugTTL').value = '900'
+  $('#debugPreset').value = 'full'
   const item = { id: 'safe-id', scopes: ['read'], createdAt: '2026-09-09T00:00:00Z', expiresAt: '2099-09-09T00:15:00Z', lastUsedAt: null, calls: 0, revoked: false }
   const scope = { $, document: { querySelectorAll: () => [] }, window: { addEventListener: (name, fn) => { listeners[name] = fn } },
     location: { protocol: 'https:', origin: 'https://test.example', hash: '#debug' }, sessionState: { me: { isAdmin: true } },
@@ -26,24 +27,29 @@ function fixture() {
   return { $, scope, calls, copied, notices, listeners, item, ui: scope.ui }
 }
 const submit = { preventDefault() {} }
-test('限时调试默认只读15分钟，主动探测必须勾选，变更均带非简单请求头', async () => {
+test('管理员调试默认最大权限，可切换只读档位，变更均带非简单请求头', async () => {
   const f = fixture()
   await f.ui.createDebugToken(submit)
   assert.equal(f.calls[0].path, '/debug-tokens')
   assert.equal(f.calls[0].opts.body.ttlSeconds, 900)
-  assert.deepEqual(Array.from(f.calls[0].opts.body.scopes), ['read'])
+  assert.deepEqual(Array.from(f.calls[0].opts.body.scopes), ['read', 'probe', 'inspect', 'maintain'])
   assert.equal(f.calls[0].opts.headers['X-LXSC-Debug-Management'], '1')
   assert.equal(f.$('#debugTokenValue').value, 'SYNTHETIC_ONE_TIME_KEY')
   assert.equal(f.$('#debugSecret').classList.contains('hidden'), false)
   assert.ok(!f.$('#debugTokenList').innerHTML.includes('SYNTHETIC_ONE_TIME_KEY'))
-  f.$('#debugProbeScope').checked = true
+  f.$('#debugPreset').value = 'diagnose'
   f.$('#debugTTL').value = '86400'
   await f.ui.createDebugToken(submit)
   const create = f.calls.filter(v => v.opts.method === 'POST').at(-1)
-  assert.deepEqual(Array.from(create.opts.body.scopes), ['read', 'probe'])
+  assert.deepEqual(Array.from(create.opts.body.scopes), ['read', 'probe', 'inspect'])
   assert.equal(create.opts.body.ttlSeconds, 86400)
   const share = f.$('#debugShareValue').value
   for (const part of ['https://test.example', 'Bearer SYNTHETIC_ONE_TIME_KEY', f.item.expiresAt, 'read, probe', '/api/debug/status', '/api/debug/events', '/api/debug/probe', '少量流量', '到期不可续期']) assert.ok(share.includes(part), part)
+  assert.ok(share.includes('/api/debug/probe/protocol'))
+  assert.ok(!share.includes('/api/debug/maintenance'))
+  f.$('#debugPreset').value = 'read'
+  await f.ui.createDebugToken(submit)
+  assert.deepEqual(Array.from(f.calls.filter(v => v.opts.method === 'POST').at(-1).opts.body.scopes), ['read'])
 })
 test('复制密钥和分享说明，剪贴板失败可手工选择，撤销清除展示', async () => {
   const f = fixture()

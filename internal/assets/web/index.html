@@ -66,7 +66,7 @@
       <a href="#users" data-tab="users" class="admin-only hidden"><svg class="icon"><use href="#i-users"/></svg><span>用户</span></a>
       <a href="#backups" data-tab="backups" class="admin-only hidden"><svg class="icon"><use href="#i-backup"/></svg><span>备份</span></a>
       <a href="#settings" data-tab="settings" class="admin-only hidden"><svg class="icon"><use href="#i-sliders"/></svg><span>设置</span></a>
-      <a href="#debug" data-tab="debug" class="admin-only hidden"><svg class="icon"><use href="#i-zap"/></svg><span>限时调试</span></a>
+      <a href="#debug" data-tab="debug" class="admin-only hidden"><svg class="icon"><use href="#i-zap"/></svg><span>API 调试</span></a>
       <a href="#logs" data-tab="logs" class="admin-only hidden"><svg class="icon"><use href="#i-file"/></svg><span>日志</span></a>
     </nav>
     <div class="sidebar-foot">
@@ -238,13 +238,13 @@
     </section>
 
     <section id="tab-debug" class="tab admin-only">
-      <div class="section-head"><h2>限时安全调试</h2><button id="debugRefresh" class="sec">刷新列表</button></div>
-      <p class="note">可私下交给受信任的 AI 或排查者，诊断箭头音乐、音流的榜单、歌词及播放问题。记录客户端类型、请求接口、返回数量与错误分类，不提供原始日志或歌词正文。播放器仍使用原有账号连接 Subsonic，临时调试凭据只交给排查者。凭据固定绝对到期，不可续期；进程重启全部失效，用完请撤销。</p>
+      <div class="section-head"><h2>管理员 API 调试</h2><button id="debugRefresh" class="sec">刷新列表</button></div>
+      <p class="note">仅管理员可创建和管理，所有调用持续校验凭据所属管理员。完整权限覆盖运行环境、性能、日志、设置、音源、协议响应与播放链路，并可清缓存、重载音源及调整运行设置。可私下交给受信任的 AI 或排查者；完整诊断可能包含用户和歌曲信息，维护会影响共享服务。播放器仍使用原有账号连接 Subsonic。</p>
       <p id="debugHTTPSWarning" class="note warn">当前不是 HTTPS。公网分享或调用务必先启用 HTTPS，否则凭据可能被窃取。</p>
       <form id="debugCreateForm" class="card form-card">
         <label>有效期<select id="debugTTL"><option value="900">15 分钟（默认）</option><option value="3600">1 小时</option><option value="21600">6 小时</option><option value="86400">24 小时</option></select></label>
-        <p>固定权限：read（状态 + AI 排查指南 + 最近客户端请求与播放事件）</p>
-        <label><input type="checkbox" id="debugProbeScope">额外允许 probe 主动探测：读取在线榜单、歌词或检查音频链接，会产生少量网络流量和缓存副作用；不修改配置或记录播放/收听统计。</label>
+        <label>调试权限<select id="debugPreset"><option value="full">完整管理员调试（最大权限，默认）</option><option value="diagnose">完整诊断与探测（不允许维护）</option><option value="read">仅基础只读状态与事件</option></select></label>
+        <p class="muted">最大权限包含 read、probe、inspect、maintain。只接受独立调试接口，禁止协议写入和账号/密钥管理；维护操作记录审计。凭据固定绝对到期，不可续期；重启或所属管理员失效后不可继续使用。</p>
         <button id="debugCreateButton" type="submit">创建临时凭据</button>
       </form>
       <div id="debugSecret" class="card hidden">

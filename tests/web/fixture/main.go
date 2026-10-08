@@ -175,8 +175,11 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 	debug := diagnostics.New(database, auth, catalog, sources, store, "browser-test", time.Now())
 	defer debug.Tokens.Close()
 	media := &subsonic.Server{Diagnostics: debug.Events, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, HTTP: client}
+	debug.ProtocolProbe = media.ProbeProtocol
+	debug.ProtocolEndpoints = media.ProbeEndpoints()
 	app := &portal.Server{DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Stream: media.ServeWebStream}
 	management := &admin.Server{Debug: debug, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Sources: sources, Logs: logbuf.New(100), HTTP: client, Version: "浏览器测试", StartAt: time.Now()}
+	debug.Logs = management.Logs
 	web, err := assets.WebHandler()
 	if err != nil {
 		return err

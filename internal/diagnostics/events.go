@@ -119,14 +119,14 @@ func (b *Events) Add(e Event) {
 	if b == nil {
 		return
 	}
-	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe")
+	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe")
 	if e.Stage == "" {
 		return
 	}
 	if !ValidTrackID(e.TrackID) {
 		e.TrackID = ""
 	}
-	e.Endpoint = oneOf(e.Endpoint, "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum", "stream", "download")
+	e.Endpoint = oneOf(e.Endpoint, "ping", "getLicense", "getOpenSubsonicExtensions", "getUser", "getUsers", "getScanStatus", "getMusicFolders", "getIndexes", "getArtists", "getMusicDirectory", "getGenres", "getArtist", "getArtistInfo", "getArtistInfo2", "getAlbum", "getAlbumInfo", "getAlbumInfo2", "getSong", "getTopSongs", "getSimilarSongs", "getSimilarSongs2", "getAlbumList", "getAlbumList2", "getRandomSongs", "getSongsByGenre", "getNowPlaying", "getStarred", "getStarred2", "search", "search2", "search3", "getPlaylists", "getPlaylist", "getLyrics", "getLyricsBySongId", "getPlayQueue", "getBookmarks", "getInternetRadioStations", "getPodcasts", "getNewestPodcasts", "getShares", "getVideos", "getCoverArt", "getSongLists", "stream", "download")
 	e.Method = oneOf(e.Method, "GET", "POST", "HEAD")
 	e.Client = oneOf(e.Client, "amcfy", "stream_music", "other", "unknown")
 	e.Format = oneOf(e.Format, "json", "xml", "jsonp", "binary")
@@ -174,16 +174,21 @@ func (b *Events) Add(e Event) {
 	e.Time = time.Now().UTC()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.entries) == 200 {
+	if len(b.entries) == 2000 {
 		copy(b.entries, b.entries[1:])
-		b.entries = b.entries[:199]
+		b.entries = b.entries[:1999]
 	}
 	b.entries = append(b.entries, e)
 }
 func (b *Events) List() []Event {
+	return b.Recent(200)
+}
+
+func (b *Events) Recent(limit int) []Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make([]Event, len(b.entries))
-	copy(out, b.entries)
+	limit = min(len(b.entries), min(2000, max(0, limit)))
+	out := make([]Event, limit)
+	copy(out, b.entries[len(b.entries)-limit:])
 	return out
 }

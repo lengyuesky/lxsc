@@ -162,6 +162,8 @@ func run(cfgPath string) error {
 	backupSrv.StartScheduler(backupCtx)
 	defer backupSrv.StopScheduler()
 	debugSrv := diagnostics.New(database, authManager, catalog, sources, st, version, time.Now())
+	debugSrv.Logs = logBuf
+	debugSrv.RuntimeInfo = map[string]any{"listen": cfg.Listen, "trustProxy": cfg.TrustProxy, "trustedProxies": cfg.TrustedProxies, "sdkWorkers": cfg.SDKWorkers, "outboundProxy": diagnostics.AddressSummary(cfg.Proxy)}
 	defer debugSrv.Tokens.Close()
 	adminSrv := &admin.Server{DB: database, Sources: sources, Catalog: catalog, Settings: st, Secret: box, Logs: logBuf, Log: log, HTTP: httpSecure, Version: version, StartAt: time.Now(), Auth: authManager, Backup: backupSrv, Debug: debugSrv}
 	importDir(ctx, adminSrv, srcs, filepath.Join(cfg.DataDir, "sources"), log)
@@ -171,6 +173,8 @@ func run(cfgPath string) error {
 	defer catalog.CloseURLCache()
 
 	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
+	debugSrv.ProtocolProbe = sub.ProbeProtocol
+	debugSrv.ProtocolEndpoints = sub.ProbeEndpoints()
 	warmCtx, stopWarmup := context.WithCancel(ctx)
 	defer stopWarmup()
 	// 启动后预热可见榜单快照，客户端第一次点开榜单直接命中，不再现场分页。
