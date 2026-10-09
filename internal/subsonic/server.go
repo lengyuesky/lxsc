@@ -101,6 +101,9 @@ func (s *Server) Routes() http.Handler {
 		name = strings.TrimSuffix(name, ".view")
 		r, finishDiagnostic := s.beginClientDiagnostic(r, name)
 		defer finishDiagnostic()
+		if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
+			w.Header().Set("X-Request-ID", event.RequestID)
+		}
 		h, ok := handlers[name]
 		if !ok {
 			writeErr(w, r, ErrGeneric, "Unsupported method: "+name)

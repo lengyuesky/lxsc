@@ -20,8 +20,14 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"administratorOnly":  true,
 		"grantedScopes":      requestScopes(r),
 		"maximumScopes":      MaximumScopes(),
-		"authentication":     "Authorization: Bearer <temporary-debug-token>",
-		"read":               []string{"GET /api/debug/status", "GET /api/debug/events", "GET /api/debug/capabilities"},
+		"responseDelivery": map[string]string{
+			"requestId":     "真实客户端请求由服务端独立生成，与响应 X-Request-ID 对应",
+			"bytesWritten":  "协议正文被 ResponseWriter 接受的实际字节数，写出失败或短写时 result=failed、error=write_error",
+			"responseBytes": "预期协议正文长度；与 bytesWritten 相等也不证明客户端接收或解析成功，媒体正文不适用",
+			"encode_error":  "正文序列化失败，返回 HTTP 500 与固定协议错误",
+		},
+		"authentication": "Authorization: Bearer <temporary-debug-token>",
+		"read":           []string{"GET /api/debug/status", "GET /api/debug/events", "GET /api/debug/capabilities"},
 		"probe": []map[string]any{
 			{"method": "POST", "path": "/api/debug/probe", "body": map[string]string{"trackId": "tr-wy-123456", "quality": "320k"}},
 			{"method": "POST", "path": "/api/debug/probe/board", "body": map[string]string{"boardId": "lb-wy-19723756"}},

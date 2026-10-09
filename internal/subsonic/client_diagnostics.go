@@ -2,6 +2,7 @@ package subsonic
 
 import (
 	"context"
+	"crypto/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -32,7 +33,8 @@ func (s *Server) beginClientDiagnostic(r *http.Request, endpoint string) (*http.
 	case strings.Contains(client, "streammusic") || strings.Contains(client, "stream music") || strings.Contains(client, "音流"):
 		category = "stream_music"
 	}
-	event := &diagnostics.Event{Stage: "client_response", Endpoint: endpoint, Method: r.Method, Client: category, Format: detectFormat(r), Result: "unavailable", Error: "none"}
+	// 独立生成关联 ID，绝不信任或记录客户端传入的请求 ID/认证信息。
+	event := &diagnostics.Event{RequestID: "req-" + rand.Text(), Stage: "client_response", Endpoint: endpoint, Method: r.Method, Client: category, Format: detectFormat(r), Result: "unavailable", Error: "none"}
 	id := param(r, "id")
 	if diagnostics.ValidTrackID(id) {
 		event.TrackID = id
@@ -43,9 +45,24 @@ func (s *Server) beginClientDiagnostic(r *http.Request, endpoint string) (*http.
 	return r.WithContext(context.WithValue(r.Context(), clientDiagnosticKey{}, event)), func() {
 		event.ElapsedMS = time.Since(started).Milliseconds()
 		if r.Context().Err() != nil {
-			event.Error = diagnostics.ErrorCode(r.Context().Err())
+			if event.Error == "none" {
+				event.Error = diagnostics.ErrorCode(r.Context().Err())
+			}
+			event.Result = "failed"
 		}
 		s.Diagnostics.Add(*event)
+	}
+}
+
+func recordClientDelivery(r *http.Request, written, expected int, issue string) {
+	event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event)
+	if event == nil {
+		return
+	}
+	n, total := int64(written), int64(expected)
+	event.BytesWritten, event.ResponseBytes = &n, &total
+	if issue != "" {
+		event.Result, event.Error = "failed", issue
 	}
 }
 

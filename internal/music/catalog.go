@@ -537,30 +537,35 @@ func boardCacheKey(source, bangID string) string {
 // 过期的旧完整快照（含持久化回放）仍可用于摘要，刷新由打开详情时触发。
 // 零首不返回：箭头音乐把 0 当成空歌单而跳过详情请求，空快照必须显示为待加载。
 func (c *Catalog) CachedBoardSummary(source, bangID string) (count, duration int, ok bool) {
+	list, ok := c.CachedBoardTracks(source, bangID)
+	if !ok {
+		return 0, 0, false
+	}
+	for _, info := range list {
+		duration += info.Duration()
+	}
+	return len(list), duration, true
+}
+
+// CachedBoardTracks 仅解码已有的完整快照，不请求上游，也不扩展歌曲缓存。
+// 列表与详情使用相同的解码结果计算内容版本，避免歌曲数量相同却已换榜时漏更新。
+func (c *Catalog) CachedBoardTracks(source, bangID string) ([]*Info, bool) {
 	key := fullBoardKey(source, bangID)
-	raw, ok := c.generic.Get(key)
-	if !ok {
-		raw, ok = c.boardSnapshot(source, bangID)
-	}
-	if !ok {
-		return 0, 0, false
-	}
-	var result struct {
-		List []map[string]any `json:"list"`
-	}
-	if json.Unmarshal(raw, &result) != nil || result.List == nil {
-		return 0, 0, false
-	}
-	if !boardSnapshotHasTracks(raw) {
-		return 0, 0, false
-	}
-	for _, item := range result.List {
-		if item != nil {
-			count++
-			duration += FromMap(item).Duration()
+	if raw, ok := c.generic.Get(key); ok {
+		if list, err := decodeList(raw, source); err == nil && len(list) > 0 {
+			return list, true
 		}
+		c.generic.Remove(key)
 	}
-	return count, duration, true
+	raw, ok := c.boardSnapshot(source, bangID)
+	if !ok {
+		return nil, false
+	}
+	list, err := decodeList(raw, source)
+	if err != nil || len(list) == 0 {
+		return nil, false
+	}
+	return list, true
 }
 
 // SongListDetail 在线歌单歌曲
@@ -591,6 +596,15 @@ func (c *Catalog) SongLists(ctx context.Context, source, sortID, tagID string, p
 }
 
 func (c *Catalog) parseList(ctx context.Context, raw json.RawMessage, source string) ([]*Info, error) {
+	list, err := decodeList(raw, source)
+	if err != nil {
+		return nil, err
+	}
+	c.Cache(list)
+	return list, nil
+}
+
+func decodeList(raw json.RawMessage, source string) ([]*Info, error) {
 	var out struct {
 		List []map[string]any `json:"list"`
 	}
@@ -607,7 +621,6 @@ func (c *Catalog) parseList(ctx context.Context, raw json.RawMessage, source str
 		}
 		list = append(list, FromMap(m))
 	}
-	c.Cache(list)
 	return list, nil
 }
 

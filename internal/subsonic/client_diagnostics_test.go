@@ -98,8 +98,11 @@ func TestClientDiagnosticsBoardCountsAndEmpty(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest("GET", "/rest/getPlaylist?apiKey=client-key&id=lb-wy-empty&c=Amcfy&f=json", nil))
 	event := f.server.Diagnostics.List()[0]
-	if event.Stage != "client_response" || event.Count == nil || *event.Count != 0 || event.Result != "empty" || event.BoardID != "lb-wy-empty" {
+	if event.Stage != "client_response" || event.Count != nil || event.Result != "failed" || event.Status != 503 || event.BoardID != "lb-wy-empty" {
 		t.Fatalf("空榜单事件错误: %+v", event)
+	}
+	if rec.Code != 503 || rec.Header().Get("Retry-After") != "2" || rec.Header().Get("Cache-Control") != "no-store" || event.ProtocolCode == nil || *event.ProtocolCode != ErrGeneric {
+		t.Fatalf("空榜单必须返回可重试且不可缓存的协议失败: %+v %v", event, rec.Header())
 	}
 	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/rest/getPlaylists?apiKey=client-key&c=Amcfy&f=json", nil))
 	event = f.server.Diagnostics.List()[1]

@@ -2,6 +2,7 @@ package subsonic
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,35 +33,13 @@ func (s *Server) playlistObj(rc *reqCtx, p *db.Playlist, songs []*music.Info) M 
 
 const virtualPlaylistTime = "2000-01-01T00:00:00Z"
 
-// boardPlaylistObj 构造只包含榜单摘要的虚拟歌单，不读取榜单歌曲。
-func boardPlaylistObj(board music.Board) (M, bool) {
-	source := strings.TrimSpace(board.Source)
-	bangID := strings.TrimSpace(board.BangID)
-	boardName := strings.TrimSpace(board.Name)
-	if !music.IsPlatform(source) || bangID == "" || bangID == "0" || boardName == "" {
-		return nil, false
-	}
-	id := music.BoardID(source, bangID)
-	return M{
-		"id": id, "name": music.PlatformName(source) + " · " + boardName,
-		// 箭头音乐打开详情后仍显示列表的 comment，不能把瞬时加载状态写进简介。
-		"comment": "在线榜单，只读", "owner": "榜单", "public": true,
-		// Subsonic 没有“数量未知”的表示。0 会让箭头音乐直接当作空歌单，
-		// 不再请求详情；用 1 表示待加载入口，不创建占位歌曲。详情及缓存命中
-		// 后的摘要均返回实际数量，仍不在列表阶段批量请求全部榜单歌曲。
-		"songCount": 1, "duration": 0,
-		"created": virtualPlaylistTime, "changed": virtualPlaylistTime,
-		"coverArt": id,
-	}, true
-}
-
 // boardPlaylistObjects 并行读取各平台榜单名称，保持配置的平台顺序。
 // 每个平台只请求榜单目录，不请求任何榜单歌曲；同时返回可见榜单供后台预热。
-func (s *Server) boardPlaylistObjects(rc *reqCtx) ([]M, []music.Board) {
+func (s *Server) boardPlaylistObjects(rc *reqCtx) ([]M, []music.Board, error) {
 	display := newBoardVisibility(s.Settings.Get())
 	sources := display.sources
 	if len(sources) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	type result struct {
 		index  int
@@ -95,23 +74,29 @@ func (s *Server) boardPlaylistObjects(rc *reqCtx) ([]M, []music.Board) {
 			if !display.allows(board) {
 				continue
 			}
-			obj, ok := boardPlaylistObj(board)
-			boardID, _ := obj["id"].(string)
-			if !ok || boardID == "" || seen[boardID] {
+			board.Source, board.BangID, board.Name = strings.TrimSpace(board.Source), strings.TrimSpace(board.BangID), strings.TrimSpace(board.Name)
+			if !music.IsPlatform(board.Source) || board.BangID == "" || board.BangID == "0" || board.Name == "" {
+				continue
+			}
+			boardID := music.BoardID(board.Source, board.BangID)
+			if seen[boardID] {
 				continue
 			}
 			seen[boardID] = true
-			if count, duration, ok := s.Catalog.CachedBoardSummary(board.Source, board.BangID); ok {
-				obj["songCount"], obj["duration"] = count, duration
+			infos, _ := s.Catalog.CachedBoardTracks(board.Source, board.BangID)
+			obj, err := s.boardPlaylistObj(rc, board, infos)
+			if err != nil {
+				return nil, nil, err
 			}
 			out = append(out, obj)
 			visible = append(visible, board)
 		}
 	}
-	return out, visible
+	return out, visible, nil
 }
 
 func (s *Server) getPlaylists(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	rc := s.newReqCtx(r)
 	u := currentUser(r)
 	list, err := s.DB.ListPlaylists(rc.ctx, u.ID)
@@ -129,7 +114,11 @@ func (s *Server) getPlaylists(w http.ResponseWriter, r *http.Request) {
 		out = append(out, s.playlistObj(rc, p, songs))
 	}
 	// 榜单只在这里加载名称；不会为了生成歌单摘要请求榜单歌曲。
-	boardObjs, visibleBoards := s.boardPlaylistObjects(rc)
+	boardObjs, visibleBoards, err := s.boardPlaylistObjects(rc)
+	if err != nil {
+		writeErr(w, r, ErrGeneric, "无法读取榜单摘要，请稍后重试")
+		return
+	}
 	out = append(out, boardObjs...)
 	writeOK(w, r, "playlists", M{"playlist": out})
 	// 响应之后预热尚无快照的可见榜单，客户端第一次点开不再等待现场分页。
@@ -145,6 +134,7 @@ func canEditPlaylist(u *db.User, p *db.Playlist) bool {
 }
 
 func (s *Server) getPlaylist(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	rc := s.newReqCtx(r)
 	id := param(r, "id")
 	p, ok := music.ParseID(id)
@@ -155,20 +145,22 @@ func (s *Server) getPlaylist(w http.ResponseWriter, r *http.Request) {
 		}
 		// 歌单列表阶段只缓存榜单名称；歌曲只在请求具体榜单详情时读取。
 		boardName, _ := s.Catalog.BoardName(p.Source, p.Key)
-		if boardName == "" {
-			boardName = p.Key
-		}
-		name := music.PlatformName(p.Source) + " · " + boardName
 		infos, err := s.Catalog.FullBoardTracks(rc.ctx, p.Source, p.Key)
 		if err != nil {
+			if errors.Is(err, music.ErrEmptyBoard) {
+				writeErr(w, r, ErrUnavailable, err.Error())
+				return
+			}
 			writeErr(w, r, ErrGeneric, err.Error())
 			return
 		}
-		dur := 0
-		for _, in := range infos {
-			dur += in.Duration()
+		obj, err := s.boardPlaylistObj(rc, music.Board{Source: p.Source, BangID: p.Key, Name: boardName}, infos)
+		if err != nil {
+			writeErr(w, r, ErrGeneric, "无法读取榜单摘要，请稍后重试")
+			return
 		}
-		writeOK(w, r, "playlist", M{"id": id, "name": name, "comment": "在线榜单，只读", "owner": "榜单", "public": true, "songCount": len(infos), "duration": dur, "created": virtualPlaylistTime, "changed": virtualPlaylistTime, "coverArt": id, "entry": songList(s, rc, infos)})
+		obj["entry"] = songList(s, rc, infos)
+		writeOK(w, r, "playlist", obj)
 		return
 	}
 	if ok && p.Kind == music.KindSongList {

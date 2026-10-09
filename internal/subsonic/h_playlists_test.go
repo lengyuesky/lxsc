@@ -107,7 +107,7 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 	if len(paths) != 2 || paths[1] != "wy.leaderboard.getList" {
 		t.Fatalf("打开榜单后请求路径异常: %v", paths)
 	}
-	_ = request(server.getPlaylist, "/rest/getPlaylist.view?id="+music.BoardID("wy", "one")+"&f=json")
+	reopened := request(server.getPlaylist, "/rest/getPlaylist.view?id="+music.BoardID("wy", "one")+"&f=json")["playlist"].(map[string]any)
 	if len(paths) != 2 {
 		t.Fatalf("榜单歌曲缓存未生效: %v", paths)
 	}
@@ -121,6 +121,13 @@ func TestNativeBoardPlaylistLoadsSongsOnlyOnDetail(t *testing.T) {
 	}
 	if summary["comment"] != playlist["comment"] || summary["comment"] != "在线榜单，只读" || playlists[0].(map[string]any)["comment"] != summary["comment"] {
 		t.Fatal("箭头音乐会继续显示列表中的简介，加载前后的简介不能包含瞬时加载提示")
+	}
+	initialTime := playlists[0].(map[string]any)["changed"].(string)
+	if initialTime == virtualPlaylistTime || playlist["changed"].(string) <= initialTime {
+		t.Fatalf("首次完整加载必须推进已持久化的版本: %s %v", initialTime, playlist["changed"])
+	}
+	if summary["changed"] != playlist["changed"] || reopened["changed"] != playlist["changed"] {
+		t.Fatal("列表、详情与重复进入必须共享同一个内容版本")
 	}
 	after, err := database.Statistics(ctx)
 	if err != nil {

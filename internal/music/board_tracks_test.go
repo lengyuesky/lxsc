@@ -115,7 +115,6 @@ func TestFullBoardSupportsSDKPaginationVariants(t *testing.T) {
 		{"总数未知", []json.RawMessage{boardPageJSON(-1, 2, 1, 2), boardPageJSON(-1, 2, 3)}, []string{"1", "2", "3"}},
 		{"过滤不可用歌曲", []json.RawMessage{boardPageJSON(4, 2, 1), boardPageJSON(4, 2, 3)}, []string{"1", "3"}},
 		{"相邻页重复歌曲去重", []json.RawMessage{boardPageJSON(4, 2, 1, 2), boardPageJSON(4, 2, 2, 3)}, []string{"1", "2", "3"}},
-		{"空榜单", []json.RawMessage{boardPageJSON(0, 100)}, []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newDirectoryTestCatalog(t)
@@ -281,29 +280,36 @@ func TestFullBoardServesStaleSnapshotAndRefreshesInBackground(t *testing.T) {
 }
 
 func TestFullBoardStaleSnapshotSurvivesRefreshFailure(t *testing.T) {
-	c := newDirectoryTestCatalog(t)
-	failing := false
-	c.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
-		if failing {
-			return nil, errors.New("上游故障")
-		}
-		return boardPageJSON(2, 2, 1, 2), nil
-	})
-	if _, err := c.FullBoardTracks(context.Background(), "wy", "3778678"); err != nil {
-		t.Fatal(err)
-	}
-	key := fullBoardKey("wy", "3778678")
-	c.generic.Remove(key)
-	failing = true
-	for range 3 {
-		list, err := c.FullBoardTracks(context.Background(), "wy", "3778678")
-		if err != nil || len(list) != 2 {
-			t.Fatalf("刷新失败时旧快照必须继续可用: %v %v", list, err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if _, ok := c.generic.Get(key); ok {
-		t.Fatal("失败的刷新不能发布新缓存")
+	for _, kind := range []string{"error", "empty"} {
+		t.Run(kind, func(t *testing.T) {
+			c := newDirectoryTestCatalog(t)
+			failing := false
+			c.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
+				if failing {
+					if kind == "empty" {
+						return boardPageJSON(0, 2), nil
+					}
+					return nil, errors.New("上游故障")
+				}
+				return boardPageJSON(2, 2, 1, 2), nil
+			})
+			if _, err := c.FullBoardTracks(context.Background(), "wy", "3778678"); err != nil {
+				t.Fatal(err)
+			}
+			key := fullBoardKey("wy", "3778678")
+			c.generic.Remove(key)
+			failing = true
+			for range 3 {
+				list, err := c.FullBoardTracks(context.Background(), "wy", "3778678")
+				if err != nil || len(list) != 2 {
+					t.Fatalf("刷新失败时旧快照必须继续可用: %v %v", list, err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if _, ok := c.generic.Get(key); ok {
+				t.Fatal("失败的刷新不能发布新缓存")
+			}
+		})
 	}
 }
 
@@ -459,8 +465,8 @@ func TestFullBoardDoesNotCacheEmptyResult(t *testing.T) {
 		return boardPageJSON(2, 2, 1, 2), nil
 	})
 	list, err := c.FullBoardTracks(context.Background(), "wy", "3778678")
-	if err != nil || len(list) != 0 {
-		t.Fatalf("空结果应正常返回: %v %v", list, err)
+	if !errors.Is(err, ErrEmptyBoard) || len(list) != 0 {
+		t.Fatalf("空结果必须返回可重试错误: %v %v", list, err)
 	}
 	if _, _, ok := c.CachedBoardSummary("wy", "3778678"); ok {
 		t.Fatal("空结果不能进入缓存或摘要")
@@ -483,11 +489,28 @@ func TestFullBoardDoesNotCacheEmptyResult(t *testing.T) {
 	}
 }
 
+func TestFullBoardSummaryFallsBackFromEmptyCache(t *testing.T) {
+	c := newDirectoryTestCatalog(t)
+	var calls atomic.Int32
+	c.SetRemoteCallerForTest(func(_ context.Context, _ string, _ ...any) (json.RawMessage, error) {
+		calls.Add(1)
+		return boardPageJSON(2, 2, 1, 2), nil
+	})
+	if _, err := c.FullBoardTracks(context.Background(), "wy", "one"); err != nil {
+		t.Fatal(err)
+	}
+	c.generic.Add(fullBoardKey("wy", "one"), json.RawMessage(`{"list":[]}`))
+	if count, _, ok := c.CachedBoardSummary("wy", "one"); !ok || count != 2 || calls.Load() != 1 {
+		t.Fatalf("空的近期缓存不能遮蔽完整旧快照或触发上游读取: count=%d ok=%v calls=%d", count, ok, calls.Load())
+	}
+}
+
 func TestFullBoardIgnoresEmptySnapshots(t *testing.T) {
 	c := newDirectoryTestCatalog(t)
 	ctx := context.Background()
 	// 历史空快照：内存与数据库各一份，都不能回放也不能当摘要。
 	c.boardStale.Add(fullBoardKey("kg", "mem"), json.RawMessage(`{"list":[]}`))
+	c.generic.Add(fullBoardKey("wy", "fresh"), json.RawMessage(`{"list":[]}`))
 	if err := c.DB.PutBoardSnapshot(ctx, fullBoardKey("tx", "db"), json.RawMessage(`{"list":[]}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +519,7 @@ func TestFullBoardIgnoresEmptySnapshots(t *testing.T) {
 		calls.Add(1)
 		return boardPageJSON(1, 100, 5), nil
 	})
-	for _, board := range [][2]string{{"kg", "mem"}, {"tx", "db"}} {
+	for _, board := range [][2]string{{"kg", "mem"}, {"tx", "db"}, {"wy", "fresh"}} {
 		if _, _, ok := c.CachedBoardSummary(board[0], board[1]); ok {
 			t.Fatalf("空快照不能作为摘要: %s|%s", board[0], board[1])
 		}
@@ -505,7 +528,7 @@ func TestFullBoardIgnoresEmptySnapshots(t *testing.T) {
 			t.Fatalf("空快照必须改为重新读取 %s|%s: %v %v", board[0], board[1], list, err)
 		}
 	}
-	if calls.Load() != 2 {
+	if calls.Load() != 3 {
 		t.Fatalf("空快照被复用: %d", calls.Load())
 	}
 	if raw, _, err := c.DB.GetBoardSnapshot(ctx, fullBoardKey("tx", "db")); err != nil || !boardSnapshotHasTracks(raw) {

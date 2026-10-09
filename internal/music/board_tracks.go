@@ -11,6 +11,9 @@ import (
 
 func fullBoardKey(source, id string) string { return "board-full|" + source + "|" + id }
 
+// ErrEmptyBoard 表示上游未返回可用榜单；不能作为成功的空歌单交给客户端缓存。
+var ErrEmptyBoard = errors.New("榜单暂时未返回歌曲，请稍后重试")
+
 // boardSnapshotHasTracks 判断快照负载是否真的含歌曲。上游偶发返回空列表时，
 // 空快照会被客户端当成空歌单长期缓存，因此空负载一律不作为可用快照。
 func boardSnapshotHasTracks(raw json.RawMessage) bool {
@@ -57,7 +60,10 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 	}
 	key := fullBoardKey(source, id)
 	if raw, ok := c.generic.Get(key); ok {
-		return c.parseList(ctx, raw, source)
+		if boardSnapshotHasTracks(raw) {
+			return c.parseList(ctx, raw, source)
+		}
+		c.generic.Remove(key)
 	}
 	if raw, ok := c.boardSnapshot(source, id); ok {
 		// 仍持有完整旧快照：先让客户端立刻看到歌曲，后台刷新，失败保留旧快照。
@@ -122,7 +128,10 @@ func (c *Catalog) loadFullBoardMerged(ctx context.Context, source, id string, ba
 		loadCtx, cancel := context.WithTimeout(c.boardWarmCtx, boardLoadBudget)
 		defer cancel()
 		if raw, ok := c.generic.Get(key); ok {
-			return raw, nil
+			if boardSnapshotHasTracks(raw) {
+				return raw, nil
+			}
+			c.generic.Remove(key)
 		}
 		concurrency := boardPageConcurrency
 		if background {
@@ -136,8 +145,8 @@ func (c *Catalog) loadFullBoardMerged(ctx context.Context, source, id string, ba
 				c.generic.Add(key, raw)
 				c.boardStale.Add(key, raw)
 				c.persistBoardSnapshot(key, raw)
-			} else if c.Log != nil {
-				c.Log.Warn("榜单没有歌曲，不缓存空结果", "source", source, "id", id)
+			} else {
+				return nil, ErrEmptyBoard
 			}
 		}
 		return raw, err

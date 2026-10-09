@@ -17,31 +17,35 @@ import (
 
 // Event 只接受固定字段；不得加入 URL、用户名、歌曲文本或自由文本错误。
 type Event struct {
-	Endpoint     string    `json:"endpoint,omitempty"`
-	Method       string    `json:"method,omitempty"`
-	Client       string    `json:"client,omitempty"`
-	Format       string    `json:"format,omitempty"`
-	BoardID      string    `json:"boardId,omitempty"`
-	BoardIDs     []string  `json:"boardIds,omitempty"`
-	Result       string    `json:"result,omitempty"`
-	Count        *int      `json:"count,omitempty"`
-	Lines        *int      `json:"lines,omitempty"`
-	Synced       *bool     `json:"synced,omitempty"`
-	ProtocolCode *int      `json:"protocolCode,omitempty"`
-	Time         time.Time `json:"time"`
-	Stage        string    `json:"stage"`
-	TrackID      string    `json:"trackId,omitempty"`
-	Platform     string    `json:"platform,omitempty"`
-	Quality      string    `json:"quality,omitempty"`
-	Mode         string    `json:"mode,omitempty"`
-	Cached       bool      `json:"cached"`
-	Status       int       `json:"status"`
-	Error        string    `json:"error"`
-	ElapsedMS    int64     `json:"elapsedMs"`
+	RequestID     string    `json:"requestId,omitempty"`
+	BytesWritten  *int64    `json:"bytesWritten,omitempty"`
+	ResponseBytes *int64    `json:"responseBytes,omitempty"`
+	Endpoint      string    `json:"endpoint,omitempty"`
+	Method        string    `json:"method,omitempty"`
+	Client        string    `json:"client,omitempty"`
+	Format        string    `json:"format,omitempty"`
+	BoardID       string    `json:"boardId,omitempty"`
+	BoardIDs      []string  `json:"boardIds,omitempty"`
+	Result        string    `json:"result,omitempty"`
+	Count         *int      `json:"count,omitempty"`
+	Lines         *int      `json:"lines,omitempty"`
+	Synced        *bool     `json:"synced,omitempty"`
+	ProtocolCode  *int      `json:"protocolCode,omitempty"`
+	Time          time.Time `json:"time"`
+	Stage         string    `json:"stage"`
+	TrackID       string    `json:"trackId,omitempty"`
+	Platform      string    `json:"platform,omitempty"`
+	Quality       string    `json:"quality,omitempty"`
+	Mode          string    `json:"mode,omitempty"`
+	Cached        bool      `json:"cached"`
+	Status        int       `json:"status"`
+	Error         string    `json:"error"`
+	ElapsedMS     int64     `json:"elapsedMs"`
 }
 
 var trackPattern = regexp.MustCompile(`^tr-(wy|tx|kw|kg|mg)-[A-Za-z0-9_-]{1,128}$`)
 var boardPattern = regexp.MustCompile(`^lb-(wy|tx|kw|kg|mg)-[A-Za-z0-9_-]{1,128}$`)
+var requestPattern = regexp.MustCompile(`^req-[A-Z2-7]{26,64}$`)
 
 func ValidBoardID(id string) bool { return boardPattern.MatchString(id) }
 
@@ -126,6 +130,9 @@ func (b *Events) Add(e Event) {
 	if !ValidTrackID(e.TrackID) {
 		e.TrackID = ""
 	}
+	if !requestPattern.MatchString(e.RequestID) {
+		e.RequestID = ""
+	}
 	e.Endpoint = oneOf(e.Endpoint, "ping", "getLicense", "getOpenSubsonicExtensions", "getUser", "getUsers", "getScanStatus", "getMusicFolders", "getIndexes", "getArtists", "getMusicDirectory", "getGenres", "getArtist", "getArtistInfo", "getArtistInfo2", "getAlbum", "getAlbumInfo", "getAlbumInfo2", "getSong", "getTopSongs", "getSimilarSongs", "getSimilarSongs2", "getAlbumList", "getAlbumList2", "getRandomSongs", "getSongsByGenre", "getNowPlaying", "getStarred", "getStarred2", "search", "search2", "search3", "getPlaylists", "getPlaylist", "getLyrics", "getLyricsBySongId", "getPlayQueue", "getBookmarks", "getInternetRadioStations", "getPodcasts", "getNewestPodcasts", "getShares", "getVideos", "getCoverArt", "getSongLists", "stream", "download")
 	e.Method = oneOf(e.Method, "GET", "POST", "HEAD")
 	e.Client = oneOf(e.Client, "amcfy", "stream_music", "other", "unknown")
@@ -151,6 +158,12 @@ func (b *Events) Add(e Event) {
 			*field = &value
 		}
 	}
+	for _, field := range []**int64{&e.BytesWritten, &e.ResponseBytes} {
+		if *field != nil {
+			value := min(int64(1<<40), max(0, **field))
+			*field = &value
+		}
+	}
 	if e.Synced != nil {
 		value := *e.Synced
 		e.Synced = &value
@@ -158,7 +171,7 @@ func (b *Events) Add(e Event) {
 	e.Platform = Platform(e.Platform)
 	e.Quality = Quality(e.Quality)
 	e.Mode = Mode(e.Mode)
-	e.Error = oneOf(e.Error, "none", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error")
+	e.Error = oneOf(e.Error, "none", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error", "encode_error", "write_error")
 	if e.Error == "" {
 		e.Error = "upstream_error"
 	}

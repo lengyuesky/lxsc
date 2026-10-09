@@ -63,9 +63,8 @@ func TestBoardPlaylistDoesNotTurnEmptyResultIntoEmptyPlaylist(t *testing.T) {
 		t.Fatal("未知数量必须可打开，同时不能提前读取榜单内容")
 	}
 	root := f.boardRequest(t, f.server.getPlaylist, "/rest/getPlaylist?f=json&id=lb-wy-empty")
-	playlist := root["playlist"].(map[string]any)
-	if playlist["songCount"] != float64(0) || len(playlist["entry"].([]any)) != 0 {
-		t.Fatalf("详情必须按实际数量返回空歌曲: %+v", playlist)
+	if root["status"] != "failed" || root["playlist"] != nil {
+		t.Fatalf("上游空结果必须失败，不能返回成功空歌单: %+v", root)
 	}
 	// 空结果不落缓存：列表继续显示待加载标记，箭头音乐才会重新请求详情。
 	if count() <= 0 {
@@ -77,7 +76,7 @@ func TestBoardPlaylistDoesNotTurnEmptyResultIntoEmptyPlaylist(t *testing.T) {
 	// 上游恢复后重新打开即可拿到歌曲，不需要等缓存过期或反复重进。
 	empty = false
 	root = f.boardRequest(t, f.server.getPlaylist, "/rest/getPlaylist?f=json&id=lb-wy-empty")
-	playlist = root["playlist"].(map[string]any)
+	playlist := root["playlist"].(map[string]any)
 	if playlist["songCount"] != float64(1) || len(playlist["entry"].([]any)) != 1 {
 		t.Fatalf("上游恢复后应重新读取完整榜单: %+v", playlist)
 	}

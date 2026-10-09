@@ -33,6 +33,7 @@ const (
 	ErrNotFound       = 70
 	ErrBusy           = -1 // 仅内部区分过载，对外仍使用兼容的通用错误码。
 	ErrAuthLimited    = -2 // 认证限频使用 HTTP 429，协议错误保持兼容。
+	ErrUnavailable    = -3 // 上游暂时不可用，可稍后重试，不代表资源为空。
 )
 
 // M 有序对象：使用 map 但输出时排序键，便于 XML 属性与 JSON 稳定
@@ -59,8 +60,8 @@ func writeOK(w http.ResponseWriter, r *http.Request, name string, payload any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
-	status, retry := 0, ""
-	if code == ErrBusy || code == ErrAuthLimited {
+	status, retry := http.StatusOK, ""
+	if code == ErrBusy || code == ErrAuthLimited || code == ErrUnavailable {
 		status, retry = http.StatusServiceUnavailable, "2"
 		if code == ErrAuthLimited {
 			status, retry = http.StatusTooManyRequests, "60"
@@ -84,32 +85,17 @@ func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
 	if retry != "" {
 		w.Header().Set("Retry-After", retry)
 	}
-	if status != 0 {
-		if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
-			event.Status = status
-		}
-		switch detectFormat(r) {
-		case "json":
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		case "jsonp":
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		default:
-			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		}
-		if r.Method == http.MethodHead {
-			w.Header().Set("Cache-Control", "no-store")
-		}
-		w.WriteHeader(status)
-	}
 	if r.Method == http.MethodHead {
-		recordClientResponse(r, "failed", "error", nil, M{"code": code})
-		return
+		w.Header().Set("Cache-Control", "no-store")
 	}
-	writeResp(w, r, "failed", "error", nil, M{"code": code, "message": msg})
+	writeRespStatus(w, r, status, "failed", "error", nil, M{"code": code, "message": msg})
 }
 
 func writeResp(w http.ResponseWriter, r *http.Request, status, name string, payload any, errObj M) {
-	recordClientResponse(r, status, name, payload, errObj)
+	writeRespStatus(w, r, http.StatusOK, status, name, payload, errObj)
+}
+
+func writeRespStatus(w http.ResponseWriter, r *http.Request, httpStatus int, status, name string, payload any, errObj M) {
 	format := detectFormat(r)
 	root := M{
 		"status":        status,
@@ -123,29 +109,58 @@ func writeResp(w http.ResponseWriter, r *http.Request, status, name string, payl
 	} else if name != "" && payload != nil {
 		root[name] = payload
 	}
+	body, contentType, encodeErr := encodeResponse(r, format, root)
+	issue := ""
+	if encodeErr != nil {
+		// 正文已替换为固定协议错误，不泄露序列化失败的字段或原始错误文本。
+		httpStatus, status, name, payload = http.StatusInternalServerError, "failed", "error", nil
+		errObj = M{"code": ErrGeneric}
+		issue = "encode_error"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
+		event.Status = httpStatus
+		if event.RequestID != "" {
+			w.Header().Set("X-Request-ID", event.RequestID)
+		}
+	}
+	w.WriteHeader(httpStatus)
+	n, expected := 0, 0
+	if r.Method != http.MethodHead {
+		expected = len(body)
+		var err error
+		n, err = w.Write(body)
+		if err != nil || n != expected {
+			issue = "write_error"
+		}
+	}
+	// 必须在写出后记录：包括未返回错误的短写，不能把待发送内容当作已成功交付。
+	recordClientResponse(r, status, name, payload, errObj)
+	recordClientDelivery(r, n, expected, issue)
+}
+
+func encodeResponse(r *http.Request, format string, root M) ([]byte, string, error) {
 	switch format {
 	case "json", "jsonp":
-		b, _ := json.Marshal(M{"subsonic-response": root})
+		b, err := json.Marshal(M{"subsonic-response": root})
+		if err != nil {
+			// 此固定错误正文不包含原 payload，也不再依赖可能失败的通用序列化。
+			b = []byte(`{"subsonic-response":{"status":"failed","version":` + strconv.Quote(APIVersion) + `,"error":{"code":0,"message":"响应生成失败，请稍后重试"}}}`)
+		}
 		if format == "jsonp" {
 			cb := param(r, "callback")
 			if cb == "" {
 				cb = "callback"
 			}
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			w.Write([]byte(cb + "("))
-			w.Write(b)
-			w.Write([]byte(");"))
-			return
+			return []byte(cb + "(" + string(b) + ");"), "application/javascript; charset=utf-8", err
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Write(b)
+		return b, "application/json; charset=utf-8", err
 	default:
 		root["xmlns"] = "http://subsonic.org/restapi"
 		var buf bytes.Buffer
 		buf.WriteString(xml.Header)
 		writeXML(&buf, "subsonic-response", root)
-		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.Write(buf.Bytes())
+		return buf.Bytes(), "application/xml; charset=utf-8", nil
 	}
 }
 
