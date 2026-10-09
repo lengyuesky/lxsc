@@ -172,15 +172,6 @@ func expiredMediaStatus(status int) bool {
 	return status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusGone
 }
 
-// checkMedia 使用最小 Range 校验，不读取或转发音频正文，也不继承客户端凭据。
-func (s *Server) checkMedia(ctx context.Context, in *music.Info, address string) (int, error) {
-	resp, err := s.inspectMedia(ctx, in, address)
-	if resp == nil {
-		return 0, err
-	}
-	return resp.StatusCode, err
-}
-
 // inspectMedia 在响应头到达后立即关闭正文，保留真实媒体头供 HEAD 预检使用。
 func (s *Server) inspectMedia(ctx context.Context, in *music.Info, address string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)

@@ -48,7 +48,7 @@ type Catalog struct {
 	remoteCall        func(context.Context, string, ...any) (json.RawMessage, error)
 	configMu          sync.Mutex
 	urls              *requestCache[urlKey, js.MusicURLResult]
-	urlChecks         *requestCache[urlCheckKey, int]
+	urlChecks         *requestCache[urlCheckKey, mediaHeaders]
 	search            *requestCache[searchKey, []*Info]
 	metadataSearch    *requestCache[metadataSearchKey, metadataSearchResult]
 	searchCall        func(context.Context, string, ...any) (json.RawMessage, error)
@@ -91,7 +91,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		boardNames:        lru.NewLRU[string, string](2000, nil, 30*time.Minute),
 		failures:          lru.NewLRU[string, string](500, nil, 30*time.Second),
 		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
-		urlChecks:         newRequestCache[urlCheckKey, int](1, 0),
+		urlChecks:         newRequestCache[urlCheckKey, mediaHeaders](2000, urlCheckCacheTTL(v.URLCacheTTL)),
 		search:            newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		metadataSearch:    newRequestCache[metadataSearchKey, metadataSearchResult](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:            lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
@@ -410,11 +410,13 @@ func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, qu
 // InvalidatePlaybackURL 只丢弃明确失败的同一解析版本，不影响并发刷新产生的新链接。
 func (c *Catalog) InvalidatePlaybackURL(failed URLResolution) {
 	c.urls.invalidate(failed.key, failed.token)
+	c.urlChecks.forget(urlCheckKey{failed.key, failed.token})
 }
 
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
 func (c *Catalog) InvalidateURLs() {
 	c.urls.purge()
+	c.urlChecks.purge()
 }
 
 // scriptInfo 传给音源脚本的 musicInfo：扁平字段 + meta 结构（兼容两种脚本写法）
@@ -722,6 +724,7 @@ func (c *Catalog) RefreshTTL() {
 	defer c.configMu.Unlock()
 	v := c.Settings.Get()
 	c.urls.configure(time.Duration(v.URLCacheTTL) * time.Second)
+	c.urlChecks.configure(urlCheckCacheTTL(v.URLCacheTTL))
 	c.search.configure(time.Duration(v.SearchCacheTTL) * time.Second)
 	c.metadataSearch.configure(time.Duration(v.SearchCacheTTL) * time.Second)
 }

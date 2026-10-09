@@ -15,22 +15,6 @@ import (
 	"lxsc/internal/urlcache"
 )
 
-const URLCheckTimeout = 3 * time.Second
-
-type urlCheckKey struct {
-	key   urlKey
-	token cacheToken
-}
-
-// CheckPlaybackURL 仅合并同一解析版本的在途校验，不缓存校验结果。
-func (c *Catalog) CheckPlaybackURL(ctx context.Context, resolution URLResolution, check func(context.Context) (int, error)) (int, error) {
-	result, err := c.urlChecks.load(ctx, urlCheckKey{resolution.key, resolution.token}, nil, URLCheckTimeout, func(ctx context.Context) (int, bool, error) {
-		status, err := check(ctx)
-		return status, false, err
-	})
-	return result.value, err
-}
-
 type urlPersistence struct {
 	store       *urlcache.Store
 	fingerprint func() (string, error)

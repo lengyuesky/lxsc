@@ -24,6 +24,10 @@ func (s *Server) writeMediaHead(w http.ResponseWriter, r *http.Request, resoluti
 	}
 	if length, ok := fullMediaLength(resp); ok {
 		w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+		// 有效的 206 已证明支持字节范围；部分 CDN 不另发 Accept-Ranges。
+		if resp.StatusCode == http.StatusPartialContent && w.Header().Get("Accept-Ranges") == "" {
+			w.Header().Set("Accept-Ranges", "bytes")
+		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	recordMediaResponse(r, http.StatusOK)

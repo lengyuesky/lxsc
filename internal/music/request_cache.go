@@ -140,6 +140,19 @@ func (c *requestCache[K, V]) invalidate(key K, token cacheToken) {
 	}
 }
 
+// forget 用于 key 已包含解析版本的缓存；阻止迟到结果重新保存已失效的版本。
+// 现有等待者仍收到当次结果，后续请求可以独立重新校验。
+func (c *requestCache[K, V]) forget(key K) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeLocked(key)
+	for fk := range c.calls {
+		if fk.key == key {
+			delete(c.calls, fk)
+		}
+	}
+}
+
 // load 中 failed 非空表示条件刷新。
 // fn 的布尔结果决定是否缓存；即使不缓存，也会把结果交给当前等待者。
 func (c *requestCache[K, V]) load(ctx context.Context, key K, failed *cacheToken, timeout time.Duration, fn func(context.Context) (V, bool, error)) (cachedResult[V], error) {

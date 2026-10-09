@@ -29,6 +29,7 @@ func (c *Catalog) Performance() map[string]any {
 	out["admission"] = map[string]any{"requests": c.RequestLimits.Stats(), "media": c.MediaLimits.Stats(), "upstream": c.workLimits.Stats(), "javascript": js.WorkloadStats()}
 	out["boardWarmup"] = c.boardWarmGate.Stats()
 	out["urlPersistence"] = c.urls.persistenceTiming.Snapshot()
+	out["urlCheckCache"] = c.urlChecks.stats()
 	if c.SDK != nil {
 		out["sdk"] = c.SDK.Performance()
 	}

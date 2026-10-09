@@ -423,51 +423,20 @@ func (m *SourceManager) MusicURLSourceIDs(platform string) []int64 {
 	return ids
 }
 
-// MusicURL 依次尝试各音源脚本获取直链；quality 不被支持时向下降级。
+// MusicURL 优先尝试高优先级音源，慢请求可并行尝试备用；音质不支持时向下降级。
 func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	return m.MusicURLForSources(ctx, platform, musicInfo, quality, nil)
 }
 
-// MusicURLForSources 仅在给定脚本集合内按原优先级/音质降级取链；nil 表示不限制。
+// MusicURLForSources 仅在给定脚本集合内取链；nil 表示不限制。
+// 优先级决定启动顺序，慢请求延迟启动备用，先成功者返回；保留源内音质降级。
 // 此处不校验音频响应，播放层独立决定是否刷新或换源，调试解析不会隐式探测媒体。
 func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
-	var lastErr error = ErrNoSource
 	candidates := m.candidates(platform, "musicUrl")
 	candidates = slices.DeleteFunc(candidates, func(ls *loadedSource) bool {
 		return sourceIDs != nil && !slices.Contains(sourceIDs, ls.id)
 	})
-	for index, ls := range candidates {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		// 同一音源的全部降级尝试共用预算；为剩余音源和媒体响应头预留时间。
-		budget := m.CallTime
-		if deadline, ok := ctx.Deadline(); ok {
-			budget = min(budget, time.Until(deadline)/time.Duration(len(candidates)-index+1))
-		}
-		sourceCtx, cancel := context.WithTimeout(ctx, budget)
-		started := time.Now()
-		ls.calls.begin()
-		result, attempts, err := m.musicURLFromSource(sourceCtx, ls, platform, musicInfo, quality)
-		call := SourceCall{Platform: platform, Action: "musicUrl", RequestedQuality: quality, Attempts: attempts}
-		if result != nil {
-			call.Quality, call.Downgraded = result.Quality, result.Quality != quality
-		}
-		ls.calls.finish(started, call, musicInfo, err)
-		ls.health.record(started, err, result != nil && result.Quality != quality)
-		cancel()
-		if err == nil {
-			return result, nil
-		}
-		lastErr = fmt.Errorf("%s: %w", ls.meta.Name, err)
-		if errors.Is(err, admission.ErrBusy) {
-			return nil, err
-		}
-	}
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	return nil, lastErr
+	return m.musicURLCandidates(ctx, candidates, platform, musicInfo, quality)
 }
 
 func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, int, error) {

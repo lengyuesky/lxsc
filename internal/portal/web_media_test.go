@@ -61,6 +61,7 @@ func TestWebStreamCookieAndRedirectContract(t *testing.T) {
 	alice := f.client(t, "alice")
 	alice.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	var wantChecks int32
+	checkedQualities := map[string]bool{}
 	for _, mode := range []string{"redirect", "force_redirect"} {
 		t.Run(mode, func(t *testing.T) {
 			raw, err := json.Marshal(mode)
@@ -71,14 +72,17 @@ func TestWebStreamCookieAndRedirectContract(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, tc := range []struct{ query, quality string }{{"", "320k"}, {"&quality=flac", "flac"}, {"&proxy=1", "320k"}} {
-				wantChecks++
+				if !checkedQualities[tc.quality] {
+					checkedQualities[tc.quality] = true
+					wantChecks++
+				}
 				resp, err := alice.Get(url + tc.query)
 				if err != nil {
 					t.Fatal(err)
 				}
 				resp.Body.Close()
 				if resp.StatusCode != 302 || !strings.HasPrefix(resp.Header.Get("Location"), "https://media.invalid/"+tc.quality+"/") || resp.Header.Get("Cache-Control") != "no-store" || calls.Load() != wantChecks {
-					t.Fatalf("应遵循直连配置和音质，新旧直链都校验且不接受 proxy 覆盖: %d %v calls=%d", resp.StatusCode, resp.Header, calls.Load())
+					t.Fatalf("应按音质复用成功校验，保持直连且不接受 proxy 覆盖: %d %v calls=%d", resp.StatusCode, resp.Header, calls.Load())
 				}
 			}
 		})

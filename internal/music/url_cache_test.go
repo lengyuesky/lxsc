@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -246,14 +247,14 @@ func TestURLChecksShareVersionAndCancelIndependently(t *testing.T) {
 	var checks atomic.Int32
 	started := make(chan context.Context, 1)
 	release := make(chan struct{})
-	check := func(ctx context.Context) (int, error) {
+	check := func(ctx context.Context) (*http.Response, error) {
 		checks.Add(1)
 		started <- ctx
 		select {
 		case <-release:
-			return 403, nil
+			return &http.Response{StatusCode: 403}, nil
 		case <-ctx.Done():
-			return 0, ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -264,8 +265,8 @@ func TestURLChecksShareVersionAndCancelIndependently(t *testing.T) {
 	done := make(chan error, 19)
 	for range 19 {
 		go func() {
-			status, err := c.CheckPlaybackURL(context.Background(), old, check)
-			if err == nil && status != 403 {
+			response, err := c.CheckPlaybackURL(context.Background(), old, check)
+			if err == nil && (response == nil || response.StatusCode != 403) {
 				err = errors.New("共享校验结果错误")
 			}
 			done <- err
@@ -280,11 +281,11 @@ func TestURLChecksShareVersionAndCancelIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, err := c.CheckPlaybackURL(context.Background(), fresh, func(context.Context) (int, error) {
+	response, err := c.CheckPlaybackURL(context.Background(), fresh, func(context.Context) (*http.Response, error) {
 		checks.Add(1)
-		return 200, nil
+		return &http.Response{StatusCode: 200}, nil
 	})
-	if err != nil || status != 200 {
+	if err != nil || response == nil || response.StatusCode != 200 {
 		t.Fatal("即使地址相同，新版本也不能加入旧版本校验")
 	}
 	close(release)

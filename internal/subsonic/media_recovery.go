@@ -41,9 +41,17 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 	// 同一地址可能由不同脚本返回，明确拒绝不能因换了脚本身份而被遗忘。
 	rejectedURLs := make(map[string]struct{}, maxMediaAttempts)
 	uncertain := make([]music.URLResolution, 0, maxMediaSources)
+	deferredRefresh := make([]music.URLResolution, 0, maxMediaSources)
 	var failed *music.URLResolution
 	stage := "resolve"
-	for attempts := 0; attempts < maxMediaAttempts && len(sourceIDs) > 0 && ctx.Err() == nil; {
+	for attempts := 0; attempts < maxMediaAttempts && (len(sourceIDs) > 0 || len(deferredRefresh) > 0) && ctx.Err() == nil; {
+		if len(sourceIDs) == 0 {
+			resolution := deferredRefresh[0]
+			deferredRefresh = deferredRefresh[1:]
+			sourceIDs = []int64{resolution.Result.SourceID}
+			refreshed[resolution.Result.SourceID] = true
+			failed, stage = &resolution, "refresh"
+		}
 		started := time.Now()
 		resolution, err := s.Catalog.ResolvePlaybackURLForSources(ctx, in, quality, sourceIDs, failed)
 		s.mediaEvent(stage, in.TrackID(), in.Source(), quality, resolution.Cached, 0, started, err)
@@ -52,7 +60,8 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 				return music.URLResolution{}, nil, err
 			}
 			if failed == nil {
-				break
+				sourceIDs = nil
+				continue
 			}
 			// 过期刷新解析失败，也应跳过原脚本，而不是提前阻止其他音源。
 			id := failed.Result.SourceID
@@ -65,19 +74,7 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		started = time.Now()
 		status := 0
 		var resp *http.Response
-		if headMetadata {
-			checkCtx, cancel := context.WithTimeout(ctx, music.URLCheckTimeout)
-			resp, err = s.inspectMedia(checkCtx, in, resolution.Result.URL)
-			cancel()
-			if resp != nil {
-				status = resp.StatusCode
-			}
-			checkStage := "url_check"
-			if resolution.Cached {
-				checkStage = "cache_check"
-			}
-			s.mediaEvent(checkStage, in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, status, started, err)
-		} else if proxy {
+		if proxy && !headMetadata {
 			headCtx, cancel := context.WithTimeout(ctx, mediaHeaderTimeout)
 			resp, err = s.openMedia(headCtx, r, in, resolution.Result.URL)
 			cancel()
@@ -89,9 +86,12 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			}
 			s.mediaEvent("proxy_response", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, status, started, err)
 		} else {
-			status, err = s.Catalog.CheckPlaybackURL(ctx, resolution, func(checkCtx context.Context) (int, error) {
-				return s.checkMedia(checkCtx, in, resolution.Result.URL)
+			resp, err = s.Catalog.CheckPlaybackURL(ctx, resolution, func(checkCtx context.Context) (*http.Response, error) {
+				return s.inspectMedia(checkCtx, in, resolution.Result.URL)
 			})
+			if resp != nil {
+				status = resp.StatusCode
+			}
 			checkStage := "url_check"
 			if resolution.Cached {
 				checkStage = "cache_check"
@@ -123,9 +123,14 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			rejectedURLs[resolution.Result.URL] = struct{}{}
 			s.Catalog.InvalidatePlaybackURL(resolution)
 			if expiredMediaStatus(status) && !refreshed[id] {
-				refreshed[id] = true
-				failed, stage = &resolution, "refresh"
-				continue
+				if resolution.Cached || len(sourceIDs) == 1 {
+					refreshed[id] = true
+					failed, stage = &resolution, "refresh"
+					continue
+				}
+				// 新取的链接立即被拒绝时，先尝试其他音源；均不可用再补一次原源刷新。
+				// 缓存链接仍优先原源刷新，每源最多一次、总尝试数不变。
+				deferredRefresh = append(deferredRefresh, resolution)
 			}
 			if status == http.StatusRequestedRangeNotSatisfiable {
 				// 416 不触发换源，不能将客户端的范围错误变成重新播放。

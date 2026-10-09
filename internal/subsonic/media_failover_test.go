@@ -95,8 +95,12 @@ func TestMediaFailoverDifferentScriptIDs(t *testing.T) {
 			default:
 				s.stream(rec, req)
 			}
-			if want := []string{"/a/1", "/a/2", "/b/1"}; !reflect.DeepEqual(paths, want) {
-				t.Fatalf("A 刷新后仍为403必须真正访问不同ID的B：请求=%v，期望=%v，响应=%d", paths, want, rec.Code)
+			want := []string{"/a/1", "/b/1"}
+			if tc.cached {
+				want = []string{"/a/1", "/a/2", "/b/1"}
+			}
+			if !reflect.DeepEqual(paths, want) {
+				t.Fatalf("缓存失败可刷新，新链失败优先访问不同ID的B：请求=%v，期望=%v，响应=%d", paths, want, rec.Code)
 			}
 			if tc.mode == "proxy" {
 				if rec.Code != http.StatusOK || rec.Body.String() != "备选音频" {
@@ -105,7 +109,7 @@ func TestMediaFailoverDifferentScriptIDs(t *testing.T) {
 			} else if rec.Code != http.StatusFound || rec.Header().Get("Location") != "https://media.invalid/b/1" {
 				t.Fatalf("302必须交付已校验的B：%d %v", rec.Code, rec.Header())
 			}
-			if closed.Load() != 3 || (tc.mode != "proxy" && reads.Load() != 0) {
+			if closed.Load() != int32(len(want)) || (tc.mode != "proxy" && reads.Load() != 0) {
 				t.Fatalf("响应关闭或仅取头边界错误：关闭=%d，读取=%d", closed.Load(), reads.Load())
 			}
 			_, storedErr := s.DB.GetTrack(context.Background(), info.TrackID())
@@ -163,9 +167,6 @@ func TestMediaFailoverRecoverableFailures(t *testing.T) {
 				rec := httptest.NewRecorder()
 				s.stream(rec, mediaStabilityRequest(user, info, extra))
 				want := []string{"/a/1", "/b/1"}
-				if expiredMediaStatus(first) {
-					want = []string{"/a/1", "/a/2", "/b/1"}
-				}
 				if !reflect.DeepEqual(paths, want) || (proxy && rec.Body.String() != "音频") || (!proxy && rec.Header().Get("Location") != "https://media.invalid/b/1") {
 					t.Fatalf("可恢复失败必须跳过坏源：请求=%v，响应=%d %v", paths, rec.Code, rec.Header())
 				}
@@ -220,7 +221,7 @@ func TestMediaFailoverAllRejectedIsBounded(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			s.stream(rec, mediaStabilityRequest(user, info, extra))
-			want := []string{"/a/1", "/a/2", "/b/1", "/b/2", "/c/1", "/c/2"}
+			want := []string{"/a/1", "/b/1", "/c/1", "/c/2", "/a/2", "/b/2"}
 			if !reflect.DeepEqual(paths, want) || reads.Load() != 0 || closed.Load() != 6 {
 				t.Fatalf("最多三个不同脚本、六次媒体请求，不读取失败正文：%v 读取=%d 关闭=%d", paths, reads.Load(), closed.Load())
 			}
@@ -486,7 +487,9 @@ func TestRedirectUnknownCandidatesRespectLaterRejections(t *testing.T) {
 			var calls atomic.Int32
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				n := calls.Add(1)
-				if (n <= 2) == firstUnknown {
+				// 明确拒绝按地址判断，避免换源顺序调整后把新地址误当成已拒绝地址。
+				unknown := firstUnknown && n <= 2 || !firstUnknown && n > 1 && req.URL.Path != "/same/2"
+				if unknown {
 					return nil, errors.New("合成网络错误")
 				}
 				return &http.Response{StatusCode: 403, Header: make(http.Header), Body: &probeOnlyBody{}, Request: req}, nil
@@ -541,6 +544,10 @@ func TestMediaFailoverRefreshParsingAndFinalQuality(t *testing.T) {
 			}
 			s, user, info := newMediaStabilityServer(t, script)
 			addMediaFallback(t, s, 22, 2, "b")
+			// 缓存过期仍优先原源刷新，覆盖刷新解析失败与最终降级音质。
+			if _, err := s.Catalog.ResolvePlaybackURL(context.Background(), info, "flac"); err != nil {
+				t.Fatal(err)
+			}
 			var paths []string
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				paths = append(paths, req.URL.Path)

@@ -124,6 +124,13 @@ func TestMediaHEADReportsFullLengthWithoutReading(t *testing.T) {
 			if rec.Code != 200 || rec.Header().Get("Content-Length") != tc.wantLength || rec.Header().Get("Content-Range") != "" || rec.Header().Get("ETag") != `"media-version"` {
 				t.Fatalf("完整媒体元数据错误: status=%d headers=%v", rec.Code, rec.Header())
 			}
+			wantRanges := ""
+			if tc.status == 206 && tc.wantLength != "" {
+				wantRanges = "bytes"
+			}
+			if rec.Header().Get("Accept-Ranges") != wantRanges {
+				t.Fatal("只有有效的部分响应才能推断字节范围能力")
+			}
 			if reads.Load() != 0 || closed.Load() != 1 || rec.Body.Len() != 0 {
 				t.Fatal("预检必须立即关闭上游，不能读取或转发正文")
 			}
