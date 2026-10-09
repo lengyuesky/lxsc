@@ -335,7 +335,12 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case music.KindBoard:
-			// 榜单目录项没有稳定封面；不要为封面请求隐式扫描榜单歌曲。
+			// 列表和详情都公布榜单 ID 作为 coverArt。没有平台独立封面时
+			// 返回本站内置榜单图，不为一张封面扫描歌曲或依赖外部图源。
+			if music.IsPlatform(p.Source) && strings.TrimSpace(p.Key) != "" && p.Key != "0" {
+				serveBoardCover(w, r)
+				return
+			}
 		case music.KindPlaylist:
 			if pl, err := s.DB.GetPlaylist(rc.ctx, id); err == nil && canReadPlaylist(currentUser(r), pl) && len(pl.TrackIDs) > 0 {
 				if infos := s.Catalog.Tracks(rc.ctx, pl.TrackIDs[:1]); len(infos) > 0 {

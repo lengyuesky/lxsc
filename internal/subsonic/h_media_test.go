@@ -46,7 +46,7 @@ func TestCoverRequestsDoNotExpandBoardsOrOnlineAlbums(t *testing.T) {
 		code int
 	}{
 		{oaID, http.StatusFound},
-		{music.BoardID("wy", "hot"), http.StatusNotFound},
+		{music.BoardID("wy", "hot"), http.StatusOK},
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/rest/getCoverArt.view?id="+test.id, nil)
 		req = req.WithContext(withUser(req.Context(), user))
