@@ -22,7 +22,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"maximumScopes":      MaximumScopes(),
 		"responseDelivery": map[string]string{
 			"requestId":     "真实客户端请求由服务端独立生成，与响应 X-Request-ID 对应",
-			"bytesWritten":  "协议正文被 ResponseWriter 接受的实际字节数，写出失败或短写时 result=failed、error=write_error",
+			"bytesWritten":  "协议正文被 ResponseWriter 接受的实际字节数，写入失败、短写或网络刷新失败时 result=failed、error=write_error；刷新失败时仍可能等于 responseBytes",
 			"responseBytes": "预期协议正文长度；与 bytesWritten 相等也不证明客户端接收或解析成功，媒体正文不适用",
 			"encode_error":  "正文序列化失败，返回 HTTP 500 与固定协议错误",
 		},

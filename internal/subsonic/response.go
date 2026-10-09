@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -118,6 +119,11 @@ func writeRespStatus(w http.ResponseWriter, r *http.Request, httpStatus int, sta
 		issue = "encode_error"
 	}
 	w.Header().Set("Content-Type", contentType)
+	// 正文已经完整序列化，显式长度让 HTTP/1 客户端及反代读完正文即可
+	// 确认消息完整，不必继续等待 handler 收尾后才发出的分块结束标记。
+	if r.Method != http.MethodHead {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	}
 	if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
 		event.Status = httpStatus
 		if event.RequestID != "" {
@@ -134,7 +140,12 @@ func writeRespStatus(w http.ResponseWriter, r *http.Request, httpStatus int, sta
 			issue = "write_error"
 		}
 	}
-	// 必须在写出后记录：包括未返回错误的短写，不能把待发送内容当作已成功交付。
+	// Write 可能只把数据放入缓冲区；小响应和最后一段正文都需在请求
+	// 收尾前刷出。主动协议探测的内存 writer 不支持 Flush，保持兼容。
+	if err := http.NewResponseController(w).Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		issue = "write_error"
+	}
+	// 刷新之后再记录，短写或刷新失败都不能被标记为成功交付。
 	recordClientResponse(r, status, name, payload, errObj)
 	recordClientDelivery(r, n, expected, issue)
 }

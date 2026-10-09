@@ -80,7 +80,7 @@ unset DEBUG_TOKEN DEBUG_BASE
 | `redirect_limit` | 主动探测重定向超过 3 跳 |
 | `non_audio` | 上游虽返回 200/206，但类型明确为文本、图片或 JSON/XML，不能作为音频；普通播放会尝试其他音源，主动探测只报告 |
 | `encode_error` | 协议正文序列化失败，服务端改为返回 HTTP 500 和固定的协议错误 |
-| `write_error` | 协议正文写出失败或短写，结合 `bytesWritten` 与 `responseBytes` 判断中断位置 |
+| `write_error` | 协议正文写出失败、短写或网络缓冲刷新失败；刷新失败时 `bytesWritten` 与 `responseBytes` 也可能相等 |
 | `upstream_error` | 无法安全细分的上游错误，不输出原始错误字符串 |
 
 例如 `cache_check status=0 error=dns` 后出现 `redirect status=302`，表示服务器可能在尝试备选后仍无法验证音频，但保留了未被明确拒绝的客户端直连机会，并不表示服务端成功请求了音频。`403/404/410` 会触发每源至多一次刷新，仍失败则尝试其他脚本；普通播放新增的 `source_fallback` 只表示备选取链阶段，不暴露脚本 ID 或名称。平台 `tx` 等代号也不是音源脚本身份。`200/206` 只证明服务端拿到了这些响应头，可能仍是错误内容、编解码不支持、客户端网络/CORS/混合内容或签名绑定问题。
@@ -174,7 +174,7 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 - `endpoint`、`method`、`format`：固定枚举的接口名、`GET/POST/HEAD` 及 `json/xml/jsonp/binary`。媒体成功响应（含 302）标记 `binary`，协议错误保留原格式。`stream/download` 的 `HEAD` 是客户端链接预检，不能当作真实播放；它与独立 `probe` 也不同。
 - `result`：`ok/empty/failed/unavailable`；`protocolCode` 单独表示 Subsonic 错误码。HTTP 200 不代表协议成功。
 - `requestId`：服务端独立生成的关联 ID，与普通响应的 `X-Request-ID` 对应，不复用客户端传入的请求头。
-- `bytesWritten` / `responseBytes`：协议正文实际被 ResponseWriter 接受的字节数 / 预期正文长度；HEAD 无正文时为零。写出后才记录结果，报错或短写均为 `failed`、`write_error`。不适用的媒体传输不伪造这两个字段。
+- `bytesWritten` / `responseBytes`：协议正文实际被 ResponseWriter 接受的字节数 / 预期正文长度；HEAD 无正文时为零。正文写入并刷新网络缓冲后才记录结果，写入报错、短写或刷新失败均为 `failed`、`write_error`；刷新失败时两个字节数仍可能相等。不适用的媒体传输不伪造这两个字段。
 - `count`：协议正文中的列表条目数（歌单详情为歌曲数，非摘要的待加载标记）。`lines`：歌词行数；`synced`：结构化歌词是否含同步轨。字段不存在表示不适用；零表示构造的正文确实为空，但还需结合写出结果判断是否完整交付。
 - `trackId`、`boardId`：仅接受固定平台前缀和有界 ID；歌单列表事件还提供最多 10 个公开在线榜单 `boardIds`，便于 AI 在客户端未请求详情时定向探测。不输出自定义歌单 ID、歌曲/歌手名称、歌词正文、用户名、认证字段或任意请求头。
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -283,7 +284,7 @@ func requestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
-			next.ServeHTTP(ww, r)
+			next.ServeHTTP(newRequestLogWriter(ww), r)
 			if strings.HasPrefix(r.URL.Path, "/admin/") && ww.Status() < 400 {
 				return
 			}
@@ -291,6 +292,49 @@ func requestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// chi 的日志 writer 仅提供无返回值的 Flush，会吞掉底层连接的写入错误。
+// 显式保留 FlushError，其他连接控制继续通过 Unwrap 到达原 writer。
+type requestLogWriter struct {
+	middleware.WrapResponseWriter
+}
+
+func newRequestLogWriter(w middleware.WrapResponseWriter) http.ResponseWriter {
+	base := &requestLogWriter{WrapResponseWriter: w}
+	// 保留 chi 按底层连接暴露的能力，避免影响媒体复制、连接接管或 HTTP/2。
+	switch writer := w.(type) {
+	case interface {
+		http.Hijacker
+		io.ReaderFrom
+	}:
+		return struct {
+			*requestLogWriter
+			http.Hijacker
+			io.ReaderFrom
+		}{base, writer, writer}
+	case http.Hijacker:
+		return struct {
+			*requestLogWriter
+			http.Hijacker
+		}{base, writer}
+	case http.Pusher:
+		return struct {
+			*requestLogWriter
+			http.Pusher
+		}{base, writer}
+	default:
+		return base
+	}
+}
+
+func (w *requestLogWriter) FlushError() error {
+	if w.Status() == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return http.NewResponseController(w.Unwrap()).Flush()
+}
+
+func (w *requestLogWriter) Flush() { _ = w.FlushError() }
 
 func cors(next http.Handler) http.Handler {
 	return diagnostics.SensitiveIO(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
