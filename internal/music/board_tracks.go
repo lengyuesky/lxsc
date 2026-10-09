@@ -33,6 +33,10 @@ const (
 	boardLoadBudget = 45 * time.Second
 	// boardWarmConcurrency 后台预热与刷新榜单的并发上限，避免集中冲击上游。
 	boardWarmConcurrency = 3
+	// 后台先预占有限队列，不能为每个可见榜单创建一个无限等待的协程。
+	boardWarmQueueLimit = 32
+	// 前台整榜最多并行 4 页；后台逐页读取，给交互请求留下脚本 HTTP 容量。
+	boardPageConcurrency = 4
 	// boardParallelPageLimit 已知总数时最多并行读取的页数，超出回退顺序读取。
 	boardParallelPageLimit = 64
 	// boardRefreshFailCooldown 后台刷新失败后的冷却时间，避免反复冲击故障上游。
@@ -40,12 +44,6 @@ const (
 	// boardPersistMaxAge 持久化快照的最长回放年龄，超过则重新完整读取。
 	boardPersistMaxAge = 7 * 24 * time.Hour
 )
-
-// boardRefreshState 记录榜单后台刷新的失败冷却；成功刷新后快照自然新鲜。
-type boardRefreshState struct {
-	at time.Time
-	ok bool
-}
 
 // FullBoardTracks 按平台分页读完榜单，不按固定歌曲数截断。
 // 只有完整结果才能进入整榜缓存；过期的完整快照（内存或持久化）先返回、
@@ -68,7 +66,7 @@ func (c *Catalog) FullBoardTracks(ctx context.Context, source, id string) ([]*In
 	}
 	// 合并整个榜单的加载，避免多个客户端各自拼接分页。用户离开页面时
 	// 已开始的整榜仍在预算内完成并缓存，下一次打开可以直接复用。
-	return c.loadFullBoardMerged(ctx, source, id)
+	return c.loadFullBoardMerged(ctx, source, id, false)
 }
 
 // boardSnapshot 返回可立即返回的完整快照：先内存后持久化，并回放到内存。
@@ -105,15 +103,32 @@ func (c *Catalog) boardSnapshot(source, id string) (json.RawMessage, bool) {
 
 // loadFullBoardMerged 经 singleflight 加载整榜；等待者取消不会中断读取。
 // 成功的完整结果同时写入新鲜缓存、可回放缓存和数据库。
-func (c *Catalog) loadFullBoardMerged(ctx context.Context, source, id string) ([]*Info, error) {
+func (c *Catalog) loadFullBoardMerged(ctx context.Context, source, id string, background bool) ([]*Info, error) {
+	// 停止后不能再注册共享任务；退出会先等待注册者，再等待实际加载。
+	c.boardRefreshMu.Lock()
+	if c.boardWarmClosed {
+		c.boardRefreshMu.Unlock()
+		return nil, context.Canceled
+	}
+	c.boardWarmWG.Add(1)
+	c.boardRefreshMu.Unlock()
+	defer c.boardWarmWG.Done()
 	key := fullBoardKey(source, id)
-	raw, err := c.flight.do(ctx, key, func() (json.RawMessage, error) {
+	raw, err := c.boardFlight.doWithLifetime(ctx, c.boardWarmCtx, key, func() (json.RawMessage, error) {
+		// 页面取消不打断整榜，但服务退出必须取消并等待实际加载结束。
+		if err := c.boardWarmCtx.Err(); err != nil {
+			return nil, err
+		}
+		loadCtx, cancel := context.WithTimeout(c.boardWarmCtx, boardLoadBudget)
+		defer cancel()
 		if raw, ok := c.generic.Get(key); ok {
 			return raw, nil
 		}
-		loadCtx, cancel := context.WithTimeout(context.Background(), boardLoadBudget)
-		defer cancel()
-		raw, err := c.loadFullBoard(loadCtx, source, id)
+		concurrency := boardPageConcurrency
+		if background {
+			concurrency = 1
+		}
+		raw, err := c.loadFullBoard(loadCtx, source, id, concurrency)
 		if err == nil {
 			// 只缓存确实含歌曲的完整榜单：空结果进缓存后客户端会把它当成
 			// 空歌单，且要等缓存过期才可能恢复。
@@ -144,47 +159,6 @@ func (c *Catalog) persistBoardSnapshot(key string, raw json.RawMessage) {
 	if err := c.DB.PutBoardSnapshot(ctx, key, raw); err != nil && c.Log != nil {
 		c.Log.Debug("保存榜单快照失败", "err", err)
 	}
-}
-
-// loadBoardDetached 后台加载或刷新一个榜单：与在途加载合并，失败记录短暂冷却；
-// 冷却期间继续返回旧快照，不阻断客户端；后台并发受预热闸门限制。
-func (c *Catalog) loadBoardDetached(source, id string) {
-	key := fullBoardKey(source, id)
-	c.boardRefreshMu.Lock()
-	if c.boardRefreshing[key] {
-		c.boardRefreshMu.Unlock()
-		return
-	}
-	if state, ok := c.boardRefreshState[key]; ok && !state.ok && time.Since(state.at) < boardRefreshFailCooldown {
-		c.boardRefreshMu.Unlock()
-		return
-	}
-	c.boardRefreshing[key] = true
-	c.boardRefreshMu.Unlock()
-	go func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				if c.Log != nil {
-					c.Log.Warn("榜单后台刷新异常", "source", source, "err", recovered)
-				}
-			}
-			c.boardRefreshMu.Lock()
-			delete(c.boardRefreshing, key)
-			c.boardRefreshMu.Unlock()
-		}()
-		c.boardWarmGate <- struct{}{}
-		defer func() { <-c.boardWarmGate }()
-		ctx, cancel := context.WithTimeout(context.Background(), boardLoadBudget)
-		defer cancel()
-		raw, err := c.loadFullBoardMerged(ctx, source, id)
-		if err != nil && c.Log != nil {
-			c.Log.Debug("榜单后台刷新失败", "source", source, "err", err)
-		}
-		c.boardRefreshMu.Lock()
-		// 空结果按失败冷却：它不会进入缓存，不能让每次列表请求都重新冲击上游。
-		c.boardRefreshState[key] = boardRefreshState{at: time.Now(), ok: err == nil && len(raw) > 0}
-		c.boardRefreshMu.Unlock()
-	}()
 }
 
 // boardPage 一次榜单分页的原始结果。
@@ -301,7 +275,7 @@ func (a *boardAccumulator) marshal() (json.RawMessage, error) {
 }
 
 // loadFullBoard 先读第一页并依据 total/limit 决定并行或顺序读取剩余页。
-func (c *Catalog) loadFullBoard(ctx context.Context, source, id string) (json.RawMessage, error) {
+func (c *Catalog) loadFullBoard(ctx context.Context, source, id string, concurrency int) (json.RawMessage, error) {
 	first, err := c.fetchBoardPage(ctx, source, id, 1)
 	if err != nil {
 		return nil, err
@@ -316,8 +290,8 @@ func (c *Catalog) loadFullBoard(ctx context.Context, source, id string) (json.Ra
 		}
 		return acc.marshal()
 	}
-	if pages := acc.parallelPages(); pages > 0 {
-		if raw, err, done := c.loadFullBoardParallel(ctx, source, id, acc, pages); done {
+	if pages := acc.parallelPages(); pages > 0 && concurrency > 1 {
+		if raw, err, done := c.loadFullBoardParallel(ctx, source, id, acc, pages, concurrency); done {
 			return raw, err
 		}
 	}
@@ -327,23 +301,45 @@ func (c *Catalog) loadFullBoard(ctx context.Context, source, id string) (json.Ra
 // nextPage 已按页序合并完成后应继续读取的页码。
 func (a *boardAccumulator) nextPage() int { return a.lastPage + 1 }
 
-func (c *Catalog) loadFullBoardParallel(ctx context.Context, source, id string, acc *boardAccumulator, pages int) (json.RawMessage, error, bool) {
+func (c *Catalog) loadFullBoardParallel(ctx context.Context, source, id string, acc *boardAccumulator, pages, concurrency int) (json.RawMessage, error, bool) {
 	fetched := make([]boardPage, pages+1)
-	errs := make([]error, pages+1)
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int)
+	var firstErr error
+	var failed sync.Once
 	var wg sync.WaitGroup
-	for page := 2; page <= pages; page++ {
+	for range min(concurrency, pages-1) {
 		wg.Add(1)
-		go func(page int) {
+		go func() {
 			defer wg.Done()
-			p, err := c.fetchBoardPage(ctx, source, id, page)
-			fetched[page], errs[page] = p, err
-		}(page)
+			for page := range jobs {
+				p, err := c.fetchBoardPage(workCtx, source, id, page)
+				if err != nil {
+					failed.Do(func() { firstErr = err; cancel() })
+					return
+				}
+				fetched[page] = p
+			}
+		}()
 	}
-	wg.Wait()
+enqueue:
 	for page := 2; page <= pages; page++ {
-		if errs[page] != nil {
-			return nil, errs[page], true
+		select {
+		case jobs <- page:
+		case <-workCtx.Done():
+			break enqueue
 		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr, true
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err, true
+	}
+	for page := 2; page <= pages; page++ {
 		if err := acc.add(page, fetched[page]); err != nil {
 			return nil, err, true
 		}
@@ -390,7 +386,9 @@ func (c *Catalog) EnableBoardWarm() {
 		return
 	}
 	c.boardRefreshMu.Lock()
-	c.boardWarmEnabled = true
+	if !c.boardWarmClosed {
+		c.boardWarmEnabled = true
+	}
 	c.boardRefreshMu.Unlock()
 }
 

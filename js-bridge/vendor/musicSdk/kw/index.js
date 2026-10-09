@@ -1,6 +1,6 @@
 // lxsc 修改标记（2026-09-06 补记）：暴露专辑目录模块；详见 js-bridge/vendor/PATCHES.md。
+// lxsc 修改（2026-10-09）：运行入口不再加载未接入的评论、热搜和搜索联想模块。
 import { httpFetch } from '../../request'
-import tipSearch from './tipSearch'
 import musicSearch from './musicSearch'
 import { formatSinger, formatPic } from './util'
 import leaderboard from './leaderboard'
@@ -8,8 +8,6 @@ import lyric from './lyric'
 import pic from './pic'
 import { apis } from '../api-source'
 import songList from './songList'
-import hotSearch from './hotSearch'
-import comment from './comment'
 import album from './album'
 
 const kw = {
@@ -34,13 +32,10 @@ const kw = {
   //   // })
   // },
 
-  tipSearch,
   musicSearch,
   leaderboard,
   songList,
   album,
-  hotSearch,
-  comment,
   getLyric(songInfo, isGetLyricx) {
     // let singer = songInfo.singer.indexOf('、') > -1 ? songInfo.singer.split('、')[0] : songInfo.singer
     return lyric.getLyric(songInfo, isGetLyricx)

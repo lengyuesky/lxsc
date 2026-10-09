@@ -189,14 +189,21 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/kg/index.js",
-      "localSha256": "22f6788e8e3f2361b16b60de734f07807c6bae93370627f10f7a31b3c633bc3f",
+      "localSha256": "461f2c143322f1343db64fa1ad4a85cac11d4fb502221fefd4eb858491e5759f",
       "referencePath": "src/modules/utils/musicSdk/kg/index.js",
       "referenceSha256": "2dd2b14456868bd1f79ee220e8102fc96e70b8a4836c63c5a8b546ed82ba05ce",
       "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/kg/index.js",
       "currentSha256": "2dd2b14456868bd1f79ee220e8102fc96e70b8a4836c63c5a8b546ed82ba05ce",
       "currentMatch": false,
-      "change": "暴露歌手与专辑目录模块"
+      "change": "暴露歌手与专辑目录模块",
+      "localChanges": [
+        {
+          "date": "2026-10-09",
+          "description": "运行入口移除未接入的评论、热搜、搜索联想模块；QQ 同时移除未接入的用户歌单模块，原始模块源码继续保留",
+          "previousLocalSha256": "22f6788e8e3f2361b16b60de734f07807c6bae93370627f10f7a31b3c633bc3f"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/kg/leaderboard.js",
@@ -334,14 +341,21 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/kw/index.js",
-      "localSha256": "ffc5f280c54ed6cfdca38e0278aca7e0abd0b59ab23bf45a8d3db7664c18b241",
+      "localSha256": "f89cd83da505a85c30225a59ec84b4ddda8c1d860c8fa3de43c259db923cf039",
       "referencePath": "src/modules/utils/musicSdk/kw/index.js",
       "referenceSha256": "538898189fb3d82bcf58b4075b6b9bd808dc2226060fac5ccbdf87e02c588e07",
       "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/kw/index.js",
       "currentSha256": "538898189fb3d82bcf58b4075b6b9bd808dc2226060fac5ccbdf87e02c588e07",
       "currentMatch": false,
-      "change": "暴露专辑目录模块"
+      "change": "暴露专辑目录模块",
+      "localChanges": [
+        {
+          "date": "2026-10-09",
+          "description": "运行入口移除未接入的评论、热搜、搜索联想模块；QQ 同时移除未接入的用户歌单模块，原始模块源码继续保留",
+          "previousLocalSha256": "ffc5f280c54ed6cfdca38e0278aca7e0abd0b59ab23bf45a8d3db7664c18b241"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/kw/leaderboard.js",
@@ -448,14 +462,21 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/mg/index.js",
-      "localSha256": "7d070ca2ab9c54666bb2cf58f08a50be84b68c03aa17bbd8029e5900502ae1d8",
+      "localSha256": "f4f4d6980b9ebd8ff6139103db15a1ab0edeba7542bcf47df1b05719306d2775",
       "referencePath": "src/modules/utils/musicSdk/mg/index.js",
       "referenceSha256": "041d3aea013fe3954da43d79d308c18c380e0819c205e81518f233c1419ac809",
       "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/mg/index.js",
       "currentSha256": "041d3aea013fe3954da43d79d308c18c380e0819c205e81518f233c1419ac809",
       "currentMatch": false,
-      "change": "暴露专辑目录模块"
+      "change": "暴露专辑目录模块",
+      "localChanges": [
+        {
+          "date": "2026-10-09",
+          "description": "运行入口移除未接入的评论、热搜、搜索联想模块；QQ 同时移除未接入的用户歌单模块，原始模块源码继续保留",
+          "previousLocalSha256": "7d070ca2ab9c54666bb2cf58f08a50be84b68c03aa17bbd8029e5900502ae1d8"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/mg/leaderboard.js",
@@ -619,13 +640,20 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/tx/index.js",
-      "localSha256": "be3087c7d2d02d6c26a2192549aa6dcbf38037a85f0344d035062b6a7a0252e1",
+      "localSha256": "cc45faf40b5f5ae6a5d288e1b07f6253642e456fae451adb95fc7c3e4d0628a6",
       "referencePath": "src/modules/utils/musicSdk/tx/index.js",
       "referenceSha256": "be3087c7d2d02d6c26a2192549aa6dcbf38037a85f0344d035062b6a7a0252e1",
-      "referenceMatch": true,
+      "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/tx/index.js",
       "currentSha256": "1f37bff6a19bfde631e9bafbc4e75ff702faf8bac857af59afeeb7a2e6ccf35c",
-      "currentMatch": false
+      "currentMatch": false,
+      "localChanges": [
+        {
+          "date": "2026-10-09",
+          "description": "运行入口移除未接入的评论、热搜、搜索联想模块；QQ 同时移除未接入的用户歌单模块，原始模块源码继续保留",
+          "previousLocalSha256": "be3087c7d2d02d6c26a2192549aa6dcbf38037a85f0344d035062b6a7a0252e1"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/tx/leaderboard.js",
@@ -780,13 +808,20 @@
     },
     {
       "path": "js-bridge/vendor/musicSdk/wy/index.js",
-      "localSha256": "df490ddc80cbd3660084350743c0ec9a020f09370ed910865a78bdfd4f3b8b8a",
+      "localSha256": "7552f5f96834b789a247315b2843ae3cdd6365d69278e45f197ed36a2b96661b",
       "referencePath": "src/modules/utils/musicSdk/wy/index.js",
       "referenceSha256": "df490ddc80cbd3660084350743c0ec9a020f09370ed910865a78bdfd4f3b8b8a",
-      "referenceMatch": true,
+      "referenceMatch": false,
       "currentPath": "src/modules/utils/musicSdk/wy/index.js",
       "currentSha256": "df490ddc80cbd3660084350743c0ec9a020f09370ed910865a78bdfd4f3b8b8a",
-      "currentMatch": true
+      "currentMatch": false,
+      "localChanges": [
+        {
+          "date": "2026-10-09",
+          "description": "运行入口移除未接入的评论、热搜、搜索联想模块；QQ 同时移除未接入的用户歌单模块，原始模块源码继续保留",
+          "previousLocalSha256": "df490ddc80cbd3660084350743c0ec9a020f09370ed910865a78bdfd4f3b8b8a"
+        }
+      ]
     },
     {
       "path": "js-bridge/vendor/musicSdk/wy/leaderboard.js",

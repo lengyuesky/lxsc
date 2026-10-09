@@ -108,7 +108,14 @@ func TestSDKDirectoryMethodsAvailable(t *testing.T) {
 		typeof __sdk.kg.album.getAlbumDetail,
 		typeof __sdk.kw.album.getAlbumListDetail,
 		typeof __sdk.mg.album.getAlbumDetail
-	]`)
+	].concat(['wy', 'tx', 'kw', 'kg', 'mg'].reduce(function(methods, source) {
+		var sdk = __sdk[source]
+		return methods.concat([
+			typeof sdk.musicSearch.search, typeof sdk.leaderboard.getBoards,
+			typeof sdk.leaderboard.getList, typeof sdk.songList.getList,
+			typeof sdk.songList.getListDetail, typeof sdk.getLyric, typeof sdk.getPic
+		])
+	}, []))`)
 	if err != nil {
 		t.Fatal(err)
 	}

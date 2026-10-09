@@ -3,7 +3,10 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"lxsc/internal/db"
@@ -28,6 +31,79 @@ func TestLegacyBoardsSettingKeepsCurrentValue(t *testing.T) {
 	}
 	if got := database.GetSetting(ctx, "showBoards", ""); got != "true" {
 		t.Fatalf("设置值不应被升级流程改写: %q", got)
+	}
+}
+
+func TestInvalidSettingsNeverPartiallyPersist(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store, err := New(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`null`,
+		`{"streamMode":"invalid"}`, `{"coverMode":"force_redirect"}`,
+		`{"defaultQuality":"unknown"}`, `{"searchLimit":1.5}`, `{"searchLimit":1e1}`,
+		`{"artistSongLimit":0}`, `{"artistAlbumLimit":51}`, `{"boardLimit":21}`, `{"boardTrackLimit":101}`,
+		`{"showBoards":"yes"}`, `{"publicPlaylists":null}`, `{"publicPlaylists":2}`,
+		`{"searchSources":["wy","unknown"]}`, `{"boardSources":["other"]}`, `{"boardSources":[null]}`,
+		`{"searchSources":false}`, `{"searchLimit":true}`, `{"searchLimit":"1.5"}`,
+		`{"streamMode":1}`, `{"serverName":"  "}`, `{"searchLimt":20}`,
+		`{"serverName":"` + strings.Repeat("x", 201) + `"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			var patch map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(body), &patch); err != nil {
+				t.Fatal(err)
+			}
+			if patch != nil {
+				patch["urlCacheTTL"] = json.RawMessage(`0`)
+			}
+			before, err := database.AllSettings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Update(ctx, patch); !errors.Is(err, ErrInvalidSetting) {
+				t.Fatalf("非法参数必须明确报错: %v", err)
+			}
+			after, err := database.AllSettings(ctx)
+			if err != nil || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(store.Get(), Defaults()) {
+				t.Fatalf("非法更新改变了数据库或内存: before=%v after=%v err=%v", before, after, err)
+			}
+		})
+	}
+}
+
+func TestSettingsAcceptLegacyRepresentationsAndReload(t *testing.T) {
+	ctx := context.Background()
+	database, err := db.Open(filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	store, err := New(ctx, database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var patch map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(`{"streamMode":"force_redirect","coverMode":"proxy","defaultQuality":"flac24bit","searchSources":"wy, tx,wy","boardSources":[],"showBoards":"false","publicPlaylists":"1","searchLimit":"50","artistAlbumLimit":20,"boardLimit":1,"boardTrackLimit":10,"urlCacheTTL":"-1","searchCacheTTL":"0","serverName":"音乐服务"}`), &patch); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Update(ctx, patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.StreamMode != "force_redirect" || updated.CoverMode != "proxy" || updated.SearchLimit != 50 || updated.ShowBoards || !updated.PublicPlaylists || !reflect.DeepEqual(updated.SearchSources, []string{"wy", "tx"}) || len(updated.BoardSources) != 0 || updated.URLCacheTTL != -1 {
+		t.Fatalf("合法旧参数未正确应用: %+v", updated)
+	}
+	reloaded, err := New(ctx, database)
+	if err != nil || !reflect.DeepEqual(updated, reloaded.Get()) {
+		t.Fatalf("重启后设置发生变化: %v", err)
 	}
 }
 

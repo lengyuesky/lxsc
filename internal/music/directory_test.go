@@ -28,7 +28,9 @@ func newDirectoryTestCatalog(t *testing.T) *Catalog {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewCatalog(database, nil, nil, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	catalog := NewCatalog(database, nil, nil, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(catalog.StopBoardWarm)
+	return catalog
 }
 
 func TestDirectorySingleflightMergesBoardRequests(t *testing.T) {

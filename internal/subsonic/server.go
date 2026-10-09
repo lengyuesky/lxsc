@@ -147,5 +147,3 @@ func (s *Server) Routes() http.Handler {
 	})
 	return r
 }
-
-func (s *Server) noop(w http.ResponseWriter, r *http.Request) { writeOK(w, r, "", nil) }

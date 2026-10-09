@@ -59,10 +59,15 @@ type Catalog struct {
 	lyrics            *lru.LRU[string, *Lyrics]
 	generic           *lru.LRU[string, json.RawMessage]
 	boardStale        *lru.LRU[string, json.RawMessage]
+	boardFlight       requestGroup
 	boardRefreshMu    sync.Mutex
 	boardRefreshing   map[string]bool
-	boardRefreshState map[string]boardRefreshState
-	boardWarmGate     chan struct{}
+	boardRefreshState map[string]time.Time
+	boardWarmGate     *admission.Gate
+	boardWarmCtx      context.Context
+	boardWarmCancel   context.CancelFunc
+	boardWarmWG       sync.WaitGroup
+	boardWarmClosed   bool
 	boardWarmEnabled  bool
 }
 
@@ -93,14 +98,16 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		generic:           lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
 		boardStale:        lru.NewLRU[string, json.RawMessage](128, nil, 0),
 		boardRefreshing:   map[string]bool{},
-		boardRefreshState: map[string]boardRefreshState{},
-		boardWarmGate:     make(chan struct{}, boardWarmConcurrency),
+		boardRefreshState: map[string]time.Time{},
+		boardWarmGate:     admission.New(boardWarmConcurrency, boardWarmQueueLimit, 0, 0),
 		searchMetrics:     make(map[string]*metrics.Operation),
 	}
+	c.boardWarmCtx, c.boardWarmCancel = context.WithCancel(context.Background())
 	for _, platform := range []string{"wy", "tx", "kw", "kg", "mg"} {
 		c.searchMetrics[platform] = &metrics.Operation{}
 	}
 	c.urls.gate, c.search.gate, c.urlChecks.gate, c.flight.gate = c.workLimits, c.workLimits, c.workLimits, c.workLimits
+	c.boardFlight.gate = c.workLimits
 	c.metadataSearch.gate = c.workLimits
 	c.searchCall = func(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
 		if c.SDK == nil {
@@ -210,24 +217,6 @@ func (c *Catalog) RememberSync(ctx context.Context, infos []*Info) error {
 		return errors.New("数据库未初始化")
 	}
 	return c.DB.UpsertTracks(ctx, c.rememberRows(infos))
-}
-
-// Remember 记录一批歌曲元数据（内存 + 异步写数据库）
-func (c *Catalog) Remember(ctx context.Context, infos []*Info) {
-	if len(infos) == 0 {
-		return
-	}
-	if c.DB == nil {
-		return
-	}
-	rows := c.rememberRows(infos)
-	go func() {
-		bctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := c.DB.UpsertTracks(bctx, rows); err != nil && c.Log != nil {
-			c.Log.Warn("写入歌曲元数据失败", "err", err)
-		}
-	}()
 }
 
 // LocalTrack 只从内存与数据库读取歌曲，不触发平台兜底。
@@ -541,19 +530,6 @@ func boardCacheKey(source, bangID string) string {
 	return strings.ToLower(strings.TrimSpace(source)) + "|" + strings.TrimSpace(bangID)
 }
 
-// BoardTracks 榜单歌曲
-func (c *Catalog) BoardTracks(ctx context.Context, source, bangID string, page int) ([]*Info, error) {
-	if page <= 0 {
-		page = 1
-	}
-	key := fmt.Sprintf("board|%s|%s|%d", source, bangID, page)
-	raw, err := c.cachedCallRaw(ctx, key, source+".leaderboard.getList", bangID, page)
-	if err != nil {
-		return nil, err
-	}
-	return c.parseList(ctx, raw, source)
-}
-
 // CachedBoardSummary 只读取已加载的榜单缓存；未知与空快照都按未知处理。
 // 只使用完整榜单缓存，不能把已获取的第一页数量当作整榜数量；
 // 过期的旧完整快照（含持久化回放）仍可用于摘要，刷新由打开详情时触发。
@@ -631,17 +607,6 @@ func (c *Catalog) parseList(ctx context.Context, raw json.RawMessage, source str
 	}
 	c.Cache(list)
 	return list, nil
-}
-
-// HotSearch 热搜词
-func (c *Catalog) HotSearch(ctx context.Context, source string) []string {
-	var out struct {
-		List []string `json:"list"`
-	}
-	if err := c.SDK.Call(ctx, source+".hotSearch.getList", &out); err != nil {
-		return nil
-	}
-	return out.List
 }
 
 // Lyric 获取歌词：SDK 优先，失败回退音源脚本；带缓存
@@ -737,7 +702,7 @@ func (c *Catalog) PurgeMetadataCaches() {
 	c.failures.Purge()
 	c.boardStale.Purge()
 	c.boardRefreshMu.Lock()
-	c.boardRefreshState = map[string]boardRefreshState{}
+	c.boardRefreshState = map[string]time.Time{}
 	c.boardRefreshMu.Unlock()
 	if c.DB != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

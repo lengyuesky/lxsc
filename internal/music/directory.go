@@ -72,6 +72,10 @@ type requestGroup struct {
 }
 
 func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMessage, error)) (json.RawMessage, error) {
+	return g.doWithLifetime(ctx, context.Background(), key, fn)
+}
+
+func (g *requestGroup) doWithLifetime(ctx, lifetime context.Context, key string, fn func() (json.RawMessage, error)) (json.RawMessage, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -104,10 +108,13 @@ func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMe
 				close(call.done)
 				g.mu.Unlock()
 			}()
-			waitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			waitCtx, cancel := context.WithTimeout(lifetime, 2*time.Second)
 			defer cancel()
 			if err := permit.Wait(waitCtx); err != nil {
 				call.err = admission.ErrBusy
+				if lifetime.Err() != nil {
+					call.err = lifetime.Err()
+				}
 				return
 			}
 			call.data, call.err = fn()
@@ -120,6 +127,19 @@ func (g *requestGroup) do(ctx context.Context, key string, fn func() (json.RawMe
 		return call.data, call.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// wait 在调用方停止接收新任务后等待已有实际任务及额度释放。
+func (g *requestGroup) wait() {
+	g.mu.Lock()
+	done := make([]<-chan struct{}, 0, len(g.m))
+	for _, call := range g.m {
+		done = append(done, call.done)
+	}
+	g.mu.Unlock()
+	for _, ch := range done {
+		<-ch
 	}
 }
 

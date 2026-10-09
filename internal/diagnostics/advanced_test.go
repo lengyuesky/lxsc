@@ -163,7 +163,7 @@ func TestMaintenanceScopeValidationAndAudit(t *testing.T) {
 		`{"operation":"settings_update","settings":{"streamMode":"invalid"}}`,
 		`{"operation":"settings_update","settings":{"searchLimit":10000}}`,
 		`{"operation":"settings_update","settings":{"showBoards":"yes"}}`,
-		`{"operation":"settings_update","settings":{"searchSources":["wy","wy"]}}`,
+		`{"operation":"settings_update","settings":{"searchSources":["wy","unknown"]}}`,
 	} {
 		if w := f.call("POST", "/api/debug/maintenance", invalid, full, nil); w.Code != 400 {
 			t.Fatal("无效维护请求被接受", invalid, w.Code)

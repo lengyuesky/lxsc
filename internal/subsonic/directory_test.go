@@ -41,6 +41,7 @@ func newDirectoryTestServer(t *testing.T) directoryTestServer {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
+	t.Cleanup(catalog.StopBoardWarm)
 	return directoryTestServer{server: &Server{DB: database, Catalog: catalog, Settings: store, Log: log}, database: database, store: store, user: user}
 }
 

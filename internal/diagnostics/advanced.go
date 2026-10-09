@@ -180,7 +180,7 @@ func (s *Server) maintain(w http.ResponseWriter, r *http.Request) {
 		result = status
 	case "settings_update":
 		var patch map[string]json.RawMessage
-		if len(values) != 2 || json.Unmarshal(values["settings"], &patch) != nil || len(patch) == 0 || !validSettingsPatch(s, patch) {
+		if len(values) != 2 || json.Unmarshal(values["settings"], &patch) != nil || len(patch) == 0 || settings.ValidatePatch(patch) != nil {
 			failure(w, 400, "invalid_settings_patch")
 			return
 		}
@@ -198,54 +198,6 @@ func (s *Server) maintain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	output(w, 200, map[string]any{"ok": true, "operation": operation, "data": RedactValue(result)})
-}
-
-func validSettingsPatch(s *Server, patch map[string]json.RawMessage) bool {
-	encoded, err := json.Marshal(patch)
-	var typed settings.Values
-	if err != nil || json.Unmarshal(encoded, &typed) != nil {
-		return false
-	}
-	raw, _ := json.Marshal(s.Settings.Get())
-	var current map[string]json.RawMessage
-	_ = json.Unmarshal(raw, &current)
-	for key, value := range patch {
-		if _, ok := current[key]; !ok || string(value) == "null" {
-			return false
-		}
-		if key == "streamMode" || key == "coverMode" {
-			var mode string
-			if json.Unmarshal(value, &mode) != nil || (key == "streamMode" && Mode(mode) == "") || (key == "coverMode" && oneOf(mode, "redirect", "proxy") == "") {
-				return false
-			}
-		}
-		if key == "defaultQuality" && Quality(typed.DefaultQuality) == "" {
-			return false
-		}
-		if key == "serverName" && (strings.TrimSpace(typed.ServerName) == "" || len(typed.ServerName) > 200) {
-			return false
-		}
-		if key == "searchSources" || key == "boardSources" {
-			var sources []string
-			if json.Unmarshal(value, &sources) != nil || len(sources) > 5 {
-				return false
-			}
-			seen := map[string]bool{}
-			for _, source := range sources {
-				if Platform(source) == "" || seen[source] {
-					return false
-				}
-				seen[source] = true
-			}
-		}
-		if maximum, bounded := map[string]int{"boardLimit": 20, "boardTrackLimit": 100, "artistSongLimit": 100, "artistAlbumLimit": 50, "searchLimit": 100}[key]; bounded {
-			var number int
-			if json.Unmarshal(value, &number) != nil || number < 1 || number > maximum {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (s *Server) protocolProbe(w http.ResponseWriter, r *http.Request, playback bool) {

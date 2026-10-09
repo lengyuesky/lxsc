@@ -1,3 +1,4 @@
+// lxsc 修改（2026-10-09）：运行入口不再加载未接入的评论、热搜和搜索联想模块。
 import leaderboard from './leaderboard'
 import { apis } from '../api-source'
 import getLyric from './lyric'
@@ -6,19 +7,13 @@ import musicSearch from './musicSearch'
 import extendSearch from './extendSearch'
 import extendDetail from './extendDetail'
 import songList from './songList'
-import hotSearch from './hotSearch'
-import comment from './comment'
-import tipSearch from './tipSearch'
 
 const wy = {
-  tipSearch,
   leaderboard,
   musicSearch,
   extendSearch,
   extendDetail,
   songList,
-  hotSearch,
-  comment,
   getMusicUrl(songInfo, type) {
     return apis('wy').getMusicUrl(songInfo, type)
   },

@@ -202,57 +202,9 @@ func cloneValues(v Values) Values {
 
 // Update 以 JSON 对象更新（仅更新提供的字段），并持久化
 func (s *Store) Update(ctx context.Context, patch map[string]json.RawMessage) (Values, error) {
-	m := map[string]string{}
-	for k, raw := range patch {
-		if k == "boardSelections" {
-			selections, err := parseBoardSelections(raw)
-			if err != nil {
-				return s.Get(), err
-			}
-			encoded, _ := json.Marshal(selections)
-			m[k] = string(encoded)
-			continue
-		}
-		if k == "urlCacheTTL" || k == "searchCacheTTL" {
-			value := strings.TrimSpace(string(raw))
-			var str string
-			if json.Unmarshal(raw, &str) == nil {
-				value = str
-			}
-			parse := parseTTL
-			if k == "urlCacheTTL" {
-				parse = parseURLCacheTTL
-			}
-			n, err := parse(value)
-			if err != nil {
-				if k == "urlCacheTTL" {
-					return s.Get(), fmt.Errorf("%w: 直链缓存必须选择不缓存、1 天、1 周、1 个月或永久", ErrInvalidSetting)
-				}
-				return s.Get(), fmt.Errorf("%w: %s 必须是范围内的非负整数秒数", ErrInvalidSetting, k)
-			}
-			m[k] = strconv.Itoa(n)
-			continue
-		}
-		var str string
-		if err := json.Unmarshal(raw, &str); err == nil {
-			m[k] = str
-			continue
-		}
-		var b bool
-		if err := json.Unmarshal(raw, &b); err == nil {
-			m[k] = strconv.FormatBool(b)
-			continue
-		}
-		var n float64
-		if err := json.Unmarshal(raw, &n); err == nil {
-			m[k] = strconv.Itoa(int(n))
-			continue
-		}
-		var arr []string
-		if err := json.Unmarshal(raw, &arr); err == nil {
-			m[k] = strings.Join(arr, ",")
-			continue
-		}
+	m, err := normalizePatch(patch)
+	if err != nil {
+		return s.Get(), err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

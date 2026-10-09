@@ -558,33 +558,6 @@
     });
   };
 
-  // vendor/musicSdk/kw/tipSearch.js
-  var tipSearch_default = {
-    regExps: {
-      relWord: /RELWORD=(.+)/
-    },
-    requestObj: null,
-    async tipSearchBySong(str) {
-      this.cancelTipSearch();
-      this.requestObj = httpFetch(`https://tips.kuwo.cn/t.s?corp=kuwo&newver=3&p2p=1&notrace=0&c=mbox&w=${encodeURIComponent(str)}&encoding=utf8&rformat=json`, {
-        Referer: "http://www.kuwo.cn/"
-      });
-      return this.requestObj.promise.then(({ body, statusCode }) => {
-        if (statusCode != 200 || !body.WORDITEMS) return Promise.reject(new Error("\u8BF7\u6C42\u5931\u8D25"));
-        return body.WORDITEMS;
-      });
-    },
-    handleResult(rawData) {
-      return rawData.map((item) => item.RELWORD);
-    },
-    cancelTipSearch() {
-      if (this.requestObj && this.requestObj.cancelHttp) this.requestObj.cancelHttp();
-    },
-    async search(str) {
-      return this.tipSearchBySong(str).then((result) => this.handleResult(result));
-    }
-  };
-
   // vendor/index.js
   var sizeFormate = (size) => {
     if (!size) return "0 B";
@@ -614,18 +587,6 @@
     const date = new Date(_date);
     if (!date) return "";
     return format.replace("Y", date.getFullYear().toString()).replace("M", numFix(date.getMonth() + 1)).replace("D", numFix(date.getDate())).replace("h", numFix(date.getHours())).replace("m", numFix(date.getMinutes())).replace("s", numFix(date.getSeconds()));
-  };
-  var dateFormat2 = (time) => {
-    let differ = Math.trunc((Date.now() - time) / 1e3);
-    if (differ < 60) {
-      return differ + "\u79D2\u524D";
-    } else if (differ < 3600) {
-      return Math.trunc(differ / 60) + "\u5206\u949F\u524D";
-    } else if (differ < 86400) {
-      return Math.trunc(differ / 3600) + "\u5C0F\u65F6\u524D";
-    } else {
-      return dateFormat(time);
-    }
   };
   var formatPlayCount = (num) => {
     if (num > 1e8) return parseInt(num / 1e7) / 10 + "\u4EBF";
@@ -1949,99 +1910,6 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
     }
   };
 
-  // vendor/musicSdk/kw/hotSearch.js
-  var hotSearch_default = {
-    _requestObj: null,
-    async getList(retryNum = 0) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      if (retryNum > 2) return Promise.reject(new Error("try max num"));
-      const _requestObj = httpFetch("http://hotword.kuwo.cn/hotword.s?prod=kwplayer_ar_9.3.0.1&corp=kuwo&newver=2&vipver=9.3.0.1&source=kwplayer_ar_9.3.0.1_40.apk&p2p=1&notrace=0&uid=0&plat=kwplayer_ar&rformat=json&encoding=utf8&tabid=1", {
-        headers: {
-          "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9;)"
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.status !== "ok") throw new Error("\u83B7\u53D6\u70ED\u641C\u8BCD\u5931\u8D25");
-      return { source: "kw", list: this.filterList(body.tagvalue) };
-    },
-    filterList(rawList) {
-      return rawList.map((item) => item.key);
-    }
-  };
-
-  // vendor/musicSdk/kw/comment.js
-  var comment_default = {
-    _requestObj: null,
-    _requestObj2: null,
-    async getComment({ songmid }, page = 1, limit = 20) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      const _requestObj = httpFetch(`http://ncomment.kuwo.cn/com.s?f=web&type=get_comment&aapiver=1&prod=kwplayer_ar_10.5.2.0&digest=15&sid=${songmid}&start=${limit * (page - 1)}&msgflag=1&count=${limit}&newver=3&uid=0`, {
-        headers: {
-          "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9;)"
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code != "200") throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-      const total = body.comments_counts;
-      return {
-        source: "kw",
-        comments: this.filterComment(body.comments),
-        total,
-        page,
-        limit,
-        maxPage: Math.ceil(total / limit) || 1
-      };
-    },
-    async getHotComment({ songmid }, page = 1, limit = 100) {
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      const _requestObj2 = httpFetch(`http://ncomment.kuwo.cn/com.s?f=web&type=get_rec_comment&aapiver=1&prod=kwplayer_ar_10.5.2.0&digest=15&sid=${songmid}&start=${limit * (page - 1)}&msgflag=1&count=${limit}&newver=3&uid=0`, {
-        headers: {
-          "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 9;)"
-        }
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.code != "200") throw new Error("\u83B7\u53D6\u70ED\u95E8\u8BC4\u8BBA\u5931\u8D25");
-      const total = body.hot_comments_counts;
-      return {
-        source: "kw",
-        comments: this.filterComment(body.hot_comments),
-        total,
-        page,
-        limit,
-        maxPage: Math.ceil(total / limit) || 1
-      };
-    },
-    filterComment(rawList) {
-      if (!rawList) return [];
-      return rawList.map((item) => {
-        return {
-          id: item.id,
-          text: item.msg,
-          time: item.time,
-          timeStr: dateFormat2(Number(item.time) * 1e3),
-          userName: item.u_name,
-          avatar: item.u_pic,
-          userId: item.u_id,
-          likedCount: item.like_num,
-          images: item.mpic ? [decodeURIComponent(item.mpic)] : [],
-          reply: item.child_comments ? item.child_comments.map((i) => {
-            return {
-              id: i.id,
-              text: i.msg,
-              time: i.time,
-              timeStr: dateFormat2(Number(i.time) * 1e3),
-              userName: i.u_name,
-              avatar: i.u_pic,
-              userId: i.u_id,
-              likedCount: i.like_num,
-              images: i.mpic ? [i.mpic] : []
-            };
-          }) : []
-        };
-      });
-    }
-  };
-
   // vendor/musicSdk/kw/index.js
   var kw = {
     _musicInfoRequestObj: null,
@@ -2060,13 +1928,10 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
     //   //   console.log(url)
     //   // })
     // },
-    tipSearch: tipSearch_default,
     musicSearch: musicSearch_default,
     leaderboard: leaderboard_default,
     songList: songList_default,
     album: album_default,
-    hotSearch: hotSearch_default,
-    comment: comment_default,
     getLyric(songInfo, isGetLyricx) {
       return lyric_default.getLyric(songInfo, isGetLyricx);
     },
@@ -3545,144 +3410,6 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
     }
   };
 
-  // vendor/musicSdk/kg/hotSearch.js
-  var hotSearch_default2 = {
-    _requestObj: null,
-    async getList(retryNum = 0) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      if (retryNum > 2) return Promise.reject(new Error("try max num"));
-      const _requestObj = httpFetch("http://gateway.kugou.com/api/v3/search/hot_tab?signature=ee44edb9d7155821412d220bcaf509dd&appid=1005&clientver=10026&plat=0", {
-        method: "get",
-        headers: {
-          dfid: "1ssiv93oVqMp27cirf2CvoF1",
-          mid: "156798703528610303473757548878786007104",
-          clienttime: 1584257267,
-          "x-router": "msearch.kugou.com",
-          "user-agent": "Android9-AndroidPhone-10020-130-0-searchrecommendprotocol-wifi",
-          "kg-rc": 1
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.errcode !== 0) throw new Error("\u83B7\u53D6\u70ED\u641C\u8BCD\u5931\u8D25");
-      return { source: "kg", list: this.filterList(body.data.list) };
-    },
-    filterList(rawList) {
-      const list = [];
-      rawList.forEach((item) => {
-        item.keywords.map((k) => list.push(decodeName(k.keyword)));
-      });
-      return list;
-    }
-  };
-
-  // vendor/musicSdk/kg/comment.js
-  var comment_default2 = {
-    _requestObj: null,
-    _requestObj2: null,
-    async getComment({ hash }, page = 1, limit = 20) {
-      var _a;
-      if (this._requestObj) this._requestObj.cancelHttp();
-      let timestamp = Date.now();
-      const params = `dfid=0&mid=16249512204336365674023395779019&clienttime=${timestamp}&uuid=0&extdata=${hash}&appid=1005&code=fc4be23b4e972707f36b8a828a93ba8a&schash=${hash}&clientver=11409&p=${page}&clienttoken=&pagesize=${limit}&ver=10&kugouid=0`;
-      const _requestObj = httpFetch(`http://m.comment.service.kugou.com/r/v1/rank/newest?${params}&signature=${signatureParams(params)}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 Edg/107.0.1418.24"
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.err_code !== 0) throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-      const total = (_a = body.count) != null ? _a : 0;
-      return { source: "kg", comments: this.filterComment(body.list || []), total, page, limit, maxPage: Math.ceil(total / limit) || 1 };
-    },
-    async getHotComment({ hash }, page = 1, limit = 20) {
-      var _a;
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      let timestamp = Date.now();
-      const params = `dfid=0&mid=16249512204336365674023395779019&clienttime=${timestamp}&uuid=0&extdata=${hash}&appid=1005&code=fc4be23b4e972707f36b8a828a93ba8a&schash=${hash}&clientver=11409&p=${page}&clienttoken=&pagesize=${limit}&ver=10&kugouid=0`;
-      const _requestObj2 = httpFetch(`http://m.comment.service.kugou.com/r/v1/rank/topliked?${params}&signature=${signatureParams(params)}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36 Edg/107.0.1418.24"
-        }
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.err_code !== 0) throw new Error("\u83B7\u53D6\u70ED\u95E8\u8BC4\u8BBA\u5931\u8D25");
-      const total = (_a = body.count) != null ? _a : 0;
-      return { source: "kg", comments: this.filterComment(body.list || []), total, page, limit, maxPage: Math.ceil(total / limit) || 1 };
-    },
-    async getReplyComment({ songmid, audioId }, replyId, page = 1, limit = 100) {
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      songmid = songmid.length == 32 ? audioId.split("_")[0] : songmid;
-      const _requestObj2 = httpFetch(`http://comment.service.kugou.com/index.php?r=commentsv2/getReplyWithLike&code=fc4be23b4e972707f36b8a828a93ba8a&p=${page}&pagesize=${limit}&ver=1.01&clientver=8373&kugouid=687373022&need_show_image=1&appid=1001&childrenid=${songmid}&tid=${replyId}`, {
-        headers: {
-          "User-Agent": "Android712-AndroidPhone-8983-18-0-COMMENT-wifi"
-        }
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.err_code !== 0) throw new Error("\u83B7\u53D6\u56DE\u590D\u8BC4\u8BBA\u5931\u8D25");
-      return { source: "kg", comments: this.filterComment(body.list || []) };
-    },
-    replaceAt(raw, atList) {
-      atList.forEach((atobj) => {
-        raw = raw.replaceAll(`[at=${atobj.id}]`, `@${atobj.name} `);
-      });
-      return raw;
-    },
-    filterComment(rawList) {
-      return rawList.map((item) => {
-        let data = {
-          id: item.id,
-          text: decodeName((item.atlist ? this.replaceAt(item.content, item.atlist) : item.content) || ""),
-          images: item.images ? item.images.map((i) => i.url) : [],
-          location: item.location,
-          time: item.addtime,
-          timeStr: dateFormat2(new Date(item.addtime).getTime()),
-          userName: item.user_name,
-          avatar: item.user_pic,
-          userId: item.user_id,
-          likedCount: item.like.likenum,
-          replyNum: item.reply_num,
-          reply: []
-        };
-        return item.pcontent ? {
-          id: item.id,
-          text: decodeName(item.pcontent),
-          time: null,
-          userName: item.puser,
-          avatar: null,
-          userId: item.puser_id,
-          likedCount: null,
-          replyNum: null,
-          reply: [data]
-        } : data;
-      });
-    }
-  };
-
-  // vendor/musicSdk/kg/tipSearch.js
-  var tipSearch_default2 = {
-    requestObj: null,
-    cancelTipSearch() {
-      if (this.requestObj && this.requestObj.cancelHttp) this.requestObj.cancelHttp();
-    },
-    tipSearchBySong(str) {
-      this.cancelTipSearch();
-      this.requestObj = createHttpFetch(`https://searchtip.kugou.com/getSearchTip?MusicTipCount=10&keyword=${encodeURIComponent(str)}`, {
-        headers: {
-          referer: "https://www.kugou.com/"
-        }
-      });
-      return this.requestObj.then((body) => {
-        return body[0].RecordDatas;
-      });
-    },
-    handleResult(rawData) {
-      return rawData.map((info) => info.HintInfo);
-    },
-    async search(str) {
-      return this.tipSearchBySong(str).then((result) => this.handleResult(result));
-    }
-  };
-
   // vendor/musicSdk/kg/musicInfo.js
   var createGetMusicInfosTask = (hashs) => {
     let data = {
@@ -3929,14 +3656,11 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
 
   // vendor/musicSdk/kg/index.js
   var kg = {
-    tipSearch: tipSearch_default2,
     leaderboard: leaderboard_default2,
     songList: songList_default2,
     musicSearch: musicSearch_default2,
     singer: singer_default,
     album: album_default2,
-    hotSearch: hotSearch_default2,
-    comment: comment_default2,
     getMusicUrl(songInfo, type) {
       return apis("kg").getMusicUrl(songInfo, type);
     },
@@ -4614,396 +4338,6 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
     }
   };
 
-  // vendor/musicSdk/tx/hotSearch.js
-  var hotSearch_default3 = {
-    _requestObj: null,
-    async getList(retryNum = 0) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      if (retryNum > 2) return Promise.reject(new Error("try max num"));
-      const _requestObj = httpFetch("https://u.y.qq.com/cgi-bin/musicu.fcg", {
-        method: "post",
-        body: {
-          comm: {
-            ct: "19",
-            cv: "1803",
-            guid: "0",
-            patch: "118",
-            psrf_access_token_expiresAt: 0,
-            psrf_qqaccess_token: "",
-            psrf_qqopenid: "",
-            psrf_qqunionid: "",
-            tmeAppID: "qqmusic",
-            tmeLoginType: 0,
-            uin: "0",
-            wid: "0"
-          },
-          hotkey: {
-            method: "GetHotkeyForQQMusicPC",
-            module: "tencent_musicsoso_hotkey.HotkeyService",
-            param: {
-              search_id: "",
-              uin: 0
-            }
-          }
-        },
-        headers: {
-          Referer: "https://y.qq.com/portal/player.html"
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code !== 0) throw new Error("\u83B7\u53D6\u70ED\u641C\u8BCD\u5931\u8D25");
-      return { source: "tx", list: this.filterList(body.hotkey.data.vec_hotkey) };
-    },
-    filterList(rawList) {
-      return rawList.map((item) => item.query);
-    }
-  };
-
-  // vendor/musicSdk/tx/musicInfo.js
-  var getSinger = (singers) => {
-    let arr = [];
-    singers.forEach((singer) => {
-      arr.push(singer.name);
-    });
-    return arr.join("\u3001");
-  };
-  var musicInfo_default = (songmid) => {
-    const requestObj = httpFetch("https://u.y.qq.com/cgi-bin/musicu.fcg", {
-      method: "post",
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)"
-      },
-      body: {
-        comm: {
-          ct: "19",
-          cv: "1859",
-          uin: "0"
-        },
-        req: {
-          module: "music.pf_song_detail_svr",
-          method: "get_song_detail_yqq",
-          param: {
-            song_type: 0,
-            song_mid: songmid
-          }
-        }
-      }
-    });
-    return requestObj.promise.then(({ body }) => {
-      var _a, _b, _c, _d;
-      if (body.code != 0 || body.req.code != 0) return Promise.reject(new Error("\u83B7\u53D6\u6B4C\u66F2\u4FE1\u606F\u5931\u8D25"));
-      const item = body.req.data.track_info;
-      if (!((_a = item.file) == null ? void 0 : _a.media_mid)) return null;
-      const file = item.file;
-      const { types, _types } = buildQualitys(file);
-      let albumId = "";
-      let albumName = "";
-      if (item.album) {
-        albumName = item.album.name;
-        albumId = item.album.mid;
-      }
-      return {
-        singer: getSinger(item.singer),
-        name: item.title,
-        albumName,
-        albumId,
-        source: "tx",
-        interval: formatPlayTime(item.interval),
-        songId: item.id,
-        albumMid: (_c = (_b = item.album) == null ? void 0 : _b.mid) != null ? _c : "",
-        strMediaMid: item.file.media_mid,
-        songmid: item.mid,
-        img: albumId === "" || albumId === "\u7A7A" ? ((_d = item.singer) == null ? void 0 : _d.length) ? `https://y.gtimg.cn/music/photo_new/T001R500x500M000${item.singer[0].mid}.jpg` : "" : `https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumId}.jpg`,
-        types,
-        _types,
-        typeUrl: {}
-      };
-    });
-  };
-
-  // vendor/musicSdk/tx/comment.js
-  var emojis = {
-    e400846: "\u{1F618}",
-    e400874: "\u{1F634}",
-    e400825: "\u{1F603}",
-    e400847: "\u{1F619}",
-    e400835: "\u{1F60D}",
-    e400873: "\u{1F633}",
-    e400836: "\u{1F60E}",
-    e400867: "\u{1F62D}",
-    e400832: "\u{1F60A}",
-    e400837: "\u{1F60F}",
-    e400875: "\u{1F62B}",
-    e400831: "\u{1F609}",
-    e400855: "\u{1F621}",
-    e400823: "\u{1F604}",
-    e400862: "\u{1F628}",
-    e400844: "\u{1F616}",
-    e400841: "\u{1F613}",
-    e400830: "\u{1F608}",
-    e400828: "\u{1F606}",
-    e400833: "\u{1F60B}",
-    e400822: "\u{1F600}",
-    e400843: "\u{1F615}",
-    e400829: "\u{1F607}",
-    e400824: "\u{1F602}",
-    e400834: "\u{1F60C}",
-    e400877: "\u{1F637}",
-    e400132: "\u{1F349}",
-    e400181: "\u{1F37A}",
-    e401067: "\u2615\uFE0F",
-    e400186: "\u{1F967}",
-    e400343: "\u{1F437}",
-    e400116: "\u{1F339}",
-    e400126: "\u{1F343}",
-    e400613: "\u{1F48B}",
-    e401236: "\u2764\uFE0F",
-    e400622: "\u{1F494}",
-    e400637: "\u{1F4A3}",
-    e400643: "\u{1F4A9}",
-    e400773: "\u{1F52A}",
-    e400102: "\u{1F31B}",
-    e401328: "\u{1F31E}",
-    e400420: "\u{1F44F}",
-    e400914: "\u{1F64C}",
-    e400408: "\u{1F44D}",
-    e400414: "\u{1F44E}",
-    e401121: "\u270B",
-    e400396: "\u{1F44B}",
-    e400384: "\u{1F449}",
-    e401115: "\u270A",
-    e400402: "\u{1F44C}",
-    e400905: "\u{1F648}",
-    e400906: "\u{1F649}",
-    e400907: "\u{1F64A}",
-    e400562: "\u{1F47B}",
-    e400932: "\u{1F64F}",
-    e400644: "\u{1F4AA}",
-    e400611: "\u{1F489}",
-    e400185: "\u{1F381}",
-    e400655: "\u{1F4B0}",
-    e400325: "\u{1F425}",
-    e400612: "\u{1F48A}",
-    e400198: "\u{1F389}",
-    e401685: "\u26A1\uFE0F",
-    e400631: "\u{1F49D}",
-    e400768: "\u{1F525}",
-    e400432: "\u{1F451}"
-  };
-  var songIdMap = /* @__PURE__ */ new Map();
-  var promises = /* @__PURE__ */ new Map();
-  var comment_default3 = {
-    _requestObj: null,
-    _requestObj2: null,
-    async getSongId({ songId, songmid }) {
-      if (songId) return songId;
-      if (songIdMap.has(songmid)) return songIdMap.get(songmid);
-      if (promises.has(songmid)) return (await promises.get(songmid)).songId;
-      const promise = musicInfo_default(songmid);
-      promises.set(promise);
-      const info = await promise;
-      songIdMap.set(songmid, info.songId);
-      promises.delete(songmid);
-      return info.songId;
-    },
-    async getComment(mInfo, page = 1, limit = 20) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      const songId = await this.getSongId(mInfo);
-      const _requestObj = httpFetch("http://c.y.qq.com/base/fcgi-bin/fcg_global_comment_h5.fcg", {
-        method: "POST",
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)"
-        },
-        form: {
-          uin: "0",
-          format: "json",
-          cid: "205360772",
-          reqtype: "2",
-          biztype: "1",
-          topid: songId,
-          cmd: "8",
-          needmusiccrit: "1",
-          pagenum: page - 1,
-          pagesize: limit
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code !== 0) throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-      const comment = body.comment;
-      const total = comment.commenttotal || (comment.commentlist ? comment.commentlist.length : 0);
-      return {
-        source: "tx",
-        comments: this.filterNewComment(comment.commentlist),
-        total,
-        page,
-        limit,
-        maxPage: Math.ceil(total / limit) || 1
-      };
-    },
-    async getHotComment(mInfo, page = 1, limit = 20) {
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      const songId = await this.getSongId(mInfo);
-      const _requestObj2 = httpFetch("https://u.y.qq.com/cgi-bin/musicu.fcg", {
-        method: "POST",
-        body: {
-          comm: {
-            cv: 4747474,
-            ct: 24,
-            format: "json",
-            inCharset: "utf-8",
-            outCharset: "utf-8",
-            notice: 0,
-            platform: "yqq.json",
-            needNewCode: 1,
-            uin: 0
-          },
-          req: {
-            module: "music.globalComment.CommentRead",
-            method: "GetHotCommentList",
-            param: {
-              BizType: 1,
-              BizId: String(songId),
-              LastCommentSeqNo: "",
-              PageSize: limit,
-              PageNum: page - 1,
-              HotType: 1,
-              WithAirborne: 0,
-              PicEnable: 1
-            }
-          }
-        },
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.0.0",
-          referer: "https://y.qq.com/",
-          origin: "https://y.qq.com"
-        }
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.code !== 0 || body.req.code !== 0) throw new Error("\u83B7\u53D6\u70ED\u95E8\u8BC4\u8BBA\u5931\u8D25");
-      const comment = body.req.data.CommentList;
-      return {
-        source: "tx",
-        comments: this.filterHotComment(comment.Comments),
-        total: comment.Total,
-        page,
-        limit,
-        maxPage: Math.ceil(comment.Total / limit) || 1
-      };
-    },
-    filterNewComment(rawList) {
-      return rawList.map((item) => {
-        let time = this.formatTime(item.time);
-        let timeStr = time ? dateFormat2(time) : null;
-        if (item.middlecommentcontent) {
-          let firstItem = item.middlecommentcontent[0];
-          firstItem.avatarurl = item.avatarurl;
-          firstItem.praisenum = item.praisenum;
-          item.avatarurl = null;
-          item.praisenum = null;
-          item.middlecommentcontent.reverse();
-        }
-        return {
-          id: `${item.rootcommentid}_${item.commentid}`,
-          rootId: item.rootcommentid,
-          text: item.rootcommentcontent ? this.replaceEmoji(item.rootcommentcontent).replace(/\\n/g, "\n") : "",
-          time: item.rootcommentid == item.commentid ? time : null,
-          timeStr: item.rootcommentid == item.commentid ? timeStr : null,
-          userName: item.rootcommentnick ? item.rootcommentnick.substring(1) : "",
-          avatar: item.avatarurl,
-          userId: item.encrypt_rootcommentuin,
-          likedCount: item.praisenum,
-          reply: item.middlecommentcontent ? item.middlecommentcontent.map((c) => {
-            return {
-              id: `sub_${item.rootcommentid}_${c.subcommentid}`,
-              text: this.replaceEmoji(c.subcommentcontent).replace(/\\n/g, "\n"),
-              time: c.subcommentid == item.commentid ? time : null,
-              timeStr: c.subcommentid == item.commentid ? timeStr : null,
-              userName: c.replynick.substring(1),
-              avatar: c.avatarurl,
-              userId: c.encrypt_replyuin,
-              likedCount: c.praisenum
-            };
-          }) : []
-        };
-      });
-    },
-    filterHotComment(rawList) {
-      return rawList.map((item) => {
-        var _a;
-        return {
-          id: `${item.SeqNo}_${item.CmId}`,
-          rootId: item.SeqNo,
-          text: item.Content ? this.replaceEmoji(item.Content).replace(/\\n/g, "\n") : "",
-          time: item.PubTime ? this.formatTime(item.PubTime) : null,
-          timeStr: item.PubTime ? dateFormat2(this.formatTime(item.PubTime)) : null,
-          userName: (_a = item.Nick) != null ? _a : "",
-          images: item.Pic ? [item.Pic] : [],
-          avatar: item.Avatar,
-          location: item.Location ? item.Location : "",
-          userId: item.EncryptUin,
-          likedCount: item.PraiseNum,
-          reply: item.SubComments ? item.SubComments.map((c) => {
-            var _a2;
-            return {
-              id: `sub_${c.SeqNo}_${c.CmId}`,
-              text: this.replaceEmoji(c.Content).replace(/\\n/g, "\n"),
-              time: c.PubTime ? this.formatTime(c.PubTime) : null,
-              timeStr: c.PubTime ? dateFormat2(this.formatTime(c.PubTime)) : null,
-              userName: (_a2 = c.Nick) != null ? _a2 : "",
-              avatar: c.Avatar,
-              images: c.Pic ? [c.Pic] : [],
-              userId: c.EncryptUin,
-              likedCount: c.PraiseNum
-            };
-          }) : []
-        };
-      });
-    },
-    replaceEmoji(msg) {
-      let rxp = /^\[em\](e\d+)\[\/em\]$/;
-      let result = msg.match(/\[em\]e\d+\[\/em\]/g);
-      if (!result) return msg;
-      result = Array.from(new Set(result));
-      for (let item of result) {
-        let code = item.replace(rxp, "$1");
-        msg = msg.replace(new RegExp(item.replace("[em]", "\\[em\\]").replace("[/em]", "\\[\\/em\\]"), "g"), emojis[code] || "");
-      }
-      return msg;
-    },
-    formatTime(time) {
-      return String(time).length < 10 ? null : parseInt(time + "000");
-    }
-  };
-
-  // vendor/musicSdk/tx/tipSearch.js
-  var tipSearch_default3 = {
-    // regExps: {
-    //   relWord: /RELWORD=(.+)/,
-    // },
-    requestObj: null,
-    tipSearch(str) {
-      this.cancelTipSearch();
-      this.requestObj = httpFetch(`https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?is_xml=0&format=json&key=${encodeURIComponent(str)}&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0`, {
-        headers: {
-          Referer: "https://y.qq.com/portal/player.html"
-        }
-      });
-      return this.requestObj.promise.then(({ statusCode, body }) => {
-        if (statusCode != 200 || body.code != 0) return Promise.reject(new Error("\u8BF7\u6C42\u5931\u8D25"));
-        return body.data;
-      });
-    },
-    handleResult(rawData) {
-      return rawData.map((info) => `${info.name} - ${info.singer}`);
-    },
-    cancelTipSearch() {
-      if (this.requestObj && this.requestObj.cancelHttp) this.requestObj.cancelHttp();
-    },
-    async search(str) {
-      return this.tipSearch(str).then((result) => this.handleResult(result.song.itemlist));
-    }
-  };
-
   // vendor/musicSdk/tx/singer.js
   var filterMusicInfoItem = (item) => {
     var _a, _b, _c, _d, _e, _f;
@@ -5405,75 +4739,13 @@ ${lrclist ? lrclist.map((l) => `[${l.time}]${l.text}
     }
   };
 
-  // vendor/musicSdk/tx/userPlaylist.js
-  var userPlaylist_default = {
-    async getList(uid, tryNum = 0) {
-      if (tryNum > 2) return Promise.reject(new Error("try max num"));
-      const APIURL = "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss";
-      const params = {
-        hostuin: uid,
-        sin: 0,
-        size: 40,
-        r: Date.now(),
-        g_tk_new_20200303: 1718906646,
-        g_tk: 1718906646,
-        loginUin: 0,
-        hostUin: 0,
-        format: "json",
-        inCharset: "utf8",
-        outCharset: "utf-8",
-        notice: 0,
-        platform: "yqq.json",
-        needNewCode: 0
-      };
-      const url = `${APIURL}?${Object.keys(params).map((k) => `${k}=${encodeURIComponent(params[k])}`).join("&")}`;
-      const requestObj = httpFetch(url, {
-        headers: {
-          host: "c.y.qq.com",
-          referer: "https://y.qq.com/"
-        }
-      });
-      const { body } = await requestObj.promise;
-      if (body.code !== 0) return this.getList(uid, ++tryNum);
-      const { hostname, disslist } = body.data;
-      const lists = [];
-      const userAvatar = `//q1.qlogo.cn/g?b=qq&s=640&nk=${uid}&t=12345`;
-      const defaultCover = "http://y.gtimg.cn/mediastyle/y/img/cover_qzone_130.jpg";
-      disslist.forEach((item) => {
-        if (item.tid) {
-          let img = item.diss_cover;
-          if (!img || img === defaultCover) img = userAvatar;
-          lists.push({
-            id: String(item.tid),
-            name: item.diss_name,
-            img,
-            total: item.song_cnt,
-            play_count: formatPlayCount(item.listen_num),
-            source: "tx"
-          });
-        }
-      });
-      return {
-        uid,
-        nickname: hostname,
-        avatar: `//q1.qlogo.cn/g?b=qq&s=100&nk=${uid}`,
-        list: lists,
-        source: "tx"
-      };
-    }
-  };
-
   // vendor/musicSdk/tx/index.js
   var tx = {
-    tipSearch: tipSearch_default3,
     leaderboard: leaderboard_default3,
     songList: songList_default3,
-    userPlaylist: userPlaylist_default,
     musicSearch: musicSearch_default3,
     extendSearch: extendSearch_default,
     extendDetail: extendDetail_default,
-    hotSearch: hotSearch_default3,
-    comment: comment_default3,
     getMusicUrl(songInfo, type) {
       return apis("tx").getMusicUrl(songInfo, type);
     },
@@ -6013,7 +5285,7 @@ ${result.lyric}`;
   };
 
   // vendor/musicSdk/wy/musicInfo.js
-  var musicInfo_default2 = (songmid) => {
+  var musicInfo_default = (songmid) => {
     const requestObj = httpFetch("https://music.163.com/weapi/v3/song/detail", {
       method: "post",
       headers: {
@@ -6636,261 +5908,13 @@ ${result.lyric}`;
     }
   };
 
-  // vendor/musicSdk/wy/hotSearch.js
-  var hotSearch_default4 = {
-    _requestObj: null,
-    async getList(retryNum = 0) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      if (retryNum > 2) return Promise.reject(new Error("try max num"));
-      const _requestObj = eapiRequest2("/api/search/chart/detail", {
-        id: "HOT_SEARCH_SONG#@#"
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code !== 200) throw new Error("\u83B7\u53D6\u70ED\u641C\u8BCD\u5931\u8D25");
-      return { source: "wy", list: this.filterList(body.data.itemList) };
-    },
-    filterList(rawList) {
-      return rawList.map((item) => item.searchWord);
-    }
-  };
-
-  // vendor/musicSdk/wy/comment.js
-  var emojis2 = [
-    ["\u5927\u7B11", "\u{1F603}"],
-    ["\u53EF\u7231", "\u{1F60A}"],
-    ["\u61A8\u7B11", "\u263A\uFE0F"],
-    ["\u8272", "\u{1F60D}"],
-    ["\u4EB2\u4EB2", "\u{1F619}"],
-    ["\u60CA\u6050", "\u{1F631}"],
-    ["\u6D41\u6CEA", "\u{1F62D}"],
-    ["\u4EB2", "\u{1F61A}"],
-    ["\u5446", "\u{1F633}"],
-    ["\u54C0\u4F24", "\u{1F614}"],
-    ["\u5472\u7259", "\u{1F601}"],
-    ["\u5410\u820C", "\u{1F61D}"],
-    ["\u6487\u5634", "\u{1F612}"],
-    ["\u6012", "\u{1F621}"],
-    ["\u5978\u7B11", "\u{1F60F}"],
-    ["\u6C57", "\u{1F613}"],
-    ["\u75DB\u82E6", "\u{1F616}"],
-    ["\u60F6\u6050", "\u{1F630}"],
-    ["\u751F\u75C5", "\u{1F628}"],
-    ["\u53E3\u7F69", "\u{1F637}"],
-    ["\u5927\u54ED", "\u{1F602}"],
-    ["\u6655", "\u{1F635}"],
-    ["\u53D1\u6012", "\u{1F47F}"],
-    ["\u5F00\u5FC3", "\u{1F604}"],
-    ["\u9B3C\u8138", "\u{1F61C}"],
-    ["\u76B1\u7709", "\u{1F61E}"],
-    ["\u6D41\u611F", "\u{1F622}"],
-    ["\u7231\u5FC3", "\u2764\uFE0F"],
-    ["\u5FC3\u788E", "\u{1F494}"],
-    ["\u949F\u60C5", "\u{1F498}"],
-    ["\u661F\u661F", "\u2B50\uFE0F"],
-    ["\u751F\u6C14", "\u{1F4A2}"],
-    ["\u4FBF\u4FBF", "\u{1F4A9}"],
-    ["\u5F3A", "\u{1F44D}"],
-    ["\u5F31", "\u{1F44E}"],
-    ["\u62DC", "\u{1F64F}"],
-    ["\u7275\u624B", "\u{1F46B}"],
-    ["\u8DF3\u821E", "\u{1F46F}\u200D\u2640\uFE0F"],
-    ["\u7981\u6B62", "\u{1F645}\u200D\u2640\uFE0F"],
-    ["\u8FD9\u8FB9", "\u{1F481}\u200D\u2640\uFE0F"],
-    ["\u7231\u610F", "\u{1F48F}"],
-    ["\u793A\u7231", "\u{1F469}\u200D\u2764\uFE0F\u200D\u{1F468}"],
-    ["\u5634\u5507", "\u{1F444}"],
-    ["\u72D7", "\u{1F436}"],
-    ["\u732B", "\u{1F431}"],
-    ["\u732A", "\u{1F437}"],
-    ["\u5154\u5B50", "\u{1F430}"],
-    ["\u5C0F\u9E21", "\u{1F424}"],
-    ["\u516C\u9E21", "\u{1F414}"],
-    ["\u5E7D\u7075", "\u{1F47B}"],
-    ["\u5723\u8BDE", "\u{1F385}"],
-    ["\u5916\u661F", "\u{1F47D}"],
-    ["\u94BB\u77F3", "\u{1F48E}"],
-    ["\u793C\u7269", "\u{1F381}"],
-    ["\u7537\u5B69", "\u{1F466}"],
-    ["\u5973\u5B69", "\u{1F467}"],
-    ["\u86CB\u7CD5", "\u{1F382}"],
-    ["18", "\u{1F51E}"],
-    ["\u5708", "\u2B55"],
-    ["\u53C9", "\u274C"]
-  ];
-  var applyEmoji = (text) => {
-    for (const e of emojis2) text = text.replaceAll(`[${e[0]}]`, e[1]);
-    return text;
-  };
-  var cursorTools = {
-    cache: {},
-    getCursor(id, page, limit) {
-      let cacheData = this.cache[id];
-      if (!cacheData) cacheData = this.cache[id] = {};
-      let orderType;
-      let cursor;
-      let offset;
-      if (page == 1) {
-        cacheData.page = 1;
-        cursor = cacheData.cursor = cacheData.prevCursor = Date.now();
-        orderType = 1;
-        offset = 0;
-      } else if (cacheData.page) {
-        cursor = cacheData.cursor;
-        if (page > cacheData.page) {
-          orderType = 1;
-          offset = (page - cacheData.page - 1) * limit;
-        } else if (page < cacheData.page) {
-          orderType = 0;
-          offset = (cacheData.page - page - 1) * limit;
-        } else {
-          cursor = cacheData.cursor = cacheData.prevCursor;
-          offset = cacheData.offset;
-          orderType = cacheData.orderType;
-        }
-      }
-      return {
-        orderType,
-        cursor,
-        offset
-      };
-    },
-    setCursor(id, cursor, orderType, offset, page) {
-      let cacheData = this.cache[id];
-      if (!cacheData) cacheData = this.cache[id] = {};
-      cacheData.prevCursor = cacheData.cursor;
-      cacheData.cursor = cursor;
-      cacheData.orderType = orderType;
-      cacheData.offset = offset;
-      cacheData.page = page;
-    }
-  };
-  var comment_default4 = {
-    _requestObj: null,
-    _requestObj2: null,
-    async getComment({ songmid }, page = 1, limit = 20) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      const id = "R_SO_4_" + songmid;
-      const cursorInfo = cursorTools.getCursor(songmid, page, limit);
-      const _requestObj = httpFetch("https://music.163.com/weapi/comment/resource/comments/get", {
-        method: "post",
-        headers: {
-          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.90 Safari/537.36",
-          origin: "https://music.163.com",
-          Refere: "http://music.163.com/"
-        },
-        form: weapi({
-          cursor: cursorInfo.cursor,
-          offset: cursorInfo.offset,
-          orderType: cursorInfo.orderType,
-          pageNo: page,
-          pageSize: limit,
-          rid: id,
-          threadId: id
-        })
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code !== 200) throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-      cursorTools.setCursor(songmid, body.data.cursor, cursorInfo.orderType, cursorInfo.offset, page);
-      return { source: "wy", comments: this.filterComment(body.data.comments), total: body.data.totalCount, page, limit, maxPage: Math.ceil(body.data.totalCount / limit) || 1 };
-    },
-    async getHotComment({ songmid }, page = 1, limit = 100) {
-      var _a;
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      const id = "R_SO_4_" + songmid;
-      page = page - 1;
-      const _requestObj2 = httpFetch(`https://music.163.com/weapi/v1/resource/hotcomments/${id}`, {
-        method: "post",
-        headers: {
-          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/60.0.3112.90 Safari/537.36",
-          origin: "https://music.163.com",
-          Refere: "http://music.163.com/"
-        },
-        form: weapi({
-          rid: id,
-          limit,
-          offset: limit * page,
-          beforeTime: Date.now().toString()
-        })
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.code !== 200) throw new Error("\u83B7\u53D6\u70ED\u95E8\u8BC4\u8BBA\u5931\u8D25");
-      const total = (_a = body.total) != null ? _a : 0;
-      return { source: "wy", comments: this.filterComment(body.hotComments), total, page, limit, maxPage: Math.ceil(total / limit) || 1 };
-    },
-    filterComment(rawList) {
-      return rawList.map((item) => {
-        var _a, _b;
-        let data = {
-          id: item.commentId,
-          text: item.content ? applyEmoji(item.content) : "",
-          time: item.time ? item.time : "",
-          timeStr: item.time ? dateFormat2(item.time) : "",
-          location: (_a = item.ipLocation) == null ? void 0 : _a.location,
-          userName: item.user.nickname,
-          avatar: item.user.avatarUrl,
-          userId: item.user.userId,
-          likedCount: item.likedCount,
-          reply: []
-        };
-        let replyData = item.beReplied && item.beReplied[0];
-        return replyData ? {
-          id: item.commentId,
-          rootId: replyData.beRepliedCommentId,
-          text: replyData.content ? applyEmoji(replyData.content) : "",
-          time: item.time,
-          timeStr: null,
-          location: (_b = replyData.ipLocation) == null ? void 0 : _b.location,
-          userName: replyData.user.nickname,
-          avatar: replyData.user.avatarUrl,
-          userId: replyData.user.userId,
-          likedCount: null,
-          reply: [data]
-        } : data;
-      });
-    }
-  };
-
-  // vendor/musicSdk/wy/tipSearch.js
-  var tipSearch_default4 = {
-    requestObj: null,
-    cancelTipSearch() {
-      if (this.requestObj && this.requestObj.cancelHttp) this.requestObj.cancelHttp();
-    },
-    tipSearchBySong(str) {
-      this.cancelTipSearch();
-      this.requestObj = httpFetch("https://music.163.com/weapi/search/suggest/web", {
-        method: "POST",
-        headers: {
-          referer: "https://music.163.com/",
-          origin: "https://music.163.com/"
-        },
-        form: weapi({
-          s: str
-        })
-      });
-      return this.requestObj.promise.then(({ statusCode, body }) => {
-        if (statusCode != 200 || body.code != 200) return Promise.reject(new Error("\u8BF7\u6C42\u5931\u8D25"));
-        return body.result.songs;
-      });
-    },
-    handleResult(rawData) {
-      return rawData.map((info) => `${info.name} - ${formatSingerName(info.artists, "name")}`);
-    },
-    async search(str) {
-      return this.tipSearchBySong(str).then((result) => this.handleResult(result));
-    }
-  };
-
   // vendor/musicSdk/wy/index.js
   var wy = {
-    tipSearch: tipSearch_default4,
     leaderboard: leaderboard_default4,
     musicSearch: musicSearch_default4,
     extendSearch: extendSearch_default2,
     extendDetail: extendDetail_default2,
     songList: songList_default4,
-    hotSearch: hotSearch_default4,
-    comment: comment_default4,
     getMusicUrl(songInfo, type) {
       return apis("wy").getMusicUrl(songInfo, type);
     },
@@ -6898,7 +5922,7 @@ ${result.lyric}`;
       return lyric_default4(songInfo.songmid);
     },
     getPic(songInfo) {
-      const requestObj = musicInfo_default2(songInfo.songmid);
+      const requestObj = musicInfo_default(songInfo.songmid);
       return requestObj.promise.then((info) => info.al.picUrl);
     },
     getMusicDetailPageUrl(songInfo) {
@@ -7981,129 +7005,6 @@ ${result.lyric}`;
     }
   };
 
-  // vendor/musicSdk/mg/hotSearch.js
-  var hotSearch_default5 = {
-    _requestObj: null,
-    async getList(retryNum = 0) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      if (retryNum > 2) return Promise.reject(new Error("try max num"));
-      const _requestObj = httpFetch("http://jadeite.migu.cn:7090/music_search/v3/search/hotword");
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code !== "000000") throw new Error("\u83B7\u53D6\u70ED\u641C\u8BCD\u5931\u8D25");
-      return { source: "mg", list: this.filterList(body.data.hotwords[0].hotwordList) };
-    },
-    filterList(rawList) {
-      return rawList.filter((item) => item.resourceType == "song").map((item) => item.word);
-    }
-  };
-
-  // vendor/musicSdk/mg/comment.js
-  var comment_default5 = {
-    _requestObj: null,
-    _requestObj2: null,
-    _requestObj3: null,
-    lastCommentIds: /* @__PURE__ */ new Map(),
-    async getComment(musicInfo, page = 1, limit = 20) {
-      if (this._requestObj) this._requestObj.cancelHttp();
-      if (!musicInfo.songId) {
-        let id = await songId_default(musicInfo);
-        if (!id) throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-        musicInfo.songId = id;
-      }
-      if (page === 1) this.lastCommentIds.clear();
-      const lastCommentId = this.lastCommentIds.get(String(page)) || "";
-      if (!lastCommentId && page > 1) throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-      const _requestObj = httpFetch(`https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0?pageSize=${limit}&queryType=1&resourceId=${musicInfo.songId}&resourceType=2&commentId=${lastCommentId}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
-          // Referer: 'https://music.migu.cn',
-        }
-      });
-      const { body, statusCode } = await _requestObj.promise;
-      if (statusCode != 200 || body.code !== "000000") throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-      const total = parseInt(body.data.commentNums);
-      const list = this.filterComment(body.data.comments);
-      this.lastCommentIds.set(String(page + 1), list.length ? list[list.length - 1].id : "");
-      return { source: "mg", comments: list, total, page, limit, maxPage: Math.ceil(total / limit) || 1 };
-    },
-    async getHotComment(musicInfo, page = 1, limit = 20) {
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      if (!musicInfo.songId) {
-        let id = await songId_default(musicInfo);
-        if (!id) throw new Error("\u83B7\u53D6\u8BC4\u8BBA\u5931\u8D25");
-        musicInfo.songId = id;
-      }
-      const _requestObj2 = httpFetch(`https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/v1.0?pageSize=${limit}&queryType=2&resourceId=${musicInfo.songId}&resourceType=2&hotCommentStart=${(page - 1) * limit}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
-          // Referer: 'https://music.migu.cn',
-        }
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.code !== "000000") throw new Error("\u83B7\u53D6\u70ED\u95E8\u8BC4\u8BBA\u5931\u8D25");
-      const total = parseInt(body.data.cfgHotCount);
-      return { source: "mg", comments: this.filterComment(body.data.hotComments), total, page, limit, maxPage: Math.ceil(total / limit) || 1 };
-    },
-    async getReplyComment(musicInfo, replyId, page = 1, limit = 10) {
-      if (this._requestObj2) this._requestObj2.cancelHttp();
-      const _requestObj2 = httpFetch(`https://app.c.nf.migu.cn/MIGUM3.0/user/comment/stack/${replyId}/v1.0?pageSize=${limit}&queryType=2&resourceId=${musicInfo.songId}&resourceType=2&start=${(page - 1) * limit}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
-        }
-      });
-      const { body, statusCode } = await _requestObj2.promise;
-      if (statusCode != 200 || body.code !== "000000") throw new Error("\u83B7\u53D6\u56DE\u590D\u8BC4\u8BBA\u5931\u8D25");
-      const total = parseInt(body.data.replyTotalCount);
-      return { source: "mg", comments: this.filterComment(body.data.mainCommentItem.replyComments), total, page, limit, maxPage: Math.ceil(total / limit) || 1 };
-    },
-    filterComment(rawList) {
-      return rawList.map((item) => ({
-        id: item.commentId,
-        text: item.commentInfo,
-        time: item.commentTime,
-        timeStr: dateFormat2(new Date(item.commentTime).getTime()),
-        userName: item.user.nickName,
-        avatar: item.user.middleIcon || item.user.bigIcon || item.user.smallIcon,
-        userId: item.user.userId,
-        likedCount: item.opNumItem.thumbNum,
-        replyNum: item.replyTotalCount,
-        reply: item.replyComments.map((c) => ({
-          id: c.replyId,
-          text: c.replyInfo,
-          time: c.replyTime,
-          timeStr: dateFormat2(new Date(c.replyTime).getTime()),
-          userName: c.user.nickName,
-          avatar: c.user.middleIcon || c.user.bigIcon || c.user.smallIcon,
-          userId: c.user.userId,
-          likedCount: null,
-          replyNum: null
-        }))
-      }));
-    }
-  };
-
-  // vendor/musicSdk/mg/tipSearch.js
-  var tipSearch_default5 = {
-    requestObj: null,
-    cancelTipSearch() {
-      if (this.requestObj && this.requestObj.cancelHttp) this.requestObj.cancelHttp();
-    },
-    tipSearchBySong(str) {
-      this.cancelTipSearch();
-      this.requestObj = createHttpFetch2(`https://app.u.nf.migu.cn/pc/resource/content/tone_search_suggest/v1.0?text=${encodeURIComponent(str)}`);
-      return this.requestObj.then((data) => {
-        return data.songList || [];
-      }).catch(() => []);
-    },
-    handleResult(rawData) {
-      if (!rawData) return [];
-      return rawData.map((info) => info.songName);
-    },
-    async search(str) {
-      return this.tipSearchBySong(str).then((result) => this.handleResult(result));
-    }
-  };
-
   // vendor/musicSdk/mg/album.js
   var album_default3 = {
     /**
@@ -8152,13 +7053,10 @@ ${result.lyric}`;
 
   // vendor/musicSdk/mg/index.js
   var mg = {
-    tipSearch: tipSearch_default5,
     songList: songList_default5,
     musicSearch: musicSearch_default5,
     leaderboard: leaderboard_default5,
     album: album_default3,
-    hotSearch: hotSearch_default5,
-    comment: comment_default5,
     getMusicUrl(songInfo, type) {
       return apis("mg").getMusicUrl(songInfo, type);
     },
@@ -8173,6 +7071,68 @@ ${result.lyric}`;
     }
   };
   var mg_default = mg;
+
+  // vendor/musicSdk/tx/musicInfo.js
+  var getSinger = (singers) => {
+    let arr = [];
+    singers.forEach((singer) => {
+      arr.push(singer.name);
+    });
+    return arr.join("\u3001");
+  };
+  var musicInfo_default2 = (songmid) => {
+    const requestObj = httpFetch("https://u.y.qq.com/cgi-bin/musicu.fcg", {
+      method: "post",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)"
+      },
+      body: {
+        comm: {
+          ct: "19",
+          cv: "1859",
+          uin: "0"
+        },
+        req: {
+          module: "music.pf_song_detail_svr",
+          method: "get_song_detail_yqq",
+          param: {
+            song_type: 0,
+            song_mid: songmid
+          }
+        }
+      }
+    });
+    return requestObj.promise.then(({ body }) => {
+      var _a, _b, _c, _d;
+      if (body.code != 0 || body.req.code != 0) return Promise.reject(new Error("\u83B7\u53D6\u6B4C\u66F2\u4FE1\u606F\u5931\u8D25"));
+      const item = body.req.data.track_info;
+      if (!((_a = item.file) == null ? void 0 : _a.media_mid)) return null;
+      const file = item.file;
+      const { types, _types } = buildQualitys(file);
+      let albumId = "";
+      let albumName = "";
+      if (item.album) {
+        albumName = item.album.name;
+        albumId = item.album.mid;
+      }
+      return {
+        singer: getSinger(item.singer),
+        name: item.title,
+        albumName,
+        albumId,
+        source: "tx",
+        interval: formatPlayTime(item.interval),
+        songId: item.id,
+        albumMid: (_c = (_b = item.album) == null ? void 0 : _b.mid) != null ? _c : "",
+        strMediaMid: item.file.media_mid,
+        songmid: item.mid,
+        img: albumId === "" || albumId === "\u7A7A" ? ((_d = item.singer) == null ? void 0 : _d.length) ? `https://y.gtimg.cn/music/photo_new/T001R500x500M000${item.singer[0].mid}.jpg` : "" : `https://y.gtimg.cn/music/photo_new/T002R500x500M000${albumId}.jpg`,
+        types,
+        _types,
+        typeUrl: {}
+      };
+    });
+  };
 
   // sdk-entry.js
   var sdk = { kw: kw_default, kg: kg_default, tx: tx_default, wy: wy_default, mg: mg_default };
@@ -8203,7 +7163,7 @@ ${result.lyric}`;
         return r && r.list && r.list[0] || null;
       }
       case "tx":
-        return await musicInfo_default(key) || null;
+        return await musicInfo_default2(key) || null;
       case "kg": {
         const r = await getMusicInfos([{ hash: key }]);
         return r && r[0] || null;

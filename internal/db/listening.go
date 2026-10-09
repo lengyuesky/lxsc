@@ -210,14 +210,6 @@ func (d *DB) listeningStatistics(ctx context.Context, userID int64, days int, at
 		from += ` AND s.user_id=?`
 		args = append(args, userID)
 	}
-	err = tx.QueryRowContext(ctx, `SELECT `+listeningSums+`,COUNT(DISTINCT s.track_id),COUNT(DISTINCT d.day)`+from, args...).Scan(&out.WebMS, &out.ClientMS, &out.Plays, &out.UnknownDuration, &out.Tracks, &out.ActiveDays)
-	if err != nil {
-		return out, err
-	}
-	out.TotalMS = out.WebMS + out.ClientMS
-	if out.CountedDays > 0 {
-		out.AverageMS = out.TotalMS / int64(out.CountedDays)
-	}
 	rows, err := tx.QueryContext(ctx, `SELECT d.day,`+listeningSums+from+` GROUP BY d.day ORDER BY d.day`, args...)
 	if err != nil {
 		return out, err
@@ -229,6 +221,7 @@ func (d *DB) listeningStatistics(ctx context.Context, userID int64, days int, at
 			return out, err
 		}
 		v.TotalMS = v.WebMS + v.ClientMS
+		out.ActiveDays++
 		if i, ok := dailyIndex[v.Day]; ok {
 			out.Daily[i] = v
 		}
@@ -243,7 +236,17 @@ func (d *DB) listeningStatistics(ctx context.Context, userID int64, days int, at
 		if user {
 			fields, group = `CAST(u.id AS TEXT),u.name,''`, `u.id`
 		}
-		rows, e := tx.QueryContext(ctx, `SELECT `+fields+`,`+listeningSums+from+` GROUP BY `+group+` ORDER BY SUM(d.milliseconds) DESC,COUNT(DISTINCT s.id) DESC,`+group+` LIMIT 10`, args...)
+		query := `SELECT ` + fields + `,` + listeningSums + from + ` GROUP BY ` + group + ` ORDER BY SUM(d.milliseconds) DESC,COUNT(DISTINCT s.id) DESC,` + group + ` LIMIT 10`
+		if !user {
+			// 每个会话只属于一首歌，按歌曲去重后的次数可安全相加；跨日会话仍只计一次。
+			// 窗口汇总在 LIMIT 前计算，复用排行聚合，避免再次扫描全部明细计算总计。
+			query = `WITH ranked(id,name,singer,web_ms,client_ms,plays,unknown_duration) AS (
+SELECT ` + fields + `,` + listeningSums + from + ` GROUP BY ` + group + `)
+SELECT id,name,singer,web_ms,client_ms,plays,unknown_duration,
+SUM(web_ms) OVER(),SUM(client_ms) OVER(),SUM(plays) OVER(),SUM(unknown_duration) OVER(),COUNT(*) OVER()
+FROM ranked ORDER BY web_ms+client_ms DESC,plays DESC,id LIMIT 10`
+		}
+		rows, e := tx.QueryContext(ctx, query, args...)
 		if e != nil {
 			return nil, e
 		}
@@ -251,7 +254,11 @@ func (d *DB) listeningStatistics(ctx context.Context, userID int64, days int, at
 		ranks := []ListeningRank{}
 		for rows.Next() {
 			var v ListeningRank
-			if e = rows.Scan(&v.ID, &v.Name, &v.Singer, &v.WebMS, &v.ClientMS, &v.Plays, &v.UnknownDuration); e != nil {
+			dest := []any{&v.ID, &v.Name, &v.Singer, &v.WebMS, &v.ClientMS, &v.Plays, &v.UnknownDuration}
+			if !user {
+				dest = append(dest, &out.WebMS, &out.ClientMS, &out.Plays, &out.UnknownDuration, &out.Tracks)
+			}
+			if e = rows.Scan(dest...); e != nil {
 				return nil, e
 			}
 			v.TotalMS = v.WebMS + v.ClientMS
@@ -261,6 +268,10 @@ func (d *DB) listeningStatistics(ctx context.Context, userID int64, days int, at
 	}
 	if out.TopTracks, err = readRank(false); err != nil {
 		return out, err
+	}
+	out.TotalMS = out.WebMS + out.ClientMS
+	if out.CountedDays > 0 {
+		out.AverageMS = out.TotalMS / int64(out.CountedDays)
 	}
 	if userID == 0 {
 		if out.TopUsers, err = readRank(true); err != nil {
