@@ -38,6 +38,7 @@ type Event struct {
 	Quality       string    `json:"quality,omitempty"`
 	Mode          string    `json:"mode,omitempty"`
 	Cached        bool      `json:"cached"`
+	CoverOrigin   string    `json:"coverOrigin,omitempty"`
 	Status        int       `json:"status"`
 	Error         string    `json:"error"`
 	ElapsedMS     int64     `json:"elapsedMs"`
@@ -137,6 +138,7 @@ func (b *Events) Add(e Event) {
 	e.Method = oneOf(e.Method, "GET", "POST", "HEAD")
 	e.Client = oneOf(e.Client, "amcfy", "stream_music", "other", "unknown")
 	e.Format = oneOf(e.Format, "json", "xml", "jsonp", "binary")
+	e.CoverOrigin = oneOf(e.CoverOrigin, "original", "custom", "stale", "placeholder", "board", "redirect")
 	e.Result = oneOf(e.Result, "ok", "failed", "empty", "unavailable")
 	if !ValidBoardID(e.BoardID) {
 		e.BoardID = ""
@@ -171,7 +173,7 @@ func (b *Events) Add(e Event) {
 	e.Platform = Platform(e.Platform)
 	e.Quality = Quality(e.Quality)
 	e.Mode = Mode(e.Mode)
-	e.Error = oneOf(e.Error, "none", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error", "encode_error", "write_error")
+	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error", "encode_error", "write_error")
 	if e.Error == "" {
 		e.Error = "upstream_error"
 	}

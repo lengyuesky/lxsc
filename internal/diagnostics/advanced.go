@@ -39,6 +39,8 @@ type ProtocolResult struct {
 	ProtocolCode   *int              `json:"protocolCode,omitempty"`
 	Count          *int              `json:"count,omitempty"`
 	Lines          *int              `json:"lines,omitempty"`
+	CoverOrigin    string            `json:"coverOrigin,omitempty"`
+	Error          string            `json:"error,omitempty"`
 }
 
 type ProtocolProbeFunc func(context.Context, *db.User, ProtocolRequest) (ProtocolResult, error)
@@ -64,7 +66,11 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 		runtime.ReadMemStats(&memory)
 		result = map[string]any{"version": s.Version, "goVersion": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "cpus": runtime.NumCPU(), "goroutines": runtime.NumGoroutine(), "heapBytes": memory.Alloc, "sysBytes": memory.Sys, "uptimeSeconds": int64(time.Since(s.StartAt).Seconds()), "configuration": s.RuntimeInfo}
 	case "performance":
-		result = map[string]any{"database": s.DB.ConnectionStats(), "listening": s.DB.ListeningQueries.Snapshot(), "listeningWorkload": s.DB.ListeningWorkload(), "music": s.Catalog.Performance()}
+		performance := map[string]any{"database": s.DB.ConnectionStats(), "listening": s.DB.ListeningQueries.Snapshot(), "listeningWorkload": s.DB.ListeningWorkload(), "music": s.Catalog.Performance()}
+		if s.CoverPerformance != nil {
+			performance["covers"] = s.CoverPerformance()
+		}
+		result = performance
 	case "sources":
 		sources, err := s.DB.ListSources(r.Context())
 		if err != nil {
@@ -288,6 +294,10 @@ func (s *Server) protocolProbe(w http.ResponseWriter, r *http.Request, playback 
 	}
 	event := Event{Stage: stage, Endpoint: request.Endpoint, Method: request.Method, TrackID: request.Params["id"], Status: result.Status, Result: "ok", Error: "none", ElapsedMS: time.Since(started).Milliseconds()}
 	event.Format, event.ProtocolCode, event.Count, event.Lines = result.Format, result.ProtocolCode, result.Count, result.Lines
+	event.CoverOrigin, event.Cached = result.CoverOrigin, result.Cached
+	if result.Error != "" {
+		event.Error = result.Error
+	}
 	if result.ProtocolStatus != "" {
 		event.Result = result.ProtocolStatus
 	}

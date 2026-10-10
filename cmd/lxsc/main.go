@@ -177,6 +177,7 @@ func run(cfgPath string) error {
 	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
 	debugSrv.ProtocolProbe = sub.ProbeProtocol
 	debugSrv.ProtocolEndpoints = sub.ProbeEndpoints()
+	debugSrv.CoverPerformance = sub.CoverPerformance
 	warmCtx, stopWarmup := context.WithCancel(ctx)
 	defer stopWarmup()
 	// 启动后预热可见榜单快照，客户端第一次点开榜单直接命中，不再现场分页。

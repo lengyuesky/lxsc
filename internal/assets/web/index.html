@@ -232,7 +232,7 @@
           <p class="muted hint">默认使用公共 LrcAPI，原有来源失败或没有内容时才调用。可改为自己的接口，留空关闭对应回退。</p>
           <div class="form-grid">
             <label>歌词接口<input name="customLyricsURL" type="url" maxlength="2048" placeholder="https://api.lrc.cx/lyrics" autocomplete="off" spellcheck="false"><small>原歌词来源失败后使用；支持 LRC 文本及包含歌词的 JSON。</small></label>
-            <label>封面接口<input name="customCoverURL" type="url" maxlength="2048" placeholder="https://api.lrc.cx/cover" autocomplete="off" spellcheck="false"><small>启用后，歌曲、专辑和歌手封面由服务器加载，原图失败时自动尝试备用接口。支持图片、图片重定向及图片地址 JSON。</small></label>
+            <label>封面接口<input name="customCoverURL" type="url" maxlength="2048" placeholder="https://api.lrc.cx/cover" autocomplete="off" spellcheck="false"><small>原图失败时尝试备用接口，支持图片、重定向及图片地址 JSON。繁忙或图源暂时不可用时显示旧图或临时默认封面。</small></label>
           </div>
           <details><summary>接口参数与说明</summary><p class="muted hint">仅填地址时，自动传入 title（歌名）、artist（歌手）、album（专辑）。也可在地址的路径或查询参数中使用 {title}、{artist}、{album}、{id}（平台歌曲 ID）、{source}、{trackId}、{duration}（秒）；参数会自动编码。请求仅支持公网 HTTP(S) 的标准端口。</p><p class="muted hint">备用接口会接收用于匹配的歌曲信息。公共服务的可用性与匹配结果由服务提供方决定。<a href="https://docs.lrc.cx/docs/QuickStart" target="_blank" rel="noopener noreferrer">查看 LrcAPI 文档</a></p></details>
         </div>

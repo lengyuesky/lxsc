@@ -283,13 +283,12 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 }
 
 func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
+	w, finishCover := captureCoverResponse(w, r)
+	defer finishCover()
 	customURL := s.Settings.Get().CustomCoverURL
-	if customURL != "" {
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		defer cancel()
-		r = r.WithContext(ctx)
-	}
-	rc := s.newReqCtx(r)
+	ctx, cancel := context.WithTimeout(r.Context(), coverRequestTimeout)
+	defer cancel()
+	rc := s.newReqCtx(r.WithContext(ctx))
 	id := param(r, "id")
 	var url string
 	var fields map[string]string
@@ -355,7 +354,7 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 			// 列表和详情都公布榜单 ID 作为 coverArt。没有平台独立封面时
 			// 返回本站内置榜单图，不为一张封面扫描歌曲或依赖外部图源。
 			if music.IsPlatform(p.Source) && strings.TrimSpace(p.Key) != "" && p.Key != "0" {
-				recordMediaResponse(r, http.StatusOK)
+				recordCoverOutcome(r, "board", false, nil)
 				serveBoardCover(w, r)
 				return
 			}
@@ -369,7 +368,7 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 	} else if strings.HasPrefix(id, "http") {
 		url = id
 	}
-	if fields == nil && customURL != "" && ok {
+	if fields == nil && ok {
 		// 专辑／歌手已有的摘要也可用于回退，不为封面扫描完整歌曲列表。
 		switch p.Kind {
 		case music.KindOnlineAlbum, music.KindAlbum:
@@ -397,17 +396,22 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 		url = "https://" + strings.TrimPrefix(url, "http://")
 	}
 	if customURL != "" && fields != nil {
-		s.coverWithFallback(w, r, url, customURL, fields)
+		s.serveCover(ctx, w, r, url, customURL, fields)
 		return
 	}
 	if url == "" {
+		if fields != nil {
+			s.serveCover(ctx, w, r, "", "", fields)
+			return
+		}
 		http.Error(w, "cover not found", http.StatusNotFound)
 		return
 	}
 	if s.Settings.Get().CoverMode == "proxy" {
-		s.proxyCover(w, r, url)
+		s.serveCover(ctx, w, r, url, "", fields)
 		return
 	}
+	recordCoverOutcome(r, "redirect", false, nil)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.Redirect(w, r, url, http.StatusFound)
 }

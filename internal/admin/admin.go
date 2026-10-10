@@ -177,7 +177,11 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) performance(w http.ResponseWriter, r *http.Request) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	writeJSON(w, http.StatusOK, map[string]any{"database": s.DB.ConnectionStats(), "listening": s.DB.ListeningQueries.Snapshot(), "listeningWorkload": s.DB.ListeningWorkload(), "music": s.Catalog.Performance(), "heapBytes": ms.Alloc, "sysBytes": ms.Sys, "goroutines": runtime.NumGoroutine()})
+	performance := map[string]any{"database": s.DB.ConnectionStats(), "listening": s.DB.ListeningQueries.Snapshot(), "listeningWorkload": s.DB.ListeningWorkload(), "music": s.Catalog.Performance(), "heapBytes": ms.Alloc, "sysBytes": ms.Sys, "goroutines": runtime.NumGoroutine()}
+	if s.Debug != nil && s.Debug.CoverPerformance != nil {
+		performance["covers"] = s.Debug.CoverPerformance()
+	}
+	writeJSON(w, http.StatusOK, performance)
 }
 
 // ---------- 设置 ----------

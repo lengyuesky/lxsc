@@ -38,6 +38,7 @@ type Server struct {
 	RuntimeInfo       map[string]any
 	ProtocolProbe     ProtocolProbeFunc
 	ProtocolEndpoints []string
+	CoverPerformance  func() any
 	client            *http.Client
 	concurrent        chan struct{}
 	probes            chan struct{}

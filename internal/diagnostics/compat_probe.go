@@ -22,9 +22,15 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"maximumScopes":      MaximumScopes(),
 		"responseDelivery": map[string]string{
 			"requestId":     "真实客户端请求由服务端独立生成，与响应 X-Request-ID 对应",
-			"bytesWritten":  "协议正文被 ResponseWriter 接受的实际字节数，写入失败、短写或网络刷新失败时 result=failed、error=write_error；刷新失败时仍可能等于 responseBytes",
-			"responseBytes": "预期协议正文长度；与 bytesWritten 相等也不证明客户端接收或解析成功，媒体正文不适用",
+			"bytesWritten":  "协议或封面正文被 ResponseWriter 接受的实际字节数，写入失败、短写或网络刷新失败时 result=failed、error=write_error；刷新失败时仍可能等于 responseBytes",
+			"responseBytes": "预期协议或封面正文长度；与 bytesWritten 相等也不证明客户端接收或解析成功，音频正文不适用",
 			"encode_error":  "正文序列化失败，返回 HTTP 500 与固定协议错误",
+		},
+		"coverResponse": map[string]any{
+			"endpoint":    "getCoverArt",
+			"origins":     []string{"original", "custom", "stale", "placeholder", "board", "redirect"},
+			"degraded":    "旧图或默认封面仍返回有效图片与 HTTP 200，但 result=unavailable，并保留 busy、timeout 或上游错误分类；不能当成真实封面恢复",
+			"performance": "inspect/performance 的 covers 包含独立的下载排队、传输、字节缓存、共享请求及默认封面计数",
 		},
 		"authentication": "Authorization: Bearer <temporary-debug-token>",
 		"read":           []string{"GET /api/debug/status", "GET /api/debug/events", "GET /api/debug/capabilities"},

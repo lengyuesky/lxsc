@@ -168,15 +168,19 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 
 ### 观察真实客户端请求
 
-让用户先在箭头音乐中打开问题榜单、重试播放或进入歌曲的歌词页，然后读取 `/api/debug/events`。`stage=client_response` 覆盖 `getPlaylists`、`getPlaylist`、`getMusicDirectory`、`getLyrics`、`getLyricsBySongId`、`getSong`、`getAlbum`、`stream` 和 `download`，包括认证失败的协议响应。
+让用户先在箭头音乐中打开问题榜单、重试播放或进入歌曲的歌词页，然后读取 `/api/debug/events`。`stage=client_response` 覆盖 `getPlaylists`、`getPlaylist`、`getMusicDirectory`、`getLyrics`、`getLyricsBySongId`、`getSong`、`getAlbum`、`getCoverArt`、`stream` 和 `download`，包括认证失败的协议响应。
 
 - `client`：根据客户端声明的 `c` 参数归类为 `amcfy`、`stream_music`、`other`、`unknown`；仅用于诊断，不作为可信身份。原始客户端字符串不输出。
 - `endpoint`、`method`、`format`：固定枚举的接口名、`GET/POST/HEAD` 及 `json/xml/jsonp/binary`。媒体成功响应（含 302）标记 `binary`，协议错误保留原格式。`stream/download` 的 `HEAD` 是客户端链接预检，不能当作真实播放；它与独立 `probe` 也不同。
 - `result`：`ok/empty/failed/unavailable`；`protocolCode` 单独表示 Subsonic 错误码。HTTP 200 不代表协议成功。
 - `requestId`：服务端独立生成的关联 ID，与普通响应的 `X-Request-ID` 对应，不复用客户端传入的请求头。
-- `bytesWritten` / `responseBytes`：协议正文实际被 ResponseWriter 接受的字节数 / 预期正文长度；HEAD 无正文时为零。正文写入并刷新网络缓冲后才记录结果，写入报错、短写或刷新失败均为 `failed`、`write_error`；刷新失败时两个字节数仍可能相等。不适用的媒体传输不伪造这两个字段。
+- `bytesWritten` / `responseBytes`：协议或封面正文实际被 ResponseWriter 接受的字节数 / 预期正文长度；HEAD、304 无正文时为零。正文写入并刷新网络缓冲后才记录结果，写入报错、短写或刷新失败均为 `failed`、`write_error`；刷新失败时两个字节数仍可能相等。不适用的音频传输不伪造这两个字段。
+- `coverOrigin`：封面来源固定为 `original/custom/stale/placeholder/board/redirect`。正常缓存命中保留原来源并设置 `cached=true`；旧图和默认图仍返回 HTTP 200 图片，但标记 `result=unavailable`，保留 `busy/timeout/upstream_error` 等错误分类，不能因此宣布真实封面恢复。鉴权和访问权限失败不会被默认图掩盖。
+
 - `count`：协议正文中的列表条目数（歌单详情为歌曲数，非摘要的待加载标记）。`lines`：歌词行数；`synced`：结构化歌词是否含同步轨。字段不存在表示不适用；零表示构造的正文确实为空，但还需结合写出结果判断是否完整交付。
 - `trackId`、`boardId`：仅接受固定平台前缀和有界 ID；歌单列表事件还提供最多 10 个公开在线榜单 `boardIds`，便于 AI 在客户端未请求详情时定向探测。不输出自定义歌单 ID、歌曲/歌手名称、歌词正文、用户名、认证字段或任意请求头。
+
+完整性能诊断 `/api/debug/inspect/performance` 的 `covers` 单独返回封面上游准入、等待队列、拒绝次数、传输额度、图片缓存条目／字节预算、共享请求及旧图／默认图次数。`music.admission` 没有拒绝不能证明封面没有降级。主动 `getCoverArt` 协议探测共用这些限额与缓存，但仍记录为 `protocol_probe`，不是实际客户端请求。
 
 完整写出只证明服务端 ResponseWriter 接受了全部正文，不证明客户端收到了全部字节或解析成功。没有事件可能是客户端未请求、离线缓存、反向代理未转发、有限事件窗口已覆盖或部署版本不支持，不能仅凭事件缺失断言客户端故障。
 

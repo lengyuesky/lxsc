@@ -82,7 +82,7 @@ func (s *Server) ProbeProtocol(ctx context.Context, user *db.User, probe diagnos
 	media := probe.Endpoint == "stream" || probe.Endpoint == "download"
 	// 不复制 Server 内的锁；只有只读业务依赖和独立诊断缓冲进入探测实例。
 	s.initCoverClient()
-	local := &Server{DB: s.DB, Catalog: s.Catalog, Settings: s.Settings, Secret: s.Secret, Log: s.Log, HTTP: s.HTTP, Diagnostics: &diagnostics.Events{}, coverHTTP: s.coverHTTP, coverLimits: s.coverLimits, coverCache: s.coverCache}
+	local := &Server{DB: s.DB, Catalog: s.Catalog, Settings: s.Settings, Secret: s.Secret, Log: s.Log, HTTP: s.HTTP, Diagnostics: &diagnostics.Events{}, coverHTTP: s.coverHTTP, coverLimits: s.coverLimits, coverDelivery: s.coverDelivery, coverCache: s.coverCache}
 	handler, ok := local.probeHandlers()[probe.Endpoint]
 	if !media && (!ok || probe.Method == "HEAD") {
 		return diagnostics.ProtocolResult{}, errors.New("不支持的协议探测")
@@ -143,6 +143,9 @@ func (s *Server) ProbeProtocol(ctx context.Context, user *db.User, probe diagnos
 	result.Truncated = capture.truncated
 	result.Format, result.ProtocolStatus, result.ProtocolCode = protocol.Format, protocol.Result, protocol.ProtocolCode
 	result.Count, result.Lines = protocol.Count, protocol.Lines
+	if probe.Endpoint == "getCoverArt" {
+		result.CoverOrigin, result.Cached, result.Error = protocol.CoverOrigin, protocol.Cached, protocol.Error
+	}
 	result.Events = local.Diagnostics.List()
 	return result, nil
 }

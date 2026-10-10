@@ -15,7 +15,7 @@ type clientDiagnosticKey struct{}
 // 只摘取响应的数量和状态，不保存请求正文、认证参数或任何歌曲/歌词文本。
 func (s *Server) beginClientDiagnostic(r *http.Request, endpoint string) (*http.Request, func()) {
 	switch endpoint {
-	case "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum", "stream", "download":
+	case "getPlaylists", "getPlaylist", "getMusicDirectory", "getLyrics", "getLyricsBySongId", "getSong", "getAlbum", "getCoverArt", "stream", "download":
 	default:
 		return r, func() {}
 	}

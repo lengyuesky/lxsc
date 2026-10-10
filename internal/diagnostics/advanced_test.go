@@ -22,6 +22,27 @@ func fullCredential(t *testing.T, f *fixture) (TokenView, string) {
 	return view, key
 }
 
+func TestCoverPerformanceInspectionIncludesSeparateAdmission(t *testing.T) {
+	f := newFixture(t)
+	_, key := fullCredential(t, f)
+	f.s.CoverPerformance = func() any {
+		return map[string]any{"admission": map[string]int{"active": 4, "queued": 2, "rejected": 3}, "cacheBytes": 2 << 20, "placeholders": 1}
+	}
+	w := f.call("GET", "/api/debug/inspect/performance", "", key, nil)
+	var response struct {
+		Data struct {
+			Covers struct {
+				Admission    struct{ Active, Queued, Rejected int }
+				CacheBytes   int
+				Placeholders int
+			}
+		}
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.Data.Covers.Admission.Rejected != 3 || response.Data.Covers.CacheBytes != 2<<20 || response.Data.Covers.Placeholders != 1 {
+		t.Fatalf("独立封面并发和缓存未进入诊断：%d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestMaximumDebugDefaultAndAdminScopes(t *testing.T) {
 	f := newFixture(t)
 	w := f.call("POST", "/api/admin/debug-tokens", "{}", "", f.cookie)
