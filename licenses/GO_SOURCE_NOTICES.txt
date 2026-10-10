@@ -280,6 +280,10 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/hash/adler32/adler32.go
 - go-stdlib/src/hash/crc32/crc32.go
 - go-stdlib/src/hash/hash.go
+- go-stdlib/src/image/draw/draw.go
+- go-stdlib/src/image/image.go
+- go-stdlib/src/image/png/reader.go
+- go-stdlib/src/image/png/writer.go
 - go-stdlib/src/internal/poll/fd_posix.go
 - go-stdlib/src/internal/poll/sockopt.go
 - go-stdlib/src/internal/reflectlite/type.go
@@ -537,6 +541,7 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/crypto/x509/root.go
 - go-stdlib/src/crypto/x509/sec1.go
 - go-stdlib/src/go/ast/commentmap.go
+- go-stdlib/src/image/png/paeth.go
 - go-stdlib/src/math/floor_amd64.s
 - go-stdlib/src/mime/quotedprintable/reader.go
 - go-stdlib/src/net/lookup.go
@@ -960,6 +965,9 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/go/token/position.go
 - go-stdlib/src/html/entity.go
 - go-stdlib/src/html/escape.go
+- go-stdlib/src/image/format.go
+- go-stdlib/src/image/geom.go
+- go-stdlib/src/image/names.go
 - go-stdlib/src/internal/filepathlite/path_unix.go
 - go-stdlib/src/io/multi.go
 - go-stdlib/src/math/acosh.go
@@ -1140,6 +1148,9 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/hash/crc32/crc32_amd64.go
 - go-stdlib/src/hash/crc32/crc32_amd64.s
 - go-stdlib/src/hash/crc32/crc32_generic.go
+- go-stdlib/src/image/color/color.go
+- go-stdlib/src/image/color/ycbcr.go
+- go-stdlib/src/image/ycbcr.go
 - go-stdlib/src/internal/poll/sockopt_linux.go
 - go-stdlib/src/internal/poll/sockoptip.go
 - go-stdlib/src/math/sin.go
@@ -1631,6 +1642,7 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/crypto/internal/fips140/nistec/p256_asm.go
 - go-stdlib/src/crypto/internal/fips140/sha3/sha3_amd64.go
 - go-stdlib/src/crypto/x509/root_linux.go
+- go-stdlib/src/image/internal/imageutil/imageutil.go
 - go-stdlib/src/internal/goos/goos.go
 - go-stdlib/src/internal/poll/hook_cloexec.go
 - go-stdlib/src/internal/race/doc.go

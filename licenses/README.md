@@ -60,4 +60,6 @@ node --test tests/licenses.test.mjs
 
 更新版本时须先审核依赖变化和原许可，修改 `manifest.json` 中的版本、源路径及许可索引；`node scripts/licenses.mjs --update` 只从已安装的精确版本源码更新副本、内联注释和摘要，新增/移除模块或原有上游归档的变化不会被自动批准。涉及 SDK 内容变更，还需更新逐文件来源证据与 `js-bridge/vendor/PATCHES.md`，不能抹去既有来源。
 
+新增或移除运行时使用的标准库包（例如 `image/png`）也可能改变源码声明清单，即使 `go.mod` 没有变化。审核新增来源后，用 `GOTOOLCHAIN=go1.27.0 node scripts/licenses.mjs --update` 更新，并一并提交 `GO_SOURCE_NOTICES.txt` 与 `manifest.json`，再运行 `--check` 核对。
+
 实际使用的包集合与 `go.mod` 的全部要求不必相同；此处针对 `CGO_ENABLED=0` 的 `./cmd/lxsc`、`linux/amd64` 与 `linux/arm64`。其他平台、CGO 或构建标签不在此核对范围内。测试与构建工具程序本身不作为应用运行依赖分发；esbuild 的 MIT 原文因其生成辅助代码而额外随附。
