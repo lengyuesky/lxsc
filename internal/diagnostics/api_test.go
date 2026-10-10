@@ -53,6 +53,9 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.Update(context.Background(), map[string]json.RawMessage{"customLyricsURL": json.RawMessage(`""`), "customCoverURL": json.RawMessage(`""`)}); err != nil {
+		t.Fatal(err)
+	}
 	auth := &webauth.Manager{DB: d}
 	catalog := music.NewCatalog(d, nil, nil, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	s := New(d, auth, catalog, nil, st, "test-version", time.Now())

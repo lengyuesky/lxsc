@@ -12,12 +12,17 @@ import (
 	"time"
 
 	"lxsc/internal/db"
+	"lxsc/internal/httpguard"
 )
 
 // ErrInvalidSetting 表示设置值不合法，可由 HTTP 层映射为 400。
 var ErrInvalidSetting = errors.New("设置值不合法")
 
 const DefaultURLCacheTTL = 7 * 24 * 60 * 60
+
+// 公共接口默认仅在原有来源失败时使用；保存空字符串可关闭回退。
+const DefaultCustomLyricsURL = "https://api.lrc.cx/lyrics"
+const DefaultCustomCoverURL = "https://api.lrc.cx/cover"
 
 // parseURLCacheTTL 只接受管理页提供的五档，-1 表示永久。
 func parseURLCacheTTL(value string) (int, error) {
@@ -43,6 +48,8 @@ type Values struct {
 	SearchSources    []string            `json:"searchSources"`    // 聚合搜索的平台及顺序
 	StreamMode       string              `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
 	CoverMode        string              `json:"coverMode"`        // redirect / proxy
+	CustomLyricsURL  string              `json:"customLyricsURL"`  // 现有歌词来源失败后的自定义接口
+	CustomCoverURL   string              `json:"customCoverURL"`   // 原封面无法读取时的自定义接口
 	URLCacheTTL      int                 `json:"urlCacheTTL"`      // 直链缓存秒数，0 关闭，-1 永久
 	SearchCacheTTL   int                 `json:"searchCacheTTL"`   // 搜索缓存秒数
 	DefaultQuality   string              `json:"defaultQuality"`   // 新用户默认音质
@@ -64,6 +71,8 @@ func Defaults() Values {
 		SearchSources:    []string{"wy", "tx", "kw", "kg", "mg"},
 		StreamMode:       "redirect",
 		CoverMode:        "redirect",
+		CustomLyricsURL:  DefaultCustomLyricsURL,
+		CustomCoverURL:   DefaultCustomCoverURL,
 		URLCacheTTL:      DefaultURLCacheTTL,
 		SearchCacheTTL:   600,
 		DefaultQuality:   "320k",
@@ -118,6 +127,14 @@ func apply(v Values, m map[string]string) Values {
 		case "coverMode":
 			if val == "proxy" || val == "redirect" {
 				v.CoverMode = val
+			}
+		case "customLyricsURL", "customCoverURL":
+			if _, err := httpguard.ParseTemplate(val); val == "" || err == nil {
+				if k == "customLyricsURL" {
+					v.CustomLyricsURL = val
+				} else {
+					v.CustomCoverURL = val
+				}
 			}
 		case "urlCacheTTL":
 			if n, err := parseURLCacheTTL(val); err == nil {

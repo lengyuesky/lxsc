@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"lxsc/internal/admission"
 	"lxsc/internal/db"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/metrics"
 	"lxsc/internal/settings"
@@ -57,6 +59,8 @@ type Catalog struct {
 	urlMetrics        metrics.Operation
 	MediaPreparation  metrics.Operation
 	lyrics            *lru.LRU[string, *Lyrics]
+	customHTTP        *http.Client
+	customLimits      *admission.Gate
 	generic           *lru.LRU[string, json.RawMessage]
 	boardStale        *lru.LRU[string, json.RawMessage]
 	boardFlight       requestGroup
@@ -95,6 +99,8 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		search:            newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		metadataSearch:    newRequestCache[metadataSearchKey, metadataSearchResult](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:            lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
+		customHTTP:        httpguard.NewPublicClient(nil, nil),
+		customLimits:      admission.New(8, 16, 0, 0),
 		generic:           lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
 		boardStale:        lru.NewLRU[string, json.RawMessage](128, nil, 0),
 		boardRefreshing:   map[string]bool{},
@@ -624,12 +630,17 @@ func decodeList(raw json.RawMessage, source string) ([]*Info, error) {
 	return list, nil
 }
 
-// Lyric 获取歌词：SDK 优先，失败回退音源脚本；带缓存
+// Lyric 获取歌词：SDK → 音源脚本 → 管理员配置的自定义接口；只缓存可用歌词。
 func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 	if in == nil {
 		return nil, errors.New("歌曲不存在")
 	}
 	id := in.TrackID()
+	customURL := c.Settings.Get().CustomLyricsURL
+	if customURL != "" {
+		// 配置变更后不能继续命中旧接口的歌词，旧请求收尾也不会污染新配置。
+		id += "\x00" + customURL
+	}
 	if l, ok := c.lyrics.Get(id); ok {
 		return l, nil
 	}
@@ -637,7 +648,11 @@ func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 	err := errors.New("歌词 SDK 未初始化")
 	if c.SDK != nil {
 		// 给音源回退留下时间，不能让慢平台耗尽客户端的全部等待预算。
-		sdkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		sdkTimeout := 8 * time.Second
+		if customURL != "" {
+			sdkTimeout = 4 * time.Second
+		}
+		sdkCtx, cancel := context.WithTimeout(ctx, sdkTimeout)
 		err = c.SDK.Call(sdkCtx, in.Source()+".getLyric", &r, in.Raw)
 		cancel()
 	}
@@ -652,12 +667,30 @@ func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 		return nil, ctx.Err()
 	}
 	if c.Sources != nil {
-		if result, sourceErr := c.Sources.Lyric(ctx, in.Source(), c.ScriptInfo(in)); sourceErr == nil && result != nil {
+		sourceCtx := ctx
+		cancel := func() {}
+		if customURL != "" {
+			sourceCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		}
+		result, sourceErr := c.Sources.Lyric(sourceCtx, in.Source(), c.ScriptInfo(in))
+		cancel()
+		if sourceErr == nil && result != nil {
 			if l := usableLyrics(*result); l != nil {
 				c.lyrics.Add(id, l)
 				return l, nil
 			}
 		}
+	}
+	if customURL != "" && ctx.Err() == nil {
+		l, customErr := c.customLyric(ctx, in, customURL)
+		if customErr == nil {
+			c.lyrics.Add(id, l)
+			return l, nil
+		}
+		err = customErr
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	// 空白、仅元信息或仅时间标签都不是可用歌词，不缓存，以便后续请求重试。
 	return nil, err
@@ -687,10 +720,17 @@ func (c *Catalog) Cover(ctx context.Context, in *Info) string {
 		return s
 	}
 	var pic string
-	if err := c.SDK.Call(ctx, in.Source()+".getPic", &pic, in.Raw); err != nil || !strings.HasPrefix(pic, "http") || strings.Contains(pic, "undefined") {
+	if c.SDK != nil {
+		if err := c.SDK.Call(ctx, in.Source()+".getPic", &pic, in.Raw); err != nil {
+			pic = ""
+		}
+	}
+	if !strings.HasPrefix(pic, "http") || strings.Contains(pic, "undefined") {
 		pic = ""
-		if p, err := c.Sources.Pic(ctx, in.Source(), c.ScriptInfo(in)); err == nil {
-			pic = p
+		if c.Sources != nil {
+			if p, err := c.Sources.Pic(ctx, in.Source(), c.ScriptInfo(in)); err == nil {
+				pic = p
+			}
 		}
 	}
 	if pic != "" {
@@ -729,6 +769,7 @@ func (c *Catalog) PurgeMetadataCaches() {
 	c.search.purge()
 	c.metadataSearch.purge()
 	c.generic.Purge()
+	c.lyrics.Purge()
 }
 
 // RefreshTTL 幂等地应用最新 TTL，仅失效发生变化的缓存。

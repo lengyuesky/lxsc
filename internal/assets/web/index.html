@@ -228,6 +228,14 @@
       <form id="settingsForm" >
         <div class="card"><h4 class="card-title">基本</h4><div class="form-grid"><label>服务器名称<input name="serverName"></label><label>新用户默认音质<select name="defaultQuality"><option>128k</option><option>320k</option><option>flac</option><option>flac24bit</option></select></label><label>聚合搜索平台及顺序<input name="searchSources" placeholder="wy,tx,kw,kg,mg"><small>逗号分隔，按填写顺序合并结果</small></label><label>每平台搜索条数<input name="searchLimit" type="number" min="1" max="100"></label></div></div>
         <div class="card"><h4 class="card-title">播放与缓存</h4><div class="form-grid"><label>播放方式<select name="streamMode"><option value="redirect">302 重定向到音源直链（推荐）</option><option value="force_redirect">强制 302（禁止服务器转发）</option><option value="proxy">服务端代理转发</option></select><small>302 复用缓存前轻量校验，确认失效后刷新一次；音频由客户端直连下载。强制 302 禁止播放与下载转发。</small></label><label>封面方式<select name="coverMode"><option value="redirect">302 重定向</option><option value="proxy">服务端代理</option></select></label><label>直链缓存<select name="urlCacheTTL"><option value="0">不缓存</option><option value="86400">1 天</option><option value="604800">1 周</option><option value="2592000">1 个月（30 天）</option><option value="-1">永久</option></select><small>默认 1 周，重启后保留。永久不按时间过期，失效或超过 2000 条时仍会清理；直链缓存不随备份保存。</small></label><label>搜索缓存<input name="searchCacheTTL" type="number" min="0"><small>秒，0 表示不缓存</small></label><label>歌手页最多歌曲<input name="artistSongLimit" type="number" min="1" max="100"><small>默认 30；不会再自动跨平台扩展搜索</small></label><label>歌手页最多专辑<input name="artistAlbumLimit" type="number" min="1" max="50"><small>默认 12，限制客户端级联拉取</small></label></div></div>
+        <div class="card"><h4 class="card-title">歌词与封面备用接口</h4>
+          <p class="muted hint">默认使用公共 LrcAPI，原有来源失败或没有内容时才调用。可改为自己的接口，留空关闭对应回退。</p>
+          <div class="form-grid">
+            <label>歌词接口<input name="customLyricsURL" type="url" maxlength="2048" placeholder="https://api.lrc.cx/lyrics" autocomplete="off" spellcheck="false"><small>原歌词来源失败后使用；支持 LRC 文本及包含歌词的 JSON。</small></label>
+            <label>封面接口<input name="customCoverURL" type="url" maxlength="2048" placeholder="https://api.lrc.cx/cover" autocomplete="off" spellcheck="false"><small>启用后，歌曲、专辑和歌手封面由服务器加载，原图失败时自动尝试备用接口。支持图片、图片重定向及图片地址 JSON。</small></label>
+          </div>
+          <details><summary>接口参数与说明</summary><p class="muted hint">仅填地址时，自动传入 title（歌名）、artist（歌手）、album（专辑）。也可在地址的路径或查询参数中使用 {title}、{artist}、{album}、{id}（平台歌曲 ID）、{source}、{trackId}、{duration}（秒）；参数会自动编码。请求仅支持公网 HTTP(S) 的标准端口。</p><p class="muted hint">备用接口会接收用于匹配的歌曲信息。公共服务的可用性与匹配结果由服务提供方决定。<a href="https://docs.lrc.cx/docs/QuickStart" target="_blank" rel="noopener noreferrer">查看 LrcAPI 文档</a></p></details>
+        </div>
         <div class="card"><h4 class="card-title">歌单</h4>
           <label class="switch"><span>新建歌单默认公开<small>其他用户可见</small></span><input type="checkbox" name="publicPlaylists"></label>
         </div>

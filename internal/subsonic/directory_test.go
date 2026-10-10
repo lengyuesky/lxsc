@@ -39,6 +39,10 @@ func newDirectoryTestServer(t *testing.T) directoryTestServer {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 旧行为测试不访问公共接口；备用接口用独立的受控上游测试。
+	if _, err := store.Update(ctx, map[string]json.RawMessage{"customLyricsURL": json.RawMessage(`""`), "customCoverURL": json.RawMessage(`""`)}); err != nil {
+		t.Fatal(err)
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
 	t.Cleanup(catalog.StopBoardWarm)

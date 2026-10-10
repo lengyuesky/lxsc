@@ -283,15 +283,32 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 }
 
 func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
+	customURL := s.Settings.Get().CustomCoverURL
+	if customURL != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
 	rc := s.newReqCtx(r)
 	id := param(r, "id")
 	var url string
+	var fields map[string]string
+	coverFor := func(in *music.Info) string {
+		fields = in.TemplateValues()
+		ctx := rc.ctx
+		cancel := func() {}
+		if customURL != "" {
+			ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
+		}
+		defer cancel()
+		return s.Catalog.Cover(ctx, in)
+	}
 	p, ok := music.ParseID(id)
 	if ok {
 		switch p.Kind {
 		case music.KindTrack:
 			if in, err := s.Catalog.Track(rc.ctx, id); err == nil {
-				url = s.Catalog.Cover(rc.ctx, in)
+				url = coverFor(in)
 			}
 		case music.KindOnlineAlbum:
 			if meta, ok := s.Catalog.CachedAlbumMeta(id); ok && strings.HasPrefix(meta.Image, "http") {
@@ -299,12 +316,12 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 			} else if locator, parsed := music.ParseOnlineAlbumID(id); parsed && strings.HasPrefix(locator.Image, "http") {
 				url = locator.Image
 			} else if infos, ok := s.Catalog.CachedAlbum(id); ok && len(infos) > 0 {
-				url = s.Catalog.Cover(rc.ctx, infos[0])
+				url = coverFor(infos[0])
 			} else if _, _, _, raw, err := s.DB.GetAlbum(rc.ctx, id); err == nil {
 				var ids []string
 				if jsonUnmarshal(raw, &ids) == nil && len(ids) > 0 {
 					if tracks := s.Catalog.Tracks(rc.ctx, ids[:1]); len(tracks) > 0 {
-						url = s.Catalog.Cover(rc.ctx, tracks[0])
+						url = coverFor(tracks[0])
 					}
 				}
 			}
@@ -313,20 +330,20 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 			if meta, ok := s.Catalog.CachedAlbumMeta(id); ok && strings.HasPrefix(meta.Image, "http") {
 				url = meta.Image
 			} else if infos, ok := s.Catalog.CachedAlbum(id); ok && len(infos) > 0 {
-				url = s.Catalog.Cover(rc.ctx, infos[0])
+				url = coverFor(infos[0])
 			} else if _, parsed := music.ParseID(id); parsed {
 				if _, _, _, raw, err := s.DB.GetAlbum(rc.ctx, id); err == nil {
 					var ids []string
 					if jsonUnmarshal(raw, &ids) == nil && len(ids) > 0 {
 						if tracks := s.Catalog.Tracks(rc.ctx, ids[:1]); len(tracks) > 0 {
-							url = s.Catalog.Cover(rc.ctx, tracks[0])
+							url = coverFor(tracks[0])
 						}
 					}
 				}
 			}
 		case music.KindArtist:
 			if g := s.artistByID(rc, id); g != nil && len(g.Songs) > 0 {
-				url = s.Catalog.Cover(rc.ctx, g.Songs[0])
+				url = coverFor(g.Songs[0])
 			}
 		case music.KindSingerDir:
 			if locator, parsed := music.ParseSingerDirectoryID(id); parsed {
@@ -338,25 +355,54 @@ func (s *Server) getCoverArt(w http.ResponseWriter, r *http.Request) {
 			// 列表和详情都公布榜单 ID 作为 coverArt。没有平台独立封面时
 			// 返回本站内置榜单图，不为一张封面扫描歌曲或依赖外部图源。
 			if music.IsPlatform(p.Source) && strings.TrimSpace(p.Key) != "" && p.Key != "0" {
+				recordMediaResponse(r, http.StatusOK)
 				serveBoardCover(w, r)
 				return
 			}
 		case music.KindPlaylist:
 			if pl, err := s.DB.GetPlaylist(rc.ctx, id); err == nil && canReadPlaylist(currentUser(r), pl) && len(pl.TrackIDs) > 0 {
 				if infos := s.Catalog.Tracks(rc.ctx, pl.TrackIDs[:1]); len(infos) > 0 {
-					url = s.Catalog.Cover(rc.ctx, infos[0])
+					url = coverFor(infos[0])
 				}
 			}
 		}
 	} else if strings.HasPrefix(id, "http") {
 		url = id
 	}
-	if url == "" {
-		http.Error(w, "cover not found", http.StatusNotFound)
-		return
+	if fields == nil && customURL != "" && ok {
+		// 专辑／歌手已有的摘要也可用于回退，不为封面扫描完整歌曲列表。
+		switch p.Kind {
+		case music.KindOnlineAlbum, music.KindAlbum:
+			if meta, found := s.Catalog.CachedAlbumMeta(id); found {
+				fields = map[string]string{"album": meta.Name, "artist": meta.Artist, "source": meta.Source}
+			} else if locator, parsed := music.ParseOnlineAlbumID(id); parsed {
+				fields = map[string]string{"album": locator.Name, "artist": locator.Artist, "source": locator.Source}
+			}
+		case music.KindSingerDir:
+			if locator, parsed := music.ParseSingerDirectoryID(id); parsed {
+				fields = map[string]string{"artist": locator.Name, "source": locator.Source}
+			}
+		}
+	}
+	if fields != nil && ok {
+		switch p.Kind {
+		case music.KindOnlineAlbum, music.KindAlbum:
+			delete(fields, "title")
+		case music.KindArtist, music.KindSingerDir:
+			delete(fields, "title")
+			delete(fields, "album")
+		}
 	}
 	if strings.HasPrefix(url, "http://") {
 		url = "https://" + strings.TrimPrefix(url, "http://")
+	}
+	if customURL != "" && fields != nil {
+		s.coverWithFallback(w, r, url, customURL, fields)
+		return
+	}
+	if url == "" {
+		http.Error(w, "cover not found", http.StatusNotFound)
+		return
 	}
 	if s.Settings.Get().CoverMode == "proxy" {
 		s.proxyCover(w, r, url)

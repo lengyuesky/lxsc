@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	lru "github.com/hashicorp/golang-lru/v2"
 
 	"lxsc/internal/admission"
 	"lxsc/internal/authlimit"
@@ -31,6 +32,7 @@ type Server struct {
 	coverOnce   sync.Once
 	coverHTTP   *http.Client
 	coverLimits *admission.Gate
+	coverCache  *lru.Cache[string, cachedCover]
 }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request)

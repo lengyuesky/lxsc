@@ -34,6 +34,7 @@ func TestCoverRequestsDoNotExpandBoardsOrOnlineAlbums(t *testing.T) {
 	defer database.Close()
 	user, _ := database.CreateUser(ctx, "user", "enc", false, "320k")
 	store, _ := settings.New(ctx, database)
+	_, _ = store.Update(ctx, map[string]json.RawMessage{"customCoverURL": json.RawMessage(`""`)})
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
 	calls := 0

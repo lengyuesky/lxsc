@@ -170,6 +170,31 @@ async function main() {
       }
     }
 
+    await check('歌词与封面备用接口可保存模板、拒绝私网并关闭', async page => {
+      await adminSettings(page, url)
+      const lyrics = page.locator('#settingsForm [name=customLyricsURL]')
+      const cover = page.locator('#settingsForm [name=customCoverURL]')
+      await lyrics.fill('https://api.lrc.cx/lyrics')
+      await cover.fill('https://custom.example/cover?name={title}&singer={artist}')
+      const saved = await saveSettingsUI(page)
+      assert.equal(saved.customLyricsURL, 'https://api.lrc.cx/lyrics')
+      assert.equal(saved.customCoverURL, 'https://custom.example/cover?name={title}&singer={artist}')
+      await page.reload()
+      await page.locator('#settingsForm:not([inert])').waitFor()
+      assert.equal(await cover.inputValue(), saved.customCoverURL)
+      await lyrics.fill('https://changed.example/lyrics')
+      await cover.fill('http://127.0.0.1/private')
+      await saveSettingsUI(page, 400)
+      const unchanged = await (await admin.get(url + '/api/admin/settings')).json()
+      assert.equal(unchanged.customLyricsURL, saved.customLyricsURL, '无效地址不得导致其他字段部分保存')
+      await lyrics.fill('')
+      await cover.fill('')
+      const disabled = await saveSettingsUI(page)
+      assert.equal(disabled.customLyricsURL, '')
+      assert.equal(disabled.customCoverURL, '')
+      await page.screenshot({ path: path.join(artifacts, 'custom-metadata-settings.png'), fullPage: true })
+    })
+
     await check('用户模块事件委托支持创建、编辑与删除', async page => {
       await adminSettings(page, url)
       await page.locator('nav [data-tab=users]').click()

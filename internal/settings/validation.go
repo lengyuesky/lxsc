@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"lxsc/internal/httpguard"
 )
 
 // ValidatePatch 供调试等入口在记录维护操作前使用；与 Update 共用全部校验规则。
@@ -29,6 +31,16 @@ func normalizePatch(patch map[string]json.RawMessage) (map[string]string, error)
 			return invalid("不能是空值或无效 JSON")
 		}
 		switch key {
+		case "customLyricsURL", "customCoverURL":
+			var value string
+			if json.Unmarshal(raw, &value) != nil {
+				return invalid("必须是接口地址字符串")
+			}
+			value = strings.TrimSpace(value)
+			if _, err := httpguard.ParseTemplate(value); value != "" && err != nil {
+				return invalid(httpguard.ErrInvalidTemplate.Error())
+			}
+			values[key] = value
 		case "boardSelections":
 			selections, err := parseBoardSelections(raw)
 			if err != nil {

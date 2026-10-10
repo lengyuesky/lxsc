@@ -65,6 +65,9 @@ func newPortalFixture(t *testing.T) *portalFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Update(ctx, map[string]json.RawMessage{"customLyricsURL": json.RawMessage(`""`), "customCoverURL": json.RawMessage(`""`)}); err != nil {
+		t.Fatal(err)
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
 	authManager := &webauth.Manager{DB: database, Secret: box}

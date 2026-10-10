@@ -114,7 +114,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if _, err := store.Update(ctx, map[string]json.RawMessage{"showBoards": json.RawMessage(`false`)}); err != nil {
+	if _, err := store.Update(ctx, map[string]json.RawMessage{"showBoards": json.RawMessage(`false`), "customLyricsURL": json.RawMessage(`""`), "customCoverURL": json.RawMessage(`""`)}); err != nil {
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
