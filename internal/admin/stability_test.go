@@ -65,20 +65,13 @@ func adminSourceRequest(id int64, body any) *http.Request {
 }
 
 func TestSourceMutationsInvalidateURLs(t *testing.T) {
-	for _, action := range []string{"新增", "改名", "优先级", "脚本", "停用", "启用", "重载", "删除", "重载失败", "删除失败"} {
+	for _, action := range []string{"新增", "改名", "脚本", "停用", "启用", "重载", "删除", "重载失败", "删除失败"} {
 		t.Run(action, func(t *testing.T) {
 			s := newAdminStabilityServer(t)
 			ctx := context.Background()
-			first, _, err := s.AddSource(ctx, countedAdminScript("first"), "首选", 100)
+			first, _, err := s.AddSource(ctx, countedAdminScript("first"), "首选")
 			if err != nil {
 				t.Fatal(err)
-			}
-			var second *db.Source
-			if action == "优先级" {
-				second, _, err = s.AddSource(ctx, countedAdminScript("second"), "候选", 200)
-				if err != nil {
-					t.Fatal(err)
-				}
 			}
 			info := music.FromMap(map[string]any{"source": "wy", "songmid": "one", "types": []any{map[string]any{"type": "320k"}}})
 			if _, err := s.Catalog.ResolveURL(ctx, info, "320k"); err != nil {
@@ -96,14 +89,12 @@ func TestSourceMutationsInvalidateURLs(t *testing.T) {
 			rec := httptest.NewRecorder()
 			switch action {
 			case "新增":
-				_, _, err = s.AddSource(ctx, countedAdminScript("new"), "新增", 50)
+				_, _, err = s.AddSource(ctx, countedAdminScript("new"), "新增")
 				if err != nil {
 					t.Fatal(err)
 				}
 			case "改名":
 				s.updateSource(rec, adminSourceRequest(first.ID, map[string]any{"name": "改名"}))
-			case "优先级":
-				s.updateSource(rec, adminSourceRequest(second.ID, map[string]any{"priority": 50}))
 			case "脚本":
 				s.updateSource(rec, adminSourceRequest(first.ID, map[string]any{"script": countedAdminScript("updated")}))
 			case "停用":

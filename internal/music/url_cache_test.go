@@ -126,11 +126,11 @@ func TestPersistentURLCacheLRUAndDisable(t *testing.T) {
 }
 
 func TestPersistentURLCacheContextAndFaultRecovery(t *testing.T) {
-	for _, change := range []string{"重命名", "脚本", "优先级", "启用状态", "代理", "重载", "持久化故障"} {
+	for _, change := range []string{"重命名", "脚本", "启用状态", "代理", "重载", "持久化故障"} {
 		t.Run(change, func(t *testing.T) {
 			c := newStabilityCatalog(t)
 			ctx := context.Background()
-			source, err := c.DB.CreateSource(ctx, &db.Source{Name: "音源", Script: "原脚本", Priority: 1, Enabled: true})
+			source, err := c.DB.CreateSource(ctx, &db.Source{Name: "音源", Script: "原脚本", Enabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -151,8 +151,6 @@ func TestPersistentURLCacheContextAndFaultRecovery(t *testing.T) {
 				source.Name = "新名称"
 			case "脚本":
 				source.Script = "新脚本"
-			case "优先级":
-				source.Priority++
 			case "启用状态":
 				source.Enabled = false
 			case "代理":

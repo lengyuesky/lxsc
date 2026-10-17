@@ -17,22 +17,21 @@ func TestMusicURLSourceIdentityAndSelection(t *testing.T) {
 	manager := NewSourceManager(loadAsset(t, "prelude.js"), &http.Client{}, &http.Client{}, log)
 	t.Cleanup(manager.UnloadAll)
 	for _, item := range []struct {
-		id       int64
-		priority int
-		label    string
-	}{{51, 2, "b"}, {9, 1, "a"}} {
+		id    int64
+		label string
+	}{{9, "a"}, {51, "b"}} {
 		script := `// @name 同名音源
 lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['flac','320k','128k']}}});
 globalThis.__lx_request=({info})=>{
   if ('` + item.label + `'==='a' && info.type!=='128k') throw new Error('该音质不可用');
   return {url:'https://media.invalid/` + item.label + `/'+info.type,type:'伪造音质',source:'伪造名字',sourceId:999,SourceID:999};
 };`
-		if _, err := manager.Load(context.Background(), item.id, item.priority, script); err != nil {
+		if _, err := manager.Load(context.Background(), item.id, script); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if got := manager.MusicURLSourceIDs("wy"); !reflect.DeepEqual(got, []int64{9, 51}) {
-		t.Fatalf("真实候选ID必须遵循优先级：%v", got)
+		t.Fatalf("无样本时候选ID必须遵循加载顺序：%v", got)
 	}
 	for _, tc := range []struct {
 		ids     []int64

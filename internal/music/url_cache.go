@@ -93,7 +93,6 @@ func (c *Catalog) urlCacheFingerprint(proxy string) (string, error) {
 	type sourceState struct {
 		ID        int64
 		Enabled   bool
-		Priority  int
 		Script    string
 		State     string
 		Platforms map[string]js.PlatformCap
@@ -103,7 +102,7 @@ func (c *Catalog) urlCacheFingerprint(proxy string) (string, error) {
 		TTL     int
 		Proxy   string
 		Sources []sourceState
-	}{Version: 2, TTL: c.Settings.Get().URLCacheTTL, Proxy: proxy}
+	}{Version: 3, TTL: c.Settings.Get().URLCacheTTL, Proxy: proxy}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	sources, err := c.DB.ListSources(ctx)
@@ -112,7 +111,7 @@ func (c *Catalog) urlCacheFingerprint(proxy string) (string, error) {
 	}
 	for _, source := range sources {
 		scriptHash := sha256.Sum256([]byte(source.Script))
-		value := sourceState{ID: source.ID, Enabled: source.Enabled, Priority: source.Priority, Script: hex.EncodeToString(scriptHash[:])}
+		value := sourceState{ID: source.ID, Enabled: source.Enabled, Script: hex.EncodeToString(scriptHash[:])}
 		if c.Sources != nil {
 			if status := c.Sources.StatusOf(source.ID); status != nil {
 				value.State, value.Platforms = status.State, status.Platforms

@@ -342,8 +342,6 @@ button.source-call-bar:hover, button.source-call-bar:focus-visible { background:
 .src .note.err { background: var(--err-soft); color: var(--err) }
 .src .note.warn { background: var(--warn-soft); color: var(--warn) }
 .src .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line) }
-.src .actions .prio { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12.5px }
-.src .actions .prio input { width: 64px; padding: 5px 8px; margin: 0 }
 .src .actions .danger { margin-left: auto }
 .src details { margin-top: 10px }
 .src details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none }

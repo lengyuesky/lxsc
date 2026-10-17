@@ -343,17 +343,17 @@ type Source struct {
 	Homepage    string `json:"homepage"`
 	Script      string `json:"-"`
 	Enabled     bool   `json:"enabled"`
-	Priority    int    `json:"priority"`
 	CreatedAt   int64  `json:"createdAt"`
 	UpdatedAt   int64  `json:"updatedAt"`
 }
 
+// sourceCols 仍读取 priority 列以保持既有库兼容；该列已不再参与任何逻辑，扫入丢弃变量。
 const sourceCols = `id, name, description, version, author, homepage, script, enabled, priority, created_at, updated_at`
 
 func scanSource(row interface{ Scan(...any) error }) (*Source, error) {
 	var s Source
-	var enabled int
-	if err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Version, &s.Author, &s.Homepage, &s.Script, &enabled, &s.Priority, &s.CreatedAt, &s.UpdatedAt); err != nil {
+	var enabled, legacyPriority int
+	if err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Version, &s.Author, &s.Homepage, &s.Script, &enabled, &legacyPriority, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -363,9 +363,9 @@ func scanSource(row interface{ Scan(...any) error }) (*Source, error) {
 	return &s, nil
 }
 
-// ListSources 按优先级列出音源
+// ListSources 按加载顺序（ID 升序）列出音源
 func (d *DB) ListSources(ctx context.Context) ([]*Source, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT `+sourceCols+` FROM sources ORDER BY priority ASC, id ASC`)
+	rows, err := d.sql.QueryContext(ctx, `SELECT `+sourceCols+` FROM sources ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -389,8 +389,8 @@ func (d *DB) GetSource(ctx context.Context, id int64) (*Source, error) {
 // CreateSource 新增音源
 func (d *DB) CreateSource(ctx context.Context, s *Source) (*Source, error) {
 	t := now()
-	res, err := d.sql.ExecContext(ctx, `INSERT INTO sources(name, description, version, author, homepage, script, enabled, priority, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), s.Priority, t, t)
+	res, err := d.sql.ExecContext(ctx, `INSERT INTO sources(name, description, version, author, homepage, script, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), t, t)
 	if err != nil {
 		return nil, err
 	}
@@ -401,11 +401,11 @@ func (d *DB) CreateSource(ctx context.Context, s *Source) (*Source, error) {
 // UpdateSource 更新音源（script 为空则不更新脚本）
 func (d *DB) UpdateSource(ctx context.Context, s *Source) error {
 	if s.Script != "" {
-		_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, description=?, version=?, author=?, homepage=?, script=?, enabled=?, priority=?, updated_at=? WHERE id=?`,
-			s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), s.Priority, now(), s.ID)
+		_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, description=?, version=?, author=?, homepage=?, script=?, enabled=?, updated_at=? WHERE id=?`,
+			s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), now(), s.ID)
 		return err
 	}
-	_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, enabled=?, priority=?, updated_at=? WHERE id=?`, s.Name, boolInt(s.Enabled), s.Priority, now(), s.ID)
+	_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, enabled=?, updated_at=? WHERE id=?`, s.Name, boolInt(s.Enabled), now(), s.ID)
 	return err
 }
 

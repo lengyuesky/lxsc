@@ -15,7 +15,7 @@ func TestSlowSourceReservesFallbackBudget(t *testing.T) {
 	manager.CallTime = 100 * time.Millisecond
 	pre := `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['flac','320k','128k']}}});`
 	for i, body := range []string{`globalThis.__lx_request=()=>new Promise(()=>{});`, `globalThis.__lx_request=()=>({url:'https://media.invalid/ok'});`} {
-		if _, err := manager.Load(context.Background(), int64(i+1), i, pre+body); err != nil {
+		if _, err := manager.Load(context.Background(), int64(i+1), pre+body); err != nil {
 			t.Fatal(err)
 		}
 	}

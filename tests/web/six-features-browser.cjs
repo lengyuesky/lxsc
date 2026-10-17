@@ -61,7 +61,7 @@ module.exports = async ({ check, url, login, search, playSearch, createPlaylist,
     await page.locator('#queueAddNext').click()
     assert.equal(await page.evaluate(() => webPlayer.queue[webPlayer.index + 1].id), 'tr-wy-2')
     await page.locator('#logoutButton').click(); await page.locator('#login:not(.hidden)').waitFor(); await login(page, url, 'admin')
-    await page.route('**/api/admin/sources', route => route.fulfill({ json: [{ id: 1, name: '健康面板验收', enabled: true, priority: 1, status: { state: 'ready', platforms: {}, health: { samples: 10, success: 8, averageMs: 123, downgrades: 2, errors: { timeout: 1, script: 1 } } } }] }))
+    await page.route('**/api/admin/sources', route => route.fulfill({ json: [{ id: 1, name: '健康面板验收', enabled: true, status: { state: 'ready', platforms: {}, health: { samples: 10, success: 8, averageMs: 123, downgrades: 2, errors: { timeout: 1, script: 1 } } } }] }))
     await page.locator('nav [data-tab=sources]').click()
     await page.locator('#sourceList').getByText(/成功率 80%/).waitFor()
     assert.match(await page.locator('#sourceList').textContent(), /降级 2 次/)

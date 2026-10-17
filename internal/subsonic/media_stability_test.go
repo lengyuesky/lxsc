@@ -52,7 +52,7 @@ func newMediaStabilityServer(t *testing.T, script string) (*Server, *db.User, *m
 	client := &http.Client{}
 	sources := js.NewSourceManager(string(prelude), client, client, log)
 	t.Cleanup(sources.UnloadAll)
-	if _, err := sources.Load(ctx, 1, 1, script); err != nil {
+	if _, err := sources.Load(ctx, 1, script); err != nil {
 		t.Fatal(err)
 	}
 	catalog := music.NewCatalog(database, nil, sources, store, log)

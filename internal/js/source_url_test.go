@@ -20,7 +20,7 @@ func startupSources(t *testing.T, scripts ...string) *SourceManager {
 	m := NewSourceManager(loadAsset(t, "prelude.js"), &http.Client{}, &http.Client{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(m.UnloadAll)
 	for index, script := range scripts {
-		if _, err := m.Load(context.Background(), int64(index+1), index, startupSourcePrelude+script); err != nil {
+		if _, err := m.Load(context.Background(), int64(index+1), startupSourcePrelude+script); err != nil {
 			t.Fatal(err)
 		}
 	}

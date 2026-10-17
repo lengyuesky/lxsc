@@ -148,7 +148,7 @@ func run(cfgPath string) error {
 		if !s.Enabled {
 			continue
 		}
-		if _, err := sources.Load(ctx, s.ID, s.Priority, s.Script); err != nil {
+		if _, err := sources.Load(ctx, s.ID, s.Script); err != nil {
 			log.Warn("音源加载失败", "name", s.Name, "err", err)
 		}
 	}
@@ -271,7 +271,7 @@ func importDir(ctx context.Context, a *admin.Server, existing []*db.Source, dir 
 		if names[name] {
 			continue
 		}
-		if _, _, err := a.AddSource(ctx, string(b), name, 100); err != nil {
+		if _, _, err := a.AddSource(ctx, string(b), name); err != nil {
 			log.Warn("导入音源失败", "file", e.Name(), "err", err)
 		} else {
 			log.Info("已从目录导入音源", "file", e.Name(), "name", name)

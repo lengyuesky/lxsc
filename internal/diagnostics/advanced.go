@@ -80,7 +80,7 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 		items := make([]map[string]any, 0, len(sources))
 		for _, source := range sources {
 			digest := sha256.Sum256([]byte(source.Script))
-			item := map[string]any{"id": source.ID, "name": source.Name, "version": source.Version, "enabled": source.Enabled, "priority": source.Priority, "scriptBytes": len(source.Script), "scriptSHA256": hex.EncodeToString(digest[:])}
+			item := map[string]any{"id": source.ID, "name": source.Name, "version": source.Version, "enabled": source.Enabled, "scriptBytes": len(source.Script), "scriptSHA256": hex.EncodeToString(digest[:])}
 			if s.Sources != nil {
 				item["status"] = s.Sources.StatusOf(source.ID)
 			}
@@ -177,7 +177,7 @@ func (s *Server) maintain(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.Tokens.RecordOperation(tokenID, operation)
-		status, err := s.Sources.Load(r.Context(), id, source.Priority, source.Script)
+		status, err := s.Sources.Load(r.Context(), id, source.Script)
 		s.Catalog.InvalidateURLs()
 		if err != nil {
 			failure(w, 502, "source_reload_failed")

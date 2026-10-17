@@ -23,7 +23,7 @@ module.exports = async ({ check, url, login, artifacts }) => {
     const script = `// @name 调用统计验收
 lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['320k','128k']}}});
 globalThis.__lx_request=({info})=>{if(info.type==='320k'||info.musicInfo.name.includes('失败'))throw new Error('https://private.invalid/?token=secret');return {url:'https://media.invalid/test?token=secret'}};`
-    const created = await page.request.post(url + '/api/admin/sources', { data: { name: '测试音源 <img src=x onerror=alert(1)>', script, priority: 200 } })
+    const created = await page.request.post(url + '/api/admin/sources', { data: { name: '测试音源 <img src=x onerror=alert(1)>', script } })
     assert.equal(created.status(), 200)
     const source = await created.json()
     try {
@@ -50,16 +50,18 @@ globalThis.__lx_request=({info})=>{if(info.type==='320k'||info.musicInfo.name.in
       assert.doesNotMatch(await page.locator('#sourceStatsPanel').textContent(), /private\.invalid|media\.invalid|token=secret/)
       await page.locator('[data-source-period]').last().click()
       assert.match(await page.locator('#sourceStatsPeriod').textContent(), /成功 1，失败 1/)
-      const priority = page.locator(`[data-source-priority="${source.id}"]`)
-      await priority.fill('777')
+      // 统计面板周期性刷新不得重渲染正在交互的音源卡片：先点开统计明细，
+      // 刷新后焦点选择、展开态与音源下拉选择都保持不变。
+      await page.locator('#sourceStatsRecent summary').click()
+      const openedRow = page.locator('#sourceStatsRecent tbody tr')
+      await openedRow.first().waitFor({ state: 'attached' })
       const fresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/sources/statistics')
       await page.clock.fastForward(31000)
       await fresh
       await page.waitForFunction(() => !document.querySelector('#refreshSourceStats').disabled)
-      assert.equal(await priority.inputValue(), '777', '统计刷新不能重新渲染正在编辑的音源卡片')
-      assert.equal(await page.locator('#sourceStatsRecent').getAttribute('open'), '')
+      assert.equal(await page.locator('#sourceStatsRecent').getAttribute('open') ?? '', '', '统计刷新不能重新渲染正在查看的明细')
+      assert.equal(await page.locator('#sourceStatsRecent tbody tr').count(), await openedRow.count())
       assert.equal(await page.locator('#sourceStatsSource').inputValue(), String(source.id))
-      await priority.fill('200')
       await page.locator('#sourceStatsPanel').screenshot({ path: path.join(artifacts, 'source-statistics-desktop.png'), animations: 'disabled' })
       const test = page.waitForResponse(response => response.url().endsWith(`/sources/${source.id}/test`))
       await page.locator(`[data-source-action=test][data-source-id="${source.id}"]`).click()

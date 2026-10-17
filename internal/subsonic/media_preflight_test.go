@@ -131,7 +131,7 @@ func TestMediaRejectsNonAudioSuccessResponses(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-				addMediaFallback(t, s, 22, 2, "b")
+				addMediaFallback(t, s, 22, "b")
 				s.Diagnostics = &diagnostics.Events{}
 				raw, _ := json.Marshal(mode)
 				if _, err := s.Settings.Update(context.Background(), map[string]json.RawMessage{"streamMode": raw}); err != nil {

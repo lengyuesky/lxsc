@@ -44,7 +44,7 @@ func TestMediaFailoverDifferentScriptIDs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
 			// 两个脚本故意同名；平台同为 wy，只有真实脚本 ID 不同。
-			if _, err := s.Catalog.Sources.Load(context.Background(), 22, 2, mediaFailoverScript("b")); err != nil {
+			if _, err := s.Catalog.Sources.Load(context.Background(), 22, mediaFailoverScript("b")); err != nil {
 				t.Fatal(err)
 			}
 			raw, _ := json.Marshal(tc.mode)
@@ -135,9 +135,9 @@ func (b *countedMediaBody) Read(p []byte) (int, error) {
 }
 func (b *countedMediaBody) Close() error { b.closed.Add(1); return nil }
 
-func addMediaFallback(t *testing.T, s *Server, id int64, priority int, label string) {
+func addMediaFallback(t *testing.T, s *Server, id int64, label string) {
 	t.Helper()
-	if _, err := s.Catalog.Sources.Load(context.Background(), id, priority, mediaFailoverScript(label)); err != nil {
+	if _, err := s.Catalog.Sources.Load(context.Background(), id, mediaFailoverScript(label)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -147,7 +147,7 @@ func TestMediaFailoverRecoverableFailures(t *testing.T) {
 		for _, first := range []int{0, 204, 400, 401, 403, 404, 405, 408, 410, 429, 500, 501, 502, 503, 504} {
 			t.Run(fmt.Sprintf("代理=%t/状态=%d", proxy, first), func(t *testing.T) {
 				s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-				addMediaFallback(t, s, 22, 2, "b")
+				addMediaFallback(t, s, 22, "b")
 				var paths []string
 				s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					paths = append(paths, req.URL.Path)
@@ -180,7 +180,7 @@ func TestMediaFailoverInvalidURL(t *testing.T) {
 		t.Run(fmt.Sprint(proxy), func(t *testing.T) {
 			script := strings.ReplaceAll(mediaFailoverScript("a"), "https://media.invalid", "file:///不可访问的合成路径")
 			s, user, info := newMediaStabilityServer(t, script)
-			addMediaFallback(t, s, 22, 2, "b")
+			addMediaFallback(t, s, 22, "b")
 			calls := 0
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				calls++
@@ -207,7 +207,7 @@ func TestMediaFailoverAllRejectedIsBounded(t *testing.T) {
 		t.Run(fmt.Sprint(proxy), func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
 			for i, label := range []string{"b", "c", "d"} {
-				addMediaFallback(t, s, int64(i+2), i+2, label)
+				addMediaFallback(t, s, int64(i+2), label)
 			}
 			var paths []string
 			var reads, closed atomic.Int32
@@ -249,7 +249,7 @@ func TestRedirectFailoverUnknownOpportunity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-			addMediaFallback(t, s, 22, 2, "b")
+			addMediaFallback(t, s, 22, "b")
 			s.Diagnostics = &diagnostics.Events{}
 			var log strings.Builder
 			s.Log = slog.New(slog.NewTextHandler(&log, nil))
@@ -296,7 +296,7 @@ func TestMediaFailoverTerminalBoundaries(t *testing.T) {
 	for _, scenario := range []string{"预先取消", "代理取消", "302取消", "代理416", "302的416", "copy中断"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-			addMediaFallback(t, s, 22, 2, "b")
+			addMediaFallback(t, s, 22, "b")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var gets, closed atomic.Int32
@@ -351,7 +351,7 @@ func TestMediaHeaderTimeoutTriesDifferentSource(t *testing.T) {
 	for _, proxy := range []bool{false, true} {
 		t.Run(fmt.Sprint(proxy), func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-			addMediaFallback(t, s, 22, 2, "b")
+			addMediaFallback(t, s, 22, "b")
 			var paths []string
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				paths = append(paths, req.URL.Path)
@@ -383,7 +383,7 @@ func TestMediaRecoveryTotalBudget(t *testing.T) {
 	for _, proxy := range []bool{false, true} {
 		t.Run(fmt.Sprint(proxy), func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-			addMediaFallback(t, s, 22, 2, "b")
+			addMediaFallback(t, s, 22, "b")
 			var gets atomic.Int32
 			cancelled := make(chan struct{})
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -482,8 +482,8 @@ func TestRedirectUnknownCandidatesRespectLaterRejections(t *testing.T) {
 			if firstUnknown {
 				second = "other"
 			}
-			addMediaFallback(t, s, 22, 2, second)
-			addMediaFallback(t, s, 33, 3, "same")
+			addMediaFallback(t, s, 22, second)
+			addMediaFallback(t, s, 33, "same")
 			var calls atomic.Int32
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				n := calls.Add(1)
@@ -515,7 +515,7 @@ func TestRedirectFailoverRejectsPreviouslyUnknownURL(t *testing.T) {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("same"))
 			// 不同脚本返回相同地址，后续明确拒绝必须覆盖先前网络不确定的判断。
-			addMediaFallback(t, s, 22, 2, "same")
+			addMediaFallback(t, s, 22, "same")
 			var calls atomic.Int32
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if calls.Add(1) == 1 {
@@ -543,7 +543,7 @@ func TestMediaFailoverRefreshParsingAndFinalQuality(t *testing.T) {
 				script = strings.Replace(script, "() => Promise.resolve", "() => count > 0 ? Promise.reject(new Error('刷新失败')) : Promise.resolve", 1)
 			}
 			s, user, info := newMediaStabilityServer(t, script)
-			addMediaFallback(t, s, 22, 2, "b")
+			addMediaFallback(t, s, 22, "b")
 			// 缓存过期仍优先原源刷新，覆盖刷新解析失败与最终降级音质。
 			if _, err := s.Catalog.ResolvePlaybackURL(context.Background(), info, "flac"); err != nil {
 				t.Fatal(err)

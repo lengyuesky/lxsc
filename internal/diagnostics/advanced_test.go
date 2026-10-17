@@ -123,7 +123,7 @@ func TestFullSourceInspectionAndReload(t *testing.T) {
 	script := `// @name 合成音源
 lx.on(lx.EVENT_NAMES.request,()=>Promise.resolve('https://media.example/file?token=PRIVATE_SOURCE_TOKEN'));
 lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'合成',type:'music',actions:['musicUrl'],qualitys:['320k']}}});`
-	source, err := f.s.DB.CreateSource(context.Background(), &db.Source{Name: "合成音源", Script: script, Enabled: true, Priority: 1})
+	source, err := f.s.DB.CreateSource(context.Background(), &db.Source{Name: "合成音源", Script: script, Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

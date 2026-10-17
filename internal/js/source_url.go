@@ -24,11 +24,13 @@ func (m *SourceManager) musicURLCandidates(ctx context.Context, candidates []*lo
 	if len(candidates) == 0 {
 		return nil, ErrNoSource
 	}
-	// 单源和定向刷新不需要并行调度。
+	// 单源和定向刷新不需要并行调度；父请求同时作为预算与归属判断。
 	if len(candidates) == 1 {
-		return m.callMusicURLSource(ctx, candidates[0], platform, musicInfo, quality, 1)
+		return m.callMusicURLSource(ctx, ctx, candidates[0], platform, musicInfo, quality, 1)
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	// callCtx 只由本函数在收尾或赢家出现时取消；外层 ctx 保持原样，
+	// 用于区分"用户取消"与"其他音源先成功导致的取消"。
+	callCtx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
 	type outcome struct {
@@ -42,7 +44,7 @@ func (m *SourceManager) musicURLCandidates(ctx context.Context, candidates []*lo
 		next++
 		active++
 		workers.Go(func() {
-			result, err := m.callMusicURLSource(ctx, candidates[index], platform, musicInfo, quality, len(candidates)-index)
+			result, err := m.callMusicURLSource(callCtx, ctx, candidates[index], platform, musicInfo, quality, len(candidates)-index)
 			results <- outcome{result, err}
 		})
 	}
@@ -91,7 +93,7 @@ func (m *SourceManager) musicURLCandidates(ctx context.Context, candidates []*lo
 	return nil, lastErr
 }
 
-func (m *SourceManager) callMusicURLSource(ctx context.Context, source *loadedSource, platform string, musicInfo any, quality string, remaining int) (*MusicURLResult, error) {
+func (m *SourceManager) callMusicURLSource(ctx, parent context.Context, source *loadedSource, platform string, musicInfo any, quality string, remaining int) (*MusicURLResult, error) {
 	// 同一音源的全部降级尝试共用预算，并为后续媒体校验留出时间。
 	budget := m.CallTime
 	if deadline, ok := ctx.Deadline(); ok {
@@ -111,6 +113,7 @@ func (m *SourceManager) callMusicURLSource(ctx context.Context, source *loadedSo
 	}
 	source.calls.finish(started, call, musicInfo, err)
 	source.health.record(started, err, result != nil && result.Quality != quality)
+	m.schedule.record(source.id, platform, "musicUrl", classifyOutcome(parent, ctx, err), result != nil && result.Quality != quality, time.Since(started).Milliseconds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", source.meta.Name, err)
 	}

@@ -153,7 +153,6 @@ function sourceCard(s, brief) {
       <button class="sec sm" data-source-action="test" data-source-id="${s.id}"><svg class="icon"><use href="#i-zap"/></svg>测试取链</button>
       <button class="sec sm" data-source-action="statistics" data-source-id="${s.id}">调用统计</button>
       <a class="btn sec sm" href="/api/admin/sources/${s.id}/script" download>下载脚本</a>
-      <label class="prio">优先级<input type="number" value="${s.priority}" data-source-priority="${s.id}"></label>
       <button class="danger sm" data-source-action="delete" data-source-id="${s.id}">删除</button>
     </div><div id="test-${s.id}"></div>
     ${st && st.logs && st.logs.length ? `<details><summary>脚本日志（${st.logs.length}）</summary><pre>${esc(st.logs.slice(-50).join('\n'))}</pre></details>` : ''}`
@@ -218,7 +217,6 @@ async function importSource(e) {
   return false
 }
 async function toggleSource(id, enabled) { await adminAPI('/sources/' + id, { method: 'PUT', body: { enabled } }); await loadSources() }
-async function setPriority(id, priority) { await adminAPI('/sources/' + id, { method: 'PUT', body: { priority: Number(priority) } }); await loadSources() }
 async function reloadSource(id) { const r = await adminAPI('/sources/' + id + '/reload', { method: 'POST' }); if (r.error) toast(r.error, true); else toast('已重新加载'); await loadSources() }
 async function deleteSource(id) { if (!confirm('确定删除该音源？')) return; await adminAPI('/sources/' + id, { method: 'DELETE' }); await loadSources() }
 async function testSource(id) {
@@ -246,9 +244,6 @@ $('#sourceList').addEventListener('click', event => {
   const id = Number(button.dataset.sourceId)
   const actions = { toggle: () => toggleSource(id, button.dataset.enabled === 'true'), reload: () => reloadSource(id), test: () => testSource(id), statistics: () => selectSourceStatistics(id), delete: () => deleteSource(id) }
   Promise.resolve(actions[button.dataset.sourceAction]?.()).catch(error => { if (!isAbort(error)) toast(error.message, true) })
-})
-$('#sourceList').addEventListener('change', event => {
-  if (event.target.matches('[data-source-priority]')) setPriority(Number(event.target.dataset.sourcePriority), event.target.value).catch(error => toast(error.message, true))
 })
 $('#uploadSourceForm').addEventListener('submit', uploadSource)
 $('#importSourceForm').addEventListener('submit', importSource)

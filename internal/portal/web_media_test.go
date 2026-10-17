@@ -33,7 +33,7 @@ func webMediaFixture(t *testing.T) (*portalFixture, *subsonic.Server) {
 	script := `let count=0;
 lx.on(lx.EVENT_NAMES.request, ({info}) => Promise.resolve('https://media.invalid/'+info.type+'/'+(++count)));
 lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{wy:{name:'测试',type:'music',actions:['musicUrl'],qualitys:['128k','320k','flac','flac24bit']}}});`
-	if _, err := sources.Load(context.Background(), 1, 1, script); err != nil {
+	if _, err := sources.Load(context.Background(), 1, script); err != nil {
 		t.Fatal(err)
 	}
 	catalog := music.NewCatalog(f.db, nil, sources, f.service.Settings, f.service.Log)

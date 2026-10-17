@@ -59,7 +59,7 @@ func TestSourceStatisticsRequireAdminAndValidateWindow(t *testing.T) {
 func TestSourceStatisticsCacheHitsAndSourceLifecycle(t *testing.T) {
 	s := newAdminStabilityServer(t)
 	ctx := context.Background()
-	source, _, err := s.AddSource(ctx, countedAdminScript("secret-signed-url"), "统计音源", 10)
+	source, _, err := s.AddSource(ctx, countedAdminScript("secret-signed-url"), "统计音源")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +112,11 @@ func TestSourceStatisticsCacheHitsAndSourceLifecycle(t *testing.T) {
 func TestSourceTestDoesNotUseOtherScripts(t *testing.T) {
 	s := newAdminStabilityServer(t)
 	ctx := context.Background()
-	first, _, err := s.AddSource(ctx, countedAdminScript("first"), "首选音源", 1)
+	first, _, err := s.AddSource(ctx, countedAdminScript("first"), "首选音源")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, _, err := s.AddSource(ctx, `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['320k']}}});globalThis.__lx_request=()=>{throw new Error('仅此音源失败')}`, "测试音源", 2)
+	second, _, err := s.AddSource(ctx, `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['320k']}}});globalThis.__lx_request=()=>{throw new Error('仅此音源失败')}`, "测试音源")
 	if err != nil {
 		t.Fatal(err)
 	}

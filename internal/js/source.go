@@ -86,7 +86,6 @@ type SourceStatus struct {
 	ID        int64                  `json:"id"`
 	Name      string                 `json:"name"`
 	Version   string                 `json:"version"`
-	Priority  int                    `json:"priority"`
 	State     string                 `json:"state"` // loading / ready / error
 	Error     string                 `json:"error,omitempty"`
 	Platforms map[string]PlatformCap `json:"platforms"`
@@ -101,7 +100,6 @@ type loadedSource struct {
 	calls     *sourceCalls
 	id        int64
 	meta      ScriptMeta
-	priority  int
 	worker    *Worker
 	platforms map[string]PlatformCap
 	state     string
@@ -116,6 +114,7 @@ type SourceManager struct {
 	mu         sync.RWMutex
 	loaded     map[int64]*loadedSource
 	statistics map[int64]*sourceCalls
+	schedule   *sourceScheduler
 	prelude    string
 	http       *http.Client
 	httpIns    *http.Client
@@ -125,17 +124,17 @@ type SourceManager struct {
 
 // NewSourceManager 创建管理器
 func NewSourceManager(prelude string, secure, insecure *http.Client, log *slog.Logger) *SourceManager {
-	return &SourceManager{loaded: map[int64]*loadedSource{}, statistics: map[int64]*sourceCalls{}, prelude: prelude, http: secure, httpIns: insecure, log: log, CallTime: 20 * time.Second}
+	return &SourceManager{loaded: map[int64]*loadedSource{}, statistics: map[int64]*sourceCalls{}, schedule: newSourceScheduler(), prelude: prelude, http: secure, httpIns: insecure, log: log, CallTime: 20 * time.Second}
 }
 
 // Load 加载（或重载）一个脚本；返回其能力
-func (m *SourceManager) Load(ctx context.Context, id int64, priority int, script string) (*SourceStatus, error) {
+func (m *SourceManager) Load(ctx context.Context, id int64, script string) (*SourceStatus, error) {
 	m.Unload(id)
 	meta := ParseScriptMeta(script)
 	if meta.Name == "" {
 		meta.Name = fmt.Sprintf("音源#%d", id)
 	}
-	ls := &loadedSource{id: id, meta: meta, priority: priority, platforms: map[string]PlatformCap{}, state: "loading", loadedAt: time.Now(), logs: newRingLog(200)}
+	ls := &loadedSource{id: id, meta: meta, platforms: map[string]PlatformCap{}, state: "loading", loadedAt: time.Now(), logs: newRingLog(200)}
 	m.mu.Lock()
 	ls.calls = m.statistics[id]
 	if ls.calls == nil {
@@ -316,16 +315,8 @@ func (m *SourceManager) UnloadAll() {
 }
 
 // SetPriority 调整优先级
-func (m *SourceManager) SetPriority(id int64, priority int) {
-	m.mu.Lock()
-	if ls, ok := m.loaded[id]; ok {
-		ls.priority = priority
-	}
-	m.mu.Unlock()
-}
-
 func (m *SourceManager) statusOf(ls *loadedSource) *SourceStatus {
-	return &SourceStatus{Health: ls.health.snapshot(), ID: ls.id, Name: ls.meta.Name, Version: ls.meta.Version, Priority: ls.priority, State: ls.state, Error: ls.err, Platforms: ls.platforms, LoadedAt: ls.loadedAt, Alert: ls.alert, Logs: ls.logs.list()}
+	return &SourceStatus{Health: ls.health.snapshot(), ID: ls.id, Name: ls.meta.Name, Version: ls.meta.Version, State: ls.state, Error: ls.err, Platforms: ls.platforms, LoadedAt: ls.loadedAt, Alert: ls.alert, Logs: ls.logs.list()}
 }
 
 // Status 所有已加载音源状态
@@ -337,9 +328,6 @@ func (m *SourceManager) Status() []*SourceStatus {
 		out = append(out, m.statusOf(ls))
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Priority != out[j].Priority {
-			return out[i].Priority < out[j].Priority
-		}
 		return out[i].ID < out[j].ID
 	})
 	return out
@@ -355,10 +343,11 @@ func (m *SourceManager) StatusOf(id int64) *SourceStatus {
 	return nil
 }
 
-// candidates 返回支持 platform/action 的已就绪脚本，按优先级排序
+// candidates 返回支持 platform/action 的已就绪脚本，按运行表现动态排序：
+// 未冷却在前、冷却在后；同层评分高者优先；同分按加载序（ID 升序）。
+// 冷却中的音源排最后但不删除，全部冷却时仍可兜底。
 func (m *SourceManager) candidates(platform, action string) []*loadedSource {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	var out []*loadedSource
 	for _, ls := range m.loaded {
 		if ls.state != "ready" {
@@ -375,12 +364,31 @@ func (m *SourceManager) candidates(platform, action string) []*loadedSource {
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].priority != out[j].priority {
-			return out[i].priority < out[j].priority
+	m.mu.RUnlock()
+	type ranked struct {
+		ls      *loadedSource
+		score   float64
+		cooling bool
+	}
+	list := make([]ranked, len(out))
+	for i, ls := range out {
+		list[i] = ranked{ls, 0, false}
+		if m.schedule != nil {
+			list[i].score, list[i].cooling = m.schedule.rank(ls.id, platform, action)
 		}
-		return out[i].id < out[j].id
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].cooling != list[j].cooling {
+			return list[j].cooling
+		}
+		if list[i].score != list[j].score {
+			return list[i].score > list[j].score
+		}
+		return list[i].ls.id < list[j].ls.id
 	})
+	for i := range list {
+		out[i] = list[i].ls
+	}
 	return out
 }
 
@@ -414,7 +422,7 @@ type MusicURLResult struct {
 	SourceID int64  `json:"-"`      // 由管理器赋值，脚本输出和对外 JSON 均不能携带该身份
 }
 
-// MusicURLSourceIDs 按当前优先级返回支持取链的真实脚本 ID，不使用平台代号或脚本名代替。
+// MusicURLSourceIDs 按当前调度顺序返回支持取链的真实脚本 ID，不使用平台代号或脚本名代替。
 func (m *SourceManager) MusicURLSourceIDs(platform string) []int64 {
 	ids := []int64{}
 	for _, source := range m.candidates(platform, "musicUrl") {
@@ -423,13 +431,13 @@ func (m *SourceManager) MusicURLSourceIDs(platform string) []int64 {
 	return ids
 }
 
-// MusicURL 优先尝试高优先级音源，慢请求可并行尝试备用；音质不支持时向下降级。
+// MusicURL 优先尝试评分高的音源，慢请求可并行尝试备用；音质不支持时向下降级。
 func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	return m.MusicURLForSources(ctx, platform, musicInfo, quality, nil)
 }
 
 // MusicURLForSources 仅在给定脚本集合内取链；nil 表示不限制。
-// 优先级决定启动顺序，慢请求延迟启动备用，先成功者返回；保留源内音质降级。
+// 调度评分决定启动顺序，慢请求延迟启动备用，先成功者返回；保留源内音质降级。
 // 此处不校验音频响应，播放层独立决定是否刷新或换源，调试解析不会隐式探测媒体。
 func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
 	candidates := m.candidates(platform, "musicUrl")
@@ -500,6 +508,7 @@ func (m *SourceManager) Lyric(ctx context.Context, platform string, musicInfo an
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "lyric", Attempts: 1}, musicInfo, err)
+		m.schedule.record(ls.id, platform, "lyric", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds())
 		if err != nil {
 			lastErr = err
 			continue
@@ -530,6 +539,7 @@ func (m *SourceManager) Pic(ctx context.Context, platform string, musicInfo any)
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "pic", Attempts: 1}, musicInfo, err)
+		m.schedule.record(ls.id, platform, "pic", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds())
 		if err != nil {
 			lastErr = err
 			continue

@@ -123,7 +123,7 @@ func TestMediaDeferredRefreshStillRecoversWhenBackupFails(t *testing.T) {
 				if failure == "解析失败" {
 					backup = strings.Replace(backup, "Promise.resolve", "Promise.reject", 1)
 				}
-				if _, err := s.Catalog.Sources.Load(context.Background(), 22, 2, backup); err != nil {
+				if _, err := s.Catalog.Sources.Load(context.Background(), 22, backup); err != nil {
 					t.Fatal(err)
 				}
 				var paths []string

@@ -101,7 +101,7 @@ func TestSourceCallTracksFallbackDowngradesAndAllActions(t *testing.T) {
 		`globalThis.__lx_request=()=>{throw new Error('https://private.invalid/?token=secret')}`,
 		`globalThis.__lx_request=({action,info})=>{if(action==='lyric')return {lyric:'[00:00]歌词正文'};if(action==='pic')return '';if(info.type==='320k')throw new Error('当前音质不可用');return {url:'https://media.invalid/?token=secret'}}`,
 	} {
-		if _, err := m.Load(ctx, int64(i+1), i, "// @name 同名音源\n"+callStatisticsPrelude+body); err != nil {
+		if _, err := m.Load(ctx, int64(i+1), "// @name 同名音源\n"+callStatisticsPrelude+body); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,7 +141,7 @@ func TestSourceCallTracksFallbackDowngradesAndAllActions(t *testing.T) {
 func TestSourceCallCancellationTimeoutAndInFlight(t *testing.T) {
 	m := newCallStatisticsManager(t)
 	script := callStatisticsPrelude + `globalThis.__lx_request=()=>{console.log('统计测试调用已开始');return new Promise(()=>{})};`
-	if _, err := m.Load(context.Background(), 1, 1, script); err != nil {
+	if _, err := m.Load(context.Background(), 1, script); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,7 +178,7 @@ func TestSourceCallStatisticsSurviveReloadAndUnload(t *testing.T) {
 	m := newCallStatisticsManager(t)
 	ctx := context.Background()
 	script := callStatisticsPrelude + `globalThis.__lx_request=()=>({url:'https://media.invalid/test'});`
-	if _, err := m.Load(ctx, 7, 1, script); err != nil {
+	if _, err := m.Load(ctx, 7, script); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.MusicURL(ctx, "wy", nil, "320k"); err != nil {
@@ -186,7 +186,7 @@ func TestSourceCallStatisticsSurviveReloadAndUnload(t *testing.T) {
 	}
 	since := m.CallStatisticsOf(7, time.Now(), time.Hour).Since
 	for _, script := range []string{script, `throw new Error('加载失败')`} {
-		_, _ = m.Load(ctx, 7, 2, script)
+		_, _ = m.Load(ctx, 7, script)
 		if got := m.CallStatisticsOf(7, time.Now(), time.Hour); got.Summary.Calls != 1 || !got.Since.Equal(since) {
 			t.Fatal("重载清除了调用记录")
 		}

@@ -26,7 +26,7 @@ func BenchmarkMusicURLSlowPrimary(b *testing.B) {
 		`globalThis.__lx_request=()=>({url:'https://media.invalid/unused'});`,
 	} {
 		script := `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['320k']}}});` + body
-		if _, err := m.Load(b.Context(), int64(index+1), index, script); err != nil {
+		if _, err := m.Load(b.Context(), int64(index+1), script); err != nil {
 			b.Fatal(err)
 		}
 	}

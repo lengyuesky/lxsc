@@ -363,7 +363,7 @@ func (s *Server) sourceScript(w http.ResponseWriter, r *http.Request) {
 }
 
 // readScript 从 multipart 或 JSON 读取脚本内容
-func readScript(r *http.Request) (script, name string, priority int, err error) {
+func readScript(r *http.Request) (script, name string, err error) {
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		if err = r.ParseMultipartForm(8 << 20); err != nil {
@@ -382,22 +382,20 @@ func readScript(r *http.Request) (script, name string, priority int, err error) 
 		}
 		script = string(b)
 		name = r.FormValue("name")
-		priority, _ = strconv.Atoi(r.FormValue("priority"))
 		return
 	}
 	var body struct {
-		Script   string `json:"script"`
-		Name     string `json:"name"`
-		Priority int    `json:"priority"`
+		Script string `json:"script"`
+		Name   string `json:"name"`
 	}
 	if err = json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		return
 	}
-	return body.Script, body.Name, body.Priority, nil
+	return body.Script, body.Name, nil
 }
 
 // AddSource 新增并加载音源（供导入与上传共用）
-func (s *Server) AddSource(ctx context.Context, script, name string, priority int) (*db.Source, *js.SourceStatus, error) {
+func (s *Server) AddSource(ctx context.Context, script, name string) (*db.Source, *js.SourceStatus, error) {
 	script = strings.TrimPrefix(script, "\uFEFF")
 	if strings.TrimSpace(script) == "" {
 		return nil, nil, errors.New("脚本为空")
@@ -409,15 +407,12 @@ func (s *Server) AddSource(ctx context.Context, script, name string, priority in
 	if name == "" {
 		name = "未命名音源"
 	}
-	if priority <= 0 {
-		priority = 100
-	}
-	src, err := s.DB.CreateSource(ctx, &db.Source{Name: name, Description: meta.Description, Version: meta.Version, Author: meta.Author, Homepage: meta.Homepage, Script: script, Enabled: true, Priority: priority})
+	src, err := s.DB.CreateSource(ctx, &db.Source{Name: name, Description: meta.Description, Version: meta.Version, Author: meta.Author, Homepage: meta.Homepage, Script: script, Enabled: true})
 	if err != nil {
 		return nil, nil, err
 	}
 	defer s.Catalog.InvalidateURLs()
-	st, lerr := s.Sources.Load(ctx, src.ID, src.Priority, script)
+	st, lerr := s.Sources.Load(ctx, src.ID, script)
 	if lerr != nil {
 		s.Log.Warn("音源加载失败（已保存，可稍后重试）", "name", name, "err", lerr)
 	}
@@ -425,12 +420,12 @@ func (s *Server) AddSource(ctx context.Context, script, name string, priority in
 }
 
 func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
-	script, name, priority, err := readScript(r)
+	script, name, err := readScript(r)
 	if err != nil {
 		fail(w, 400, "读取脚本失败: "+err.Error())
 		return
 	}
-	src, st, err := s.AddSource(r.Context(), script, name, priority)
+	src, st, err := s.AddSource(r.Context(), script, name)
 	if err != nil {
 		fail(w, 400, err.Error())
 		return
@@ -440,9 +435,8 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) importSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URL      string `json:"url"`
-		Name     string `json:"name"`
-		Priority int    `json:"priority"`
+		URL  string `json:"url"`
+		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !strings.HasPrefix(body.URL, "http") {
 		fail(w, 400, "URL 无效")
@@ -467,7 +461,7 @@ func (s *Server) importSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "下载失败: "+err.Error())
 		return
 	}
-	src, st, err := s.AddSource(r.Context(), string(b), body.Name, body.Priority)
+	src, st, err := s.AddSource(r.Context(), string(b), body.Name)
 	if err != nil {
 		fail(w, 400, err.Error())
 		return
@@ -483,24 +477,20 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name     *string `json:"name"`
-		Enabled  *bool   `json:"enabled"`
-		Priority *int    `json:"priority"`
-		Script   *string `json:"script"`
+		Name    *string `json:"name"`
+		Enabled *bool   `json:"enabled"`
+		Script  *string `json:"script"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		fail(w, 400, "参数错误")
 		return
 	}
-	upd := &db.Source{ID: id, Name: src.Name, Enabled: src.Enabled, Priority: src.Priority}
+	upd := &db.Source{ID: id, Name: src.Name, Enabled: src.Enabled}
 	if body.Name != nil && *body.Name != "" {
 		upd.Name = *body.Name
 	}
 	if body.Enabled != nil {
 		upd.Enabled = *body.Enabled
-	}
-	if body.Priority != nil {
-		upd.Priority = *body.Priority
 	}
 	if body.Script != nil && strings.TrimSpace(*body.Script) != "" {
 		upd.Script = *body.Script
@@ -511,7 +501,7 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, err.Error())
 		return
 	}
-	invalidateURLs := upd.Enabled != src.Enabled || upd.Priority != src.Priority || upd.Script != ""
+	invalidateURLs := upd.Enabled != src.Enabled || upd.Script != ""
 	defer func() {
 		if invalidateURLs {
 			s.Catalog.InvalidateURLs()
@@ -526,9 +516,8 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 	if src.Enabled {
 		if body.Script != nil || s.Sources.StatusOf(id) == nil {
 			invalidateURLs = true
-			st, _ = s.Sources.Load(r.Context(), id, src.Priority, src.Script)
+			st, _ = s.Sources.Load(r.Context(), id, src.Script)
 		} else {
-			s.Sources.SetPriority(id, src.Priority)
 			st = s.Sources.StatusOf(id)
 		}
 	} else {
@@ -549,6 +538,7 @@ func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Sources.ForgetCallStatistics(id)
+	s.Sources.ForgetSchedule(id)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -560,7 +550,7 @@ func (s *Server) reloadSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.Catalog.InvalidateURLs()
-	st, lerr := s.Sources.Load(r.Context(), id, src.Priority, src.Script)
+	st, lerr := s.Sources.Load(r.Context(), id, src.Script)
 	out := map[string]any{"status": st}
 	if lerr != nil {
 		out["error"] = lerr.Error()

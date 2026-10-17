@@ -104,17 +104,19 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			}
 			return music.URLResolution{}, nil, context.Canceled
 		}
+		id := resolution.Result.SourceID
 		if err == nil && (status == http.StatusOK || status == http.StatusPartialContent || (proxy && !headMetadata && status == http.StatusRequestedRangeNotSatisfiable)) {
+			s.reportMediaFeedback(id, in.Source(), true)
 			return resolution, resp, nil
 		}
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		id := resolution.Result.SourceID
 		if err != nil {
 			if errors.Is(err, errInvalidMediaURL) || errors.Is(err, httpguard.ErrNonAudioResponse) {
 				s.Catalog.InvalidatePlaybackURL(resolution)
 				rejectedURLs[resolution.Result.URL] = struct{}{}
+				s.reportMediaFeedback(id, in.Source(), false)
 			} else if !proxy && !headMetadata {
 				// 网络失败不证明客户端必定失败；候选只存于本次请求，最后排除已明确拒绝的地址。
 				uncertain = append(uncertain, resolution)
@@ -122,6 +124,9 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		} else {
 			rejectedURLs[resolution.Result.URL] = struct{}{}
 			s.Catalog.InvalidatePlaybackURL(resolution)
+			if expiredMediaStatus(status) {
+				s.reportMediaFeedback(id, in.Source(), false)
+			}
 			if expiredMediaStatus(status) && !refreshed[id] {
 				if resolution.Cached || len(sourceIDs) == 1 {
 					refreshed[id] = true
@@ -152,4 +157,13 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		return music.URLResolution{}, nil, ctx.Err()
 	}
 	return music.URLResolution{}, nil, errMediaUnavailable
+}
+
+// reportMediaFeedback 把媒体校验结论反馈给音源调度器；只携带身份与结论，不携带地址或错误原文。
+// 网络不确定、416 等客户端原因不反馈，避免惩罚正常音源。
+func (s *Server) reportMediaFeedback(sourceID int64, platform string, ok bool) {
+	if s.Catalog == nil || s.Catalog.Sources == nil {
+		return
+	}
+	s.Catalog.Sources.ReportMediaOutcome(sourceID, platform, ok)
 }

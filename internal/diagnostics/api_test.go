@@ -324,7 +324,7 @@ func setupProbeScript(t *testing.T, f *fixture, script string) {
 	sources := js.NewSourceManager(string(prelude), &http.Client{}, &http.Client{}, log)
 	t.Cleanup(sources.UnloadAll)
 
-	if _, err := sources.Load(context.Background(), 1, 1, script); err != nil {
+	if _, err := sources.Load(context.Background(), 1, script); err != nil {
 		t.Fatal(err)
 	}
 	f.s.Catalog = music.NewCatalog(f.s.DB, nil, sources, f.s.Settings, log)
@@ -394,7 +394,7 @@ func TestProbeDoesNotAutomaticallyRefreshOrFailOver(t *testing.T) {
 	f := newFixture(t)
 	setupProbe(t, f)
 	const fallback = `lx.on(lx.EVENT_NAMES.request,()=>Promise.resolve('https://media.example/other'));lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['320k']}}});`
-	if _, err := f.s.Catalog.Sources.Load(context.Background(), 22, 2, fallback); err != nil {
+	if _, err := f.s.Catalog.Sources.Load(context.Background(), 22, fallback); err != nil {
 		t.Fatal(err)
 	}
 	_, key := f.create(t, true)

@@ -143,8 +143,8 @@ module.exports = async ({ check, url, login }) => {
     await page.locator('#login:not(.hidden)').waitFor()
     assert.equal(await page.locator('#webdavForm [name=password]').inputValue(), '')
   })
-  await check('音源模块通过事件委托切换状态与优先级', async page => {
-    const source = { id: 99, name: '测试音源', enabled: true, priority: 5, status: { state: 'ready', platforms: {} } }
+  await check('音源模块通过事件委托切换状态', async page => {
+    const source = { id: 99, name: '测试音源', enabled: true, status: { state: 'ready', platforms: {} } }
     await page.route('**/api/admin/sources**', async route => {
       if (new URL(route.request().url()).pathname.endsWith('/statistics')) return route.continue()
       if (route.request().method() === 'PUT') Object.assign(source, route.request().postDataJSON())
@@ -156,10 +156,5 @@ module.exports = async ({ check, url, login }) => {
     await page.locator('[data-source-action=toggle]').click()
     await page.waitForFunction(() => document.querySelector('[data-source-action=toggle]')?.textContent === '启用')
     assert.equal(source.enabled, false)
-    await page.locator('[data-source-priority]').fill('9')
-    await page.locator('[data-source-priority]').press('Tab')
-    await page.waitForFunction(() => document.querySelector('[data-source-priority]')?.value === '9')
-    await page.waitForTimeout(100)
-    assert.equal(source.priority, 9)
   })
 }

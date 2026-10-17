@@ -92,7 +92,7 @@ on(EVENT_NAMES.request, ({ source, action, info }) => {
   return Promise.reject(new Error('unsupported'))
 })
 send(EVENT_NAMES.inited, { status: true, sources: { wy: { name: '测试', type: 'music', actions: ['musicUrl'], qualitys: ['320k'] } } })`
-	if _, err := sources.Load(ctx, 1, 1, script); err != nil {
+	if _, err := sources.Load(ctx, 1, script); err != nil {
 		t.Fatal(err)
 	}
 	catalog := music.NewCatalog(database, nil, sources, store, log)

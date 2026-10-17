@@ -214,7 +214,7 @@ AI 应先比较真实 `client_response`：返回空或失败时，再对同一 I
 | `GET /inspect/runtime` | inspect | 版本、Go/OS/架构、内存、协程和选定运行配置摘要 |
 | `GET /inspect/performance` | inspect | 数据库连接、收听聚合、Catalog 缓存/排队/请求指标 |
 | `GET /inspect/settings` | inspect | 当前运行设置 |
-| `GET /inspect/sources` | inspect | 音源 ID、状态、能力、优先级、版本和脚本 SHA-256；无脚本正文 |
+| `GET /inspect/sources` | inspect | 音源 ID、状态、能力、版本和脚本 SHA-256；无脚本正文 |
 | `GET /inspect/logs` | inspect | 最近 300 条处理过的日志 |
 | `POST /inspect/logs` | inspect | 以 limit（1–1000）、level、contains 筛选日志 |
 | `POST /probe/protocol` | inspect + probe | 只读 Subsonic JSON/XML 协议、实际 HTTP/协议状态和最多 64 KiB 原始捕获预览；自由文本字段会进一步限长和处理 |
