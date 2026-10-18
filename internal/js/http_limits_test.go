@@ -91,8 +91,15 @@ func TestScriptHTTPBurstIsBoundedAndRecovers(t *testing.T) {
 	if success != 40 || busy != 10 || peak.Load() > 8 {
 		t.Fatalf("HTTP 并发或拒绝数错误: 成功=%d 繁忙=%d 峰值=%d", success, busy, peak.Load())
 	}
-	if got := fetchLimits.Stats(); got.Active != 0 || got.Queued != 0 {
-		t.Fatalf("请求结束后未释放名额: %+v", got)
+	// 结果在 JS 回调内交付，额度要到回调返回后才归还；Eval 返回并不保证已归零。
+	statsDeadline := time.Now().Add(time.Second)
+	for {
+		if got := fetchLimits.Stats(); got.Active == 0 && got.Queued == 0 {
+			break
+		} else if time.Now().After(statsDeadline) {
+			t.Fatalf("请求结束后未释放名额: %+v", got)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
