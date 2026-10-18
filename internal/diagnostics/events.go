@@ -2,14 +2,8 @@
 package diagnostics
 
 import (
-	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"net"
 	"regexp"
 	"sync"
-	"syscall"
 	"time"
 
 	"lxsc/internal/httpguard"
@@ -17,31 +11,35 @@ import (
 
 // Event 只接受固定字段；不得加入 URL、用户名、歌曲文本或自由文本错误。
 type Event struct {
-	RequestID     string    `json:"requestId,omitempty"`
-	BytesWritten  *int64    `json:"bytesWritten,omitempty"`
-	ResponseBytes *int64    `json:"responseBytes,omitempty"`
-	Endpoint      string    `json:"endpoint,omitempty"`
-	Method        string    `json:"method,omitempty"`
-	Client        string    `json:"client,omitempty"`
-	Format        string    `json:"format,omitempty"`
-	BoardID       string    `json:"boardId,omitempty"`
-	BoardIDs      []string  `json:"boardIds,omitempty"`
-	Result        string    `json:"result,omitempty"`
-	Count         *int      `json:"count,omitempty"`
-	Lines         *int      `json:"lines,omitempty"`
-	Synced        *bool     `json:"synced,omitempty"`
-	ProtocolCode  *int      `json:"protocolCode,omitempty"`
-	Time          time.Time `json:"time"`
-	Stage         string    `json:"stage"`
-	TrackID       string    `json:"trackId,omitempty"`
-	Platform      string    `json:"platform,omitempty"`
-	Quality       string    `json:"quality,omitempty"`
-	Mode          string    `json:"mode,omitempty"`
-	Cached        bool      `json:"cached"`
-	CoverOrigin   string    `json:"coverOrigin,omitempty"`
-	Status        int       `json:"status"`
-	Error         string    `json:"error"`
-	ElapsedMS     int64     `json:"elapsedMs"`
+	RequestID        string    `json:"requestId,omitempty"`
+	BytesWritten     *int64    `json:"bytesWritten,omitempty"`
+	ResponseBytes    *int64    `json:"responseBytes,omitempty"`
+	Endpoint         string    `json:"endpoint,omitempty"`
+	Method           string    `json:"method,omitempty"`
+	Client           string    `json:"client,omitempty"`
+	Format           string    `json:"format,omitempty"`
+	BoardID          string    `json:"boardId,omitempty"`
+	BoardIDs         []string  `json:"boardIds,omitempty"`
+	Result           string    `json:"result,omitempty"`
+	Count            *int      `json:"count,omitempty"`
+	Lines            *int      `json:"lines,omitempty"`
+	Synced           *bool     `json:"synced,omitempty"`
+	ProtocolCode     *int      `json:"protocolCode,omitempty"`
+	Time             time.Time `json:"time"`
+	Stage            string    `json:"stage"`
+	TrackID          string    `json:"trackId,omitempty"`
+	Platform         string    `json:"platform,omitempty"`
+	Quality          string    `json:"quality,omitempty"`
+	RequestedQuality string    `json:"requestedQuality,omitempty"`
+	Attempt          int       `json:"attempt,omitempty"`
+	BudgetMS         int64     `json:"budgetMs,omitempty"`
+	Validation       string    `json:"validation,omitempty"`
+	Mode             string    `json:"mode,omitempty"`
+	Cached           bool      `json:"cached"`
+	CoverOrigin      string    `json:"coverOrigin,omitempty"`
+	Status           int       `json:"status"`
+	Error            string    `json:"error"`
+	ElapsedMS        int64     `json:"elapsedMs"`
 }
 
 var trackPattern = regexp.MustCompile(`^tr-(wy|tx|kw|kg|mg)-[A-Za-z0-9_-]{1,128}$`)
@@ -65,54 +63,8 @@ func Quality(value string) string {
 }
 func Mode(value string) string { return oneOf(value, "redirect", "force_redirect", "proxy") }
 
-// ErrorCode 通过类型分类；绝不读取或返回 err.Error() 中的签名地址。
-func ErrorCode(err error) string {
-	if err == nil {
-		return "none"
-	}
-	if errors.Is(err, context.Canceled) {
-		return "cancelled"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	if errors.Is(err, errUnsafeTarget) {
-		return "blocked_target"
-	}
-	if errors.Is(err, errRedirectLimit) {
-		return "redirect_limit"
-	}
-	if errors.Is(err, httpguard.ErrNonAudioResponse) {
-		return "non_audio"
-	}
-	var dns *net.DNSError
-	if errors.As(err, &dns) {
-		if dns.Timeout() {
-			return "timeout"
-		}
-		return "dns"
-	}
-	var cert *tls.CertificateVerificationError
-	var unknown x509.UnknownAuthorityError
-	var hostname x509.HostnameError
-	var invalid x509.CertificateInvalidError
-	var record tls.RecordHeaderError
-	if errors.As(err, &cert) || errors.As(err, &unknown) || errors.As(err, &hostname) || errors.As(err, &invalid) || errors.As(err, &record) {
-		return "tls"
-	}
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return "timeout"
-	}
-	var op *net.OpError
-	if errors.As(err, &op) && op.Op == "dial" {
-		return "connect"
-	}
-	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENETUNREACH) {
-		return "connect"
-	}
-	return "upstream_error"
-}
+// ErrorCode 通过固定类别分类，不返回错误中的原始文本。
+func ErrorCode(err error) string { return httpguard.ErrorCode(err) }
 
 // Events 固定容量内存环；零值可用，nil 接收者方便不启用诊断的测试服务。
 type Events struct {
@@ -172,8 +124,12 @@ func (b *Events) Add(e Event) {
 	}
 	e.Platform = Platform(e.Platform)
 	e.Quality = Quality(e.Quality)
+	e.RequestedQuality = Quality(e.RequestedQuality)
+	e.Attempt = min(100, max(0, e.Attempt))
+	e.BudgetMS = min(12000, max(0, e.BudgetMS))
+	e.Validation = oneOf(e.Validation, "validated", "unverified", "failed")
 	e.Mode = Mode(e.Mode)
-	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error", "encode_error", "write_error")
+	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error", "encode_error", "write_error", "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error")
 	if e.Error == "" {
 		e.Error = "upstream_error"
 	}

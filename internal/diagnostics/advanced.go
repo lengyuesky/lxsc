@@ -83,6 +83,8 @@ func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
 			item := map[string]any{"id": source.ID, "name": source.Name, "version": source.Version, "enabled": source.Enabled, "scriptBytes": len(source.Script), "scriptSHA256": hex.EncodeToString(digest[:])}
 			if s.Sources != nil {
 				item["status"] = s.Sources.StatusOf(source.ID)
+				item["schedule"] = s.Sources.ScheduleSnapshot(source.ID)
+				item["callStatistics"] = s.Sources.CallStatisticsOf(source.ID, time.Now(), 24*time.Hour)
 			}
 			items = append(items, item)
 		}

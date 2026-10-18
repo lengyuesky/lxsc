@@ -68,7 +68,7 @@ let isInitedApi = false
 let isShowedUpdateAlert = false
 
 const verifyLyricInfo = info => {
-  if (typeof info !== 'object' || info === null || typeof info.lyric !== 'string' || info.lyric.length > 51200) throw new Error('failed')
+  if (typeof info !== 'object' || info === null || typeof info.lyric !== 'string' || info.lyric.length > 51200) throw Object.assign(new Error('failed'), { code: 'EINVALIDRESPONSE' })
   return {
     lyric: info.lyric,
     tlyric: (typeof info.tlyric === 'string' && info.tlyric.length < 5120) ? info.tlyric : null,
@@ -227,12 +227,12 @@ g.__lx_request = data => {
   return Promise.resolve().then(() => events.request.call(lx, { source: data.source, action: data.action, info: data.info })).then(response => {
     switch (data.action) {
       case 'musicUrl':
-        if (typeof response !== 'string' || response.length > 2048 || !/^https?:/.test(response)) throw new Error('failed')
+        if (typeof response !== 'string' || response.length > 2048 || !/^https?:/.test(response)) throw Object.assign(new Error('failed'), { code: 'EINVALIDRESPONSE' })
         return { type: data.info.type, url: response }
       case 'lyric':
         return verifyLyricInfo(response)
       case 'pic':
-        if (typeof response !== 'string' || response.length > 2048 || !/^https?:/.test(response)) throw new Error('failed')
+        if (typeof response !== 'string' || response.length > 2048 || !/^https?:/.test(response)) throw Object.assign(new Error('failed'), { code: 'EINVALIDRESPONSE' })
         return response
       default:
         return response

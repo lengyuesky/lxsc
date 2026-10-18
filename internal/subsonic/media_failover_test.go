@@ -12,12 +12,12 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"lxsc/internal/diagnostics"
-	"lxsc/internal/music"
 )
 
 func mediaFailoverScript(label string) string {
@@ -221,9 +221,9 @@ func TestMediaFailoverAllRejectedIsBounded(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			s.stream(rec, mediaStabilityRequest(user, info, extra))
-			want := []string{"/a/1", "/b/1", "/c/1", "/c/2", "/a/2", "/b/2"}
-			if !reflect.DeepEqual(paths, want) || reads.Load() != 0 || closed.Load() != 6 {
-				t.Fatalf("最多三个不同脚本、六次媒体请求，不读取失败正文：%v 读取=%d 关闭=%d", paths, reads.Load(), closed.Load())
+			want := []string{"/a/1", "/b/1", "/c/1", "/d/1", "/a/2", "/b/2", "/c/2", "/d/2"}
+			if !reflect.DeepEqual(paths, want) || reads.Load() != 0 || closed.Load() != 8 {
+				t.Fatalf("完整四源且每源最多刷新一次，不读取失败正文：%v 读取=%d 关闭=%d", paths, reads.Load(), closed.Load())
 			}
 			if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
 				t.Fatal("全部明确失败必须返回协议错误")
@@ -353,23 +353,28 @@ func TestMediaHeaderTimeoutTriesDifferentSource(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
 			addMediaFallback(t, s, 22, "b")
 			var paths []string
+			var pathsMu sync.Mutex
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				pathsMu.Lock()
 				paths = append(paths, req.URL.Path)
+				pathsMu.Unlock()
 				if strings.HasPrefix(req.URL.Path, "/a/") {
 					<-req.Context().Done()
 					return nil, req.Context().Err()
 				}
 				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("音频")), Request: req}, nil
 			})}
-			extra, limit := "", music.URLCheckTimeout
+			extra := ""
 			if proxy {
-				extra, limit = "&proxy=1", mediaHeaderTimeout
+				extra = "&proxy=1"
 			}
 			started := time.Now()
 			rec := httptest.NewRecorder()
 			s.stream(rec, mediaStabilityRequest(user, info, extra))
 			elapsed := time.Since(started)
-			if elapsed < limit-time.Second || elapsed > limit+2*time.Second || !reflect.DeepEqual(paths, []string{"/a/1", "/b/1"}) {
+			pathsMu.Lock()
+			defer pathsMu.Unlock()
+			if elapsed < mediaFallbackDelay-time.Second || elapsed > mediaFallbackDelay+time.Second || !reflect.DeepEqual(paths, []string{"/a/1", "/b/1"}) {
 				t.Fatalf("头超时必须及时取消A并访问B：耗时=%v，请求=%v", elapsed, paths)
 			}
 		})
@@ -377,7 +382,7 @@ func TestMediaHeaderTimeoutTriesDifferentSource(t *testing.T) {
 }
 
 func TestMediaRecoveryTotalBudget(t *testing.T) {
-	if mediaRecoveryTimeout != 45*time.Second || maxMediaSources != 3 || maxMediaAttempts != 6 {
+	if mediaRecoveryTimeout != 12*time.Second || maxConcurrentMediaSources != 2 || maxMediaAttempts != 12 {
 		t.Fatal("恢复上限必须固定且与文档一致")
 	}
 	for _, proxy := range []bool{false, true} {

@@ -63,12 +63,12 @@ func TestSourceCallWindowsAreIndependentOfRecentLimit(t *testing.T) {
 
 func TestSourceCallClassificationAndBoundedMetadata(t *testing.T) {
 	s := &sourceCalls{since: time.Now()}
-	for _, err := range []error{nil, context.Canceled, context.DeadlineExceeded, admission.ErrBusy, errInvalidSourceResponse, errors.New("https://private.invalid/?token=secret")} {
+	for _, err := range []error{nil, context.Canceled, context.DeadlineExceeded, admission.ErrBusy, errInvalidSourceResponse, errors.New("https://private.invalid/?token=secret"), ErrNoQuality, ErrSourceAuth, ErrSourceRateLimited, ErrSourceUnavailable} {
 		s.begin()
 		s.finish(time.Now().Add(-time.Millisecond), SourceCall{Platform: "wy", Action: "musicUrl", Attempts: 1, RequestedQuality: "https://private.invalid/?token=secret"}, map[string]any{"name": strings.Repeat("歌曲", 10000), "singer": "测试歌手", "picUrl": "secret", "meta": map[string]any{"token": "secret"}}, err)
 	}
 	stats := s.snapshot(time.Now(), time.Hour)
-	if stats.Summary.Calls != 6 || stats.Summary.Success != 1 || stats.Summary.Failed != 4 || stats.Summary.Cancelled != 1 || stats.InFlight != 0 {
+	if stats.Summary.Calls != 10 || stats.Summary.Success != 1 || stats.Summary.Failed != 8 || stats.Summary.Cancelled != 1 || stats.InFlight != 0 {
 		t.Fatalf("调用分类异常: %+v", stats.Summary)
 	}
 	for _, category := range sourceCallErrors {
@@ -96,7 +96,7 @@ func newCallStatisticsManager(t *testing.T) *SourceManager {
 
 func TestSourceCallTracksFallbackDowngradesAndAllActions(t *testing.T) {
 	m := newCallStatisticsManager(t)
-	ctx := context.Background()
+	ctx := WithMusicURLPolicy(context.Background(), "speed", false)
 	for i, body := range []string{
 		`globalThis.__lx_request=()=>{throw new Error('https://private.invalid/?token=secret')}`,
 		`globalThis.__lx_request=({action,info})=>{if(action==='lyric')return {lyric:'[00:00]歌词正文'};if(action==='pic')return '';if(info.type==='320k')throw new Error('当前音质不可用');return {url:'https://media.invalid/?token=secret'}}`,

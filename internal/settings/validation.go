@@ -108,13 +108,15 @@ func normalizePatch(patch map[string]json.RawMessage) (map[string]string, error)
 				}
 			}
 			values[key] = strings.Join(unique, ",")
-		case "streamMode", "coverMode", "defaultQuality", "serverName":
+		case "streamMode", "coverMode", "sourceSelection", "defaultQuality", "serverName":
 			var value string
 			if json.Unmarshal(raw, &value) != nil {
 				return invalid("必须是字符串")
 			}
 			allowed := []string{"redirect", "proxy"}
 			switch key {
+			case "sourceSelection":
+				allowed = []string{"quality", "speed"}
 			case "streamMode":
 				allowed = append(allowed, "force_redirect")
 			case "defaultQuality":

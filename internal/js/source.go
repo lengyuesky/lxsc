@@ -19,9 +19,8 @@ import (
 // 平台与音质常量（与桌面版 preload 保持一致）
 var (
 	AllPlatforms    = []string{"kw", "kg", "tx", "wy", "mg"}
-	AllQualities    = []string{"128k", "320k", "flac", "flac24bit"}
+	AllQualities    = []string{"128k", "192k", "320k", "flac", "flac24bit"}
 	supportActions  = []string{"musicUrl", "lyric", "pic"}
-	qualityRank     = map[string]int{"128k": 1, "320k": 2, "flac": 3, "flac24bit": 4, "hires": 4}
 	ErrNoSource     = errors.New("没有可用的音源支持该平台")
 	ErrNoQuality    = errors.New("音源不支持所请求的音质")
 	ErrScriptFailed = errors.New("音源脚本返回失败")
@@ -253,7 +252,7 @@ func parsePlatformCap(raw json.RawMessage) (PlatformCap, bool) {
 			}
 		}
 		for _, q := range obj.Qualitys {
-			if _, ok := qualityRank[q]; ok {
+			if QualityRank(q) > 0 {
 				cap.Qualitys = append(cap.Qualitys, q)
 			}
 		}
@@ -267,7 +266,7 @@ func parsePlatformCap(raw json.RawMessage) (PlatformCap, bool) {
 	if err := json.Unmarshal(raw, &arr); err == nil {
 		cap := PlatformCap{Type: "music", Actions: []string{"musicUrl"}}
 		for _, q := range arr {
-			if _, ok := qualityRank[q]; ok {
+			if QualityRank(q) > 0 {
 				cap.Qualitys = append(cap.Qualitys, q)
 			}
 		}
@@ -375,6 +374,11 @@ func (m *SourceManager) candidates(platform, action string) []*loadedSource {
 		list[i] = ranked{ls, 0, false}
 		if m.schedule != nil {
 			list[i].score, list[i].cooling = m.schedule.rank(ls.id, platform, action)
+			if action == "musicUrl" {
+				mediaScore, mediaCooling := m.schedule.rank(ls.id, platform, "media")
+				list[i].score += mediaScore
+				list[i].cooling = list[i].cooling || mediaCooling
+			}
 		}
 	}
 	sort.Slice(list, func(i, j int) bool {
@@ -431,6 +435,16 @@ func (m *SourceManager) MusicURLSourceIDs(platform string) []int64 {
 	return ids
 }
 
+func (m *SourceManager) SupportsMusicURLQuality(id int64, platform, quality string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if source := m.loaded[id]; source != nil && source.state == "ready" {
+		_, ok := scriptQuality(quality, source.platforms[platform].Qualitys)
+		return ok
+	}
+	return false
+}
+
 // MusicURL 优先尝试评分高的音源，慢请求可并行尝试备用；音质不支持时向下降级。
 func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	return m.MusicURLForSources(ctx, platform, musicInfo, quality, nil)
@@ -442,7 +456,7 @@ func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo
 func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
 	candidates := m.candidates(platform, "musicUrl")
 	candidates = slices.DeleteFunc(candidates, func(ls *loadedSource) bool {
-		return sourceIDs != nil && !slices.Contains(sourceIDs, ls.id)
+		return (sourceIDs != nil && !slices.Contains(sourceIDs, ls.id)) || !m.schedule.canCall(ls.id, platform)
 	})
 	return m.musicURLCandidates(ctx, candidates, platform, musicInfo, quality)
 }
@@ -450,7 +464,14 @@ func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string,
 func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, int, error) {
 	var lastErr error = ErrNoQuality
 	attempts := 0
-	for _, q := range downgradeChain(quality, ls.platforms[platform].Qualitys) {
+	chain := downgradeChain(quality, ls.platforms[platform].Qualitys)
+	if urlPolicy(ctx).exact {
+		chain = nil
+		if q, ok := scriptQuality(quality, ls.platforms[platform].Qualitys); ok {
+			chain = []string{q}
+		}
+	}
+	for _, q := range chain {
 		if ctx.Err() != nil {
 			return nil, attempts, ctx.Err()
 		}
@@ -464,6 +485,9 @@ func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource
 			if errors.Is(err, admission.ErrBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				return nil, attempts, err
 			}
+			if errors.Is(err, ErrSourceAuth) || errors.Is(err, ErrSourceRateLimited) || errors.Is(err, ErrSourceUnavailable) || errors.Is(err, ErrInvalidSourceResponse) {
+				return nil, attempts, err
+			}
 			// 音质不支持仍允许降级，日志不输出可能携带签名地址的错误原文。
 			m.log.Debug("取直链失败", "source", ls.meta.Name, "platform", platform, "quality", q)
 			continue
@@ -471,9 +495,9 @@ func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource
 		var result MusicURLResult
 		if err := json.Unmarshal(out, &result); err != nil || result.URL == "" {
 			lastErr = errInvalidSourceResponse
-			continue
+			return nil, attempts, lastErr
 		}
-		result.Quality, result.Source, result.SourceID = q, ls.meta.Name, ls.id
+		result.Quality, result.Source, result.SourceID = CanonicalQuality(q), ls.meta.Name, ls.id
 		return &result, attempts, nil
 	}
 	return nil, attempts, lastErr
@@ -502,13 +526,13 @@ func (m *SourceManager) Lyric(ctx context.Context, platform string, musicInfo an
 		ls.calls.begin()
 		cctx, cancel := context.WithTimeout(ctx, m.CallTime)
 		out, err := ls.worker.CallJSON(cctx, "__lx_request", map[string]any{"source": platform, "action": "lyric", "info": map[string]any{"musicInfo": musicInfo}})
-		cancel()
 		var r LyricResult
 		if err == nil && (json.Unmarshal(out, &r) != nil || (strings.TrimSpace(r.Lyric) == "" && strings.TrimSpace(r.LxLyric) == "")) {
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "lyric", Attempts: 1}, musicInfo, err)
 		m.schedule.record(ls.id, platform, "lyric", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds())
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue
@@ -533,13 +557,13 @@ func (m *SourceManager) Pic(ctx context.Context, platform string, musicInfo any)
 		ls.calls.begin()
 		cctx, cancel := context.WithTimeout(ctx, m.CallTime)
 		out, err := ls.worker.CallJSON(cctx, "__lx_request", map[string]any{"source": platform, "action": "pic", "info": map[string]any{"musicInfo": musicInfo}})
-		cancel()
 		var s string
 		if err == nil && (json.Unmarshal(out, &s) != nil || strings.TrimSpace(s) == "") {
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "pic", Attempts: 1}, musicInfo, err)
 		m.schedule.record(ls.id, platform, "pic", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds())
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue
@@ -551,22 +575,11 @@ func (m *SourceManager) Pic(ctx context.Context, platform string, musicInfo any)
 
 // downgradeChain 从请求音质开始，按脚本支持列表向下降级
 func downgradeChain(want string, supported []string) []string {
-	rank := qualityRank[want]
-	if rank == 0 {
-		rank = qualityRank["320k"]
-	}
-	set := map[string]bool{}
-	for _, q := range supported {
-		set[q] = true
-	}
 	var out []string
-	for _, q := range []string{"flac24bit", "flac", "320k", "128k"} {
-		if qualityRank[q] <= rank && set[q] {
-			out = append(out, q)
+	for _, q := range QualityChain(want) {
+		if wire, ok := scriptQuality(q, supported); ok {
+			out = append(out, wire)
 		}
-	}
-	if len(out) == 0 && set["128k"] {
-		out = append(out, "128k")
 	}
 	return out
 }

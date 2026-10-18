@@ -406,17 +406,17 @@ func TestReportMediaOutcome(t *testing.T) {
 		t.Fatal("非法身份的反馈必须忽略")
 	}
 	m.ReportMediaOutcome(1, "wy", false)
-	state := m.schedule.states[scheduleKey{1, "wy", "musicUrl"}]
+	state := m.schedule.states[scheduleKey{1, "wy", "media"}]
 	if state.consec != 1 {
 		t.Fatalf("首次媒体拒绝应计入连续失败: %d", state.consec)
 	}
 	fake = fake.Add(scheduleFailGrace + time.Second)
 	m.ReportMediaOutcome(1, "wy", false)
-	if _, cooling := m.schedule.rank(1, "wy", "musicUrl"); !cooling {
+	if _, cooling := m.schedule.rank(1, "wy", "media"); !cooling {
 		t.Fatal("跨窗口的第二次媒体拒绝应触发冷却")
 	}
 	m.ReportMediaOutcome(1, "wy", true)
-	if _, cooling := m.schedule.rank(1, "wy", "musicUrl"); cooling {
+	if _, cooling := m.schedule.rank(1, "wy", "media"); cooling {
 		t.Fatal("媒体成功反馈应恢复排名")
 	}
 	if got := m.CallStatisticsOf(1, time.Now(), time.Hour); got.Total.Calls != 0 {

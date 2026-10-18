@@ -19,6 +19,8 @@ const (
 
 var errInvalidSourceResponse = errors.New("音源返回数据无效")
 
+var ErrInvalidSourceResponse = errInvalidSourceResponse
+
 // SourceCall 只保存调用所需的白名单信息，不保留直链、歌词正文或原始错误。
 type SourceCall struct {
 	At               time.Time `json:"at"`
@@ -72,7 +74,7 @@ type SourceCallStatistics struct {
 	Recent        []SourceCall      `json:"recent"`
 }
 
-var sourceCallErrors = [...]string{"timeout", "busy", "cancelled", "invalid_response", "script"}
+var sourceCallErrors = [...]string{"timeout", "busy", "cancelled", "invalid_response", "script", "unsupported_quality", "source_auth", "rate_limited", "source_error"}
 
 type sourceCallCounters struct {
 	calls, success, downgrades, attempts, durationMS, maxMS int64
@@ -139,6 +141,14 @@ func sourceCallCategory(err error) string {
 		return "busy"
 	case errors.Is(err, errInvalidSourceResponse):
 		return "invalid_response"
+	case errors.Is(err, ErrNoQuality):
+		return "unsupported_quality"
+	case errors.Is(err, ErrSourceAuth):
+		return "source_auth"
+	case errors.Is(err, ErrSourceRateLimited):
+		return "rate_limited"
+	case errors.Is(err, ErrSourceUnavailable):
+		return "source_error"
 	case err != nil:
 		return "script"
 	default:
@@ -157,7 +167,7 @@ func (s *sourceCalls) finish(start time.Time, call SourceCall, musicInfo any, er
 		call.Outcome = "failed"
 	}
 	// 防止非标准音质与任意 musicInfo 内容进入统计记录。
-	if _, ok := qualityRank[call.RequestedQuality]; !ok {
+	if QualityRank(call.RequestedQuality) == 0 {
 		call.RequestedQuality = ""
 	}
 	if info, ok := musicInfo.(map[string]any); ok {

@@ -15,6 +15,19 @@ import (
 	"lxsc/internal/urlcache"
 )
 
+const downgradedURLTTL = 5 * time.Minute
+
+// 降级候选须定期重新竞争请求档位，即使管理员为普通直链选择了永久缓存。
+func playbackURLExpiry(key urlKey, value js.MusicURLResult, created, expires time.Time) time.Time {
+	if js.QualityRank(value.Quality) < js.QualityRank(key.quality) {
+		limit := created.Add(downgradedURLTTL)
+		if expires.IsZero() || limit.Before(expires) {
+			return limit
+		}
+	}
+	return expires
+}
+
 type urlPersistence struct {
 	store       *urlcache.Store
 	fingerprint func() (string, error)
@@ -72,6 +85,10 @@ func (c *Catalog) EnableURLCache(dataDir, proxy string) error {
 		if record.ExpiresAt != 0 {
 			entry.expires = time.UnixMilli(record.ExpiresAt)
 		}
+		entry.expires = playbackURLExpiry(urlKey{record.TrackID, record.Quality}, entry.result.value, entry.created, entry.expires)
+		if !entry.expires.IsZero() && !c.urls.now().Before(entry.expires) {
+			continue
+		}
 		c.urls.entries.Add(urlKey{record.TrackID, record.Quality}, entry)
 	}
 	p.startTouches(c.urls.capacity, func() {
@@ -98,11 +115,12 @@ func (c *Catalog) urlCacheFingerprint(proxy string) (string, error) {
 		Platforms map[string]js.PlatformCap
 	}
 	state := struct {
-		Version int
-		TTL     int
-		Proxy   string
-		Sources []sourceState
-	}{Version: 3, TTL: c.Settings.Get().URLCacheTTL, Proxy: proxy}
+		Version   int
+		TTL       int
+		Proxy     string
+		Sources   []sourceState
+		Selection string
+	}{Version: 4, TTL: c.Settings.Get().URLCacheTTL, Proxy: proxy, Selection: c.Settings.Get().SourceSelection}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	sources, err := c.DB.ListSources(ctx)

@@ -1,9 +1,6 @@
 package js
 
 import (
-	"context"
-	"errors"
-	"lxsc/internal/admission"
 	"sync"
 	"time"
 )
@@ -28,17 +25,7 @@ type sourceHealth struct {
 }
 
 func (h *sourceHealth) record(start time.Time, err error, downgrade bool) {
-	category := ""
-	switch {
-	case errors.Is(err, context.Canceled):
-		category = "cancelled"
-	case errors.Is(err, context.DeadlineExceeded):
-		category = "timeout"
-	case errors.Is(err, admission.ErrBusy):
-		category = "busy"
-	case err != nil:
-		category = "script"
-	}
+	category := sourceCallCategory(err)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.samples[h.next] = healthSample{time.Now(), time.Since(start).Milliseconds(), category, downgrade}

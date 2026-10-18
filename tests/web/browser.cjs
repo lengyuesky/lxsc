@@ -687,6 +687,19 @@ async function main() {
       assert.deepEqual(await page.evaluate(() => LXSCSettings.selection()), { wy: ['hot'] })
     })
 
+    await check('音源选择策略保存与刷新回显', async page => {
+      await adminSettings(page, url)
+      const select = page.locator('#settingsForm [name=sourceSelection]')
+      assert.deepEqual(await select.locator('option').evaluateAll(options => options.map(option => option.value)), ['quality', 'speed'])
+      for (const strategy of ['speed', 'quality']) {
+        await select.selectOption(strategy)
+        assert.equal((await saveSettingsUI(page)).sourceSelection, strategy)
+        await page.reload()
+        await page.locator('#settingsForm:not([inert])').waitFor()
+        assert.equal(await select.inputValue(), strategy)
+      }
+    })
+
     await check('直链缓存五档保存、刷新回显与保存失败保留选择', async page => {
       await adminSettings(page, url)
       const select = page.locator('#settingsForm [name=urlCacheTTL]')

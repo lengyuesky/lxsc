@@ -93,7 +93,7 @@ func TestURLCheckRefreshAndQualityNeverReuseOldValidation(t *testing.T) {
 	}
 }
 
-func TestURLCheckDoesNotCacheFailuresOrDisabledResults(t *testing.T) {
+func TestURLCheckFailuresExpireQuicklyAndNeverBecomeSuccess(t *testing.T) {
 	for _, tc := range []struct {
 		name, contentType string
 		status            int
@@ -109,24 +109,40 @@ func TestURLCheckDoesNotCacheFailuresOrDisabledResults(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, resolution := checkedURLCatalog(t)
+			now := time.Now()
+			c.urlChecks.now = func() time.Time { return now }
 			if tc.disabled {
 				setURLTTL(t, c, 0)
 			}
 			var checks atomic.Int32
+			check := func(context.Context) (*http.Response, error) {
+				checks.Add(1)
+				if tc.status == 0 {
+					return nil, tc.err
+				}
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {tc.contentType}}}, nil
+			}
 			for range 2 {
-				_, err := c.CheckPlaybackURL(context.Background(), resolution, func(context.Context) (*http.Response, error) {
-					checks.Add(1)
-					if tc.status == 0 {
-						return nil, tc.err
-					}
-					return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {tc.contentType}}}, nil
-				})
+				response, err := c.CheckPlaybackURL(context.Background(), resolution, check)
 				if !errors.Is(err, tc.err) {
 					t.Fatalf("校验错误应保留: got=%v want=%v", err, tc.err)
 				}
+				if tc.status != 0 && (response == nil || response.StatusCode != tc.status) {
+					t.Fatal("缓存不能将失败状态改为成功", response)
+				}
 			}
-			if checks.Load() != 2 || c.urlChecks.stats().Entries != 0 {
-				t.Fatalf("此类结果不能缓存: checks=%d", checks.Load())
+			cacheable := !tc.disabled && !errors.Is(tc.err, context.Canceled)
+			if cacheable {
+				if checks.Load() != 1 || c.urlChecks.stats().Entries != 1 {
+					t.Fatalf("同版本失败应短期合并: checks=%d", checks.Load())
+				}
+				now = now.Add(urlCheckFailureTTL)
+				_, _ = c.CheckPlaybackURL(context.Background(), resolution, check)
+				if checks.Load() != 2 {
+					t.Fatal("失败缓存到期必须重新检查")
+				}
+			} else if checks.Load() != 2 || c.urlChecks.stats().Entries != 0 {
+				t.Fatalf("取消与禁用不能缓存: checks=%d", checks.Load())
 			}
 		})
 	}

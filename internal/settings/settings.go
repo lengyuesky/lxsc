@@ -47,6 +47,7 @@ func parseTTL(value string) (int, error) {
 type Values struct {
 	SearchSources    []string            `json:"searchSources"`    // 聚合搜索的平台及顺序
 	StreamMode       string              `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
+	SourceSelection  string              `json:"sourceSelection"`  // quality 同档优先 / speed 有界竞速
 	CoverMode        string              `json:"coverMode"`        // redirect / proxy
 	CustomLyricsURL  string              `json:"customLyricsURL"`  // 现有歌词来源失败后的自定义接口
 	CustomCoverURL   string              `json:"customCoverURL"`   // 原封面无法读取时的自定义接口
@@ -70,6 +71,7 @@ func Defaults() Values {
 	return Values{
 		SearchSources:    []string{"wy", "tx", "kw", "kg", "mg"},
 		StreamMode:       "redirect",
+		SourceSelection:  "quality",
 		CoverMode:        "redirect",
 		CustomLyricsURL:  DefaultCustomLyricsURL,
 		CustomCoverURL:   DefaultCustomCoverURL,
@@ -123,6 +125,10 @@ func apply(v Values, m map[string]string) Values {
 		case "streamMode":
 			if val == "proxy" || val == "redirect" || val == "force_redirect" {
 				v.StreamMode = val
+			}
+		case "sourceSelection":
+			if val == "quality" || val == "speed" {
+				v.SourceSelection = val
 			}
 		case "coverMode":
 			if val == "proxy" || val == "redirect" {

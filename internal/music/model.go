@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"lxsc/internal/js"
 )
 
 // Info 平台歌曲元数据（扁平结构，与 SDK 搜索结果一致，可直接传给音源脚本）
@@ -175,26 +177,13 @@ func (i *Info) BestQuality() string {
 
 // QualityRank 音质等级
 func QualityRank(q string) int {
-	switch q {
-	case "128k":
-		return 1
-	case "192k":
-		return 2
-	case "320k":
-		return 3
-	case "flac":
-		return 4
-	case "flac24bit", "hires":
-		return 5
-	case "master", "atmos", "atmos_plus", "dolby":
-		return 6
-	}
-	return 0
+	return js.QualityRank(q)
 }
 
 // SelectQuality 在歌曲已知音质中选择不高于目标音质的最高档。
 // 元数据未提供音质列表，或没有可向下降级的档位时，保留目标音质交给音源解析器处理。
 func SelectQuality(want string, available []string) string {
+	want = js.CanonicalQuality(want)
 	if QualityRank(want) == 0 {
 		want = "320k"
 	}
@@ -209,7 +198,7 @@ func SelectQuality(want string, available []string) string {
 		set[quality] = true
 	}
 	wantRank := QualityRank(want)
-	for _, quality := range []string{"flac24bit", "flac", "320k", "128k"} {
+	for _, quality := range js.QualityChain(want) {
 		if set[quality] && QualityRank(quality) <= wantRank {
 			return quality
 		}

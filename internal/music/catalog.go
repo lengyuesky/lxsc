@@ -33,46 +33,51 @@ type Catalog struct {
 	Settings      *settings.Store
 	Log           *slog.Logger
 
-	tracks            *lru.LRU[string, *Info]
-	albums            *lru.LRU[string, []*Info]
-	artists           *lru.LRU[string, string]
-	artistRefs        *lru.LRU[string, ArtistRef]
-	seenArtists       *lru.LRU[string, string]
-	searchedArtists   *lru.LRU[string, string]
-	artistDetails     *lru.LRU[string, ArtistDetail]
-	albumPages        *lru.LRU[string, AlbumPage]
-	albumMetadata     *lru.LRU[string, AlbumMeta]
-	boardNames        *lru.LRU[string, string]
-	failures          *lru.LRU[string, string]
-	flight            requestGroup
-	observeMu         sync.RWMutex
-	observer          func(RemoteRequest)
-	remoteCall        func(context.Context, string, ...any) (json.RawMessage, error)
-	configMu          sync.Mutex
-	urls              *requestCache[urlKey, js.MusicURLResult]
-	urlChecks         *requestCache[urlCheckKey, mediaHeaders]
-	search            *requestCache[searchKey, []*Info]
-	metadataSearch    *requestCache[metadataSearchKey, metadataSearchResult]
-	searchCall        func(context.Context, string, ...any) (json.RawMessage, error)
-	urlCall           func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
-	searchMetrics     map[string]*metrics.Operation
-	urlMetrics        metrics.Operation
-	MediaPreparation  metrics.Operation
-	lyrics            *lru.LRU[string, *Lyrics]
-	customHTTP        *http.Client
-	customLimits      *admission.Gate
-	generic           *lru.LRU[string, json.RawMessage]
-	boardStale        *lru.LRU[string, json.RawMessage]
-	boardFlight       requestGroup
-	boardRefreshMu    sync.Mutex
-	boardRefreshing   map[string]bool
-	boardRefreshState map[string]time.Time
-	boardWarmGate     *admission.Gate
-	boardWarmCtx      context.Context
-	boardWarmCancel   context.CancelFunc
-	boardWarmWG       sync.WaitGroup
-	boardWarmClosed   bool
-	boardWarmEnabled  bool
+	tracks             *lru.LRU[string, *Info]
+	albums             *lru.LRU[string, []*Info]
+	artists            *lru.LRU[string, string]
+	artistRefs         *lru.LRU[string, ArtistRef]
+	seenArtists        *lru.LRU[string, string]
+	searchedArtists    *lru.LRU[string, string]
+	artistDetails      *lru.LRU[string, ArtistDetail]
+	albumPages         *lru.LRU[string, AlbumPage]
+	albumMetadata      *lru.LRU[string, AlbumMeta]
+	boardNames         *lru.LRU[string, string]
+	failures           *lru.LRU[string, string]
+	flight             requestGroup
+	observeMu          sync.RWMutex
+	observer           func(RemoteRequest)
+	remoteCall         func(context.Context, string, ...any) (json.RawMessage, error)
+	configMu           sync.Mutex
+	urls               *requestCache[urlKey, js.MusicURLResult]
+	urlChecks          *requestCache[urlCheckKey, mediaHeaders]
+	mediaFeedbackMu    sync.Mutex
+	mediaFeedback      map[urlCheckKey]bool
+	mediaFeedbackOrder [4096]urlCheckKey
+	mediaFeedbackNext  int
+	sourceSelection    string
+	search             *requestCache[searchKey, []*Info]
+	metadataSearch     *requestCache[metadataSearchKey, metadataSearchResult]
+	searchCall         func(context.Context, string, ...any) (json.RawMessage, error)
+	urlCall            func(context.Context, string, any, string, []int64) (*js.MusicURLResult, error)
+	searchMetrics      map[string]*metrics.Operation
+	urlMetrics         metrics.Operation
+	MediaPreparation   metrics.Operation
+	lyrics             *lru.LRU[string, *Lyrics]
+	customHTTP         *http.Client
+	customLimits       *admission.Gate
+	generic            *lru.LRU[string, json.RawMessage]
+	boardStale         *lru.LRU[string, json.RawMessage]
+	boardFlight        requestGroup
+	boardRefreshMu     sync.Mutex
+	boardRefreshing    map[string]bool
+	boardRefreshState  map[string]time.Time
+	boardWarmGate      *admission.Gate
+	boardWarmCtx       context.Context
+	boardWarmCancel    context.CancelFunc
+	boardWarmWG        sync.WaitGroup
+	boardWarmClosed    bool
+	boardWarmEnabled   bool
 }
 
 // NewCatalog 创建
@@ -96,6 +101,8 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		failures:          lru.NewLRU[string, string](500, nil, 30*time.Second),
 		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
 		urlChecks:         newRequestCache[urlCheckKey, mediaHeaders](2000, urlCheckCacheTTL(v.URLCacheTTL)),
+		mediaFeedback:     map[urlCheckKey]bool{},
+		sourceSelection:   v.SourceSelection,
 		search:            newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		metadataSearch:    newRequestCache[metadataSearchKey, metadataSearchResult](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		lyrics:            lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
@@ -113,6 +120,8 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		c.searchMetrics[platform] = &metrics.Operation{}
 	}
 	c.urls.gate, c.search.gate, c.urlChecks.gate, c.flight.gate = c.workLimits, c.workLimits, c.workLimits, c.workLimits
+	c.urls.expiry = playbackURLExpiry
+	c.urlChecks.expiry = playbackCheckExpiry
 	c.boardFlight.gate = c.workLimits
 	c.metadataSearch.gate = c.workLimits
 	c.searchCall = func(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
@@ -333,10 +342,11 @@ type urlKey struct {
 // URLResolution 携带不透明的缓存版本，用于失败后的条件刷新。
 // Result 为值拷贝，调用者不能修改缓存内的解析结果。
 type URLResolution struct {
-	Result js.MusicURLResult
-	Cached bool
-	key    urlKey
-	token  cacheToken
+	Result    js.MusicURLResult
+	Cached    bool
+	Validated bool
+	key       urlKey
+	token     cacheToken
 }
 
 // ResolveURL 保留已有取链接口。
@@ -361,6 +371,15 @@ func (c *Catalog) RefreshPlaybackURL(ctx context.Context, in *Info, failed URLRe
 // ResolvePlaybackURLForSources 在请求内剩余脚本集合中取链，nil 使用当前全部候选。
 // failed 非空时只刷新原脚本；若已有其他请求发布的可用候选，则直接复用其新版本。
 func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, quality string, sourceIDs []int64, failed *URLResolution) (resolution URLResolution, err error) {
+	return c.resolvePlaybackURL(ctx, in, quality, sourceIDs, failed, false)
+}
+
+// ResolvePlaybackCandidate 不在脚本内部降档，供播放层竞速同档的有效媒体候选。
+func (c *Catalog) ResolvePlaybackCandidate(ctx context.Context, in *Info, quality string, sourceIDs []int64, failed *URLResolution) (URLResolution, error) {
+	return c.resolvePlaybackURL(ctx, in, quality, sourceIDs, failed, true)
+}
+
+func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, quality string, sourceIDs []int64, failed *URLResolution, exact bool) (resolution URLResolution, err error) {
 	finish := c.urlMetrics.Start()
 	defer func() { finish(err) }()
 	if quality == "" {
@@ -373,6 +392,10 @@ func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, qu
 			return URLResolution{}, errors.New("直链刷新歌曲不匹配")
 		}
 		key, failedToken = failed.key, &failed.token
+	}
+	requestedQuality := key.quality
+	if exact && quality != "" {
+		requestedQuality = SelectQuality(quality, in.Qualities())
 	}
 	if sourceIDs == nil && c.Sources != nil {
 		sourceIDs = c.Sources.MusicURLSourceIDs(in.Source())
@@ -387,6 +410,15 @@ func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, qu
 		selection = fmt.Sprint(sourceIDs)
 		accept = func(value js.MusicURLResult) bool { return slices.Contains(sourceIDs, value.SourceID) }
 	}
+	strategy := c.Settings.Get().SourceSelection
+	selection += "/" + strategy
+	if exact {
+		selection += "/exact:" + requestedQuality
+		previousAccept := accept
+		accept = func(value js.MusicURLResult) bool {
+			return (previousAccept == nil || previousAccept(value)) && js.CanonicalQuality(value.Quality) == requestedQuality
+		}
+	}
 	resolveIDs := sourceIDs
 	if failed != nil {
 		selection += fmt.Sprintf("/refresh:%d:%d:%d", failed.token.generation, failed.token.serial, failed.Result.SourceID)
@@ -397,8 +429,9 @@ func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, qu
 			}
 		}
 	}
-	r, err := c.urls.loadSelected(ctx, key, failedToken, selection, accept, 45*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
-		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), key.quality, resolveIDs)
+	r, err := c.urls.loadSelected(ctx, key, failedToken, selection, accept, 12*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
+		remoteCtx = js.WithMusicURLPolicy(remoteCtx, strategy, exact)
+		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), requestedQuality, resolveIDs)
 		if remoteCtx.Err() != nil {
 			err = remoteCtx.Err()
 		}
@@ -413,10 +446,89 @@ func (c *Catalog) ResolvePlaybackURLForSources(ctx context.Context, in *Info, qu
 	return URLResolution{Result: r.value, Cached: r.cached, key: key, token: r.token}, err
 }
 
+// ReportPlaybackOutcome 每个解析版本只反馈一次；迟到的成功不能覆盖该版本的明确失败。
+func (c *Catalog) ReportPlaybackOutcome(resolution URLResolution, platform string, ok bool, latencyMS ...int64) {
+	if c.Sources == nil || resolution.Result.SourceID <= 0 {
+		return
+	}
+	key := urlCheckKey{resolution.token}
+	c.mediaFeedbackMu.Lock()
+	defer c.mediaFeedbackMu.Unlock()
+	if previous, exists := c.mediaFeedback[key]; exists && (!previous || ok) {
+		return
+	}
+	if _, exists := c.mediaFeedback[key]; !exists {
+		delete(c.mediaFeedback, c.mediaFeedbackOrder[c.mediaFeedbackNext])
+		c.mediaFeedbackOrder[c.mediaFeedbackNext] = key
+		c.mediaFeedbackNext = (c.mediaFeedbackNext + 1) % len(c.mediaFeedbackOrder)
+	}
+	c.mediaFeedback[key] = ok
+	c.Sources.ReportMediaOutcome(resolution.Result.SourceID, platform, ok, latencyMS...)
+}
+
+// CachedPlaybackURL 保持已缓存链接优先条件刷新的行为。
+func (c *Catalog) CachedPlaybackURL(in *Info, quality string) (URLResolution, bool) {
+	key := urlKey{in.TrackID(), SelectQuality(quality, in.Qualities())}
+	c.urls.mu.Lock()
+	defer c.urls.mu.Unlock()
+	entry, ok := c.urls.entries.Peek(key)
+	if !ok || c.urls.ttl == 0 || (!entry.expires.IsZero() && !c.urls.now().Before(entry.expires)) {
+		return URLResolution{}, false
+	}
+	return URLResolution{Result: entry.result.value, Cached: true, key: key, token: entry.result.token}, true
+}
+
+// PublishPlaybackURL 在竞争结束后发布胜出的有效媒体；旧配置代次只交付当前请求。
+// 沿用原链接的创建时间，不因媒体校验续期。
+func (c *Catalog) PublishPlaybackURL(in *Info, quality string, resolution URLResolution) URLResolution {
+	key := urlKey{in.TrackID(), SelectQuality(quality, in.Qualities())}
+	c.urls.mu.Lock()
+	defer c.urls.mu.Unlock()
+	if c.urls.ttl == 0 || resolution.token.generation != c.urls.generation {
+		return resolution
+	}
+	entry, exists := c.urls.entries.Peek(resolution.key)
+	if resolution.key == key && exists && entry.result.token == resolution.token {
+		c.urls.serial++
+		entry.published = c.urls.serial
+		c.urls.entries.Add(key, entry)
+		return resolution
+	}
+	now := c.urls.now()
+	created := now
+	var expires time.Time
+	if c.urls.ttl > 0 {
+		expires = now.Add(c.urls.ttl)
+	}
+	if exists && entry.result.token == resolution.token {
+		created, expires = entry.created, entry.expires
+	}
+	// 重新发布只改变缓存键，解析版本保持不变，HEAD/GET 继续共用校验和健康反馈。
+	resolution.key = key
+	c.urls.serial++
+	expires = playbackURLExpiry(key, resolution.Result, created, expires)
+	next := timedEntry[js.MusicURLResult]{result: cachedResult[js.MusicURLResult]{value: resolution.Result, token: resolution.token}, published: c.urls.serial, created: created, touched: now, expires: expires}
+	if c.urls.entries.Len() == c.urls.capacity && !c.urls.entries.Contains(key) {
+		oldest, _, _ := c.urls.entries.GetOldest()
+		c.urls.removeLocked(oldest)
+	}
+	c.urls.entries.Add(key, next)
+	c.urls.persistLocked("发布媒体候选", func(p cachePersistence[urlKey, js.MusicURLResult]) error { return p.put(key, next) })
+	return resolution
+}
+
 // InvalidatePlaybackURL 只丢弃明确失败的同一解析版本，不影响并发刷新产生的新链接。
 func (c *Catalog) InvalidatePlaybackURL(failed URLResolution) {
-	c.urls.invalidate(failed.key, failed.token)
-	c.urlChecks.forget(urlCheckKey{failed.key, failed.token})
+	// 同一解析版本可能同时作为实际档位和请求档位的降级结果发布。
+	// 只删除仍引用失败版本的别名，不能清除并发产生的新版本。
+	c.urls.mu.Lock()
+	for _, key := range c.urls.entries.Keys() {
+		if entry, ok := c.urls.entries.Peek(key); ok && entry.result.token == failed.token {
+			c.urls.removeLocked(key)
+		}
+	}
+	c.urls.mu.Unlock()
+	c.urlChecks.forget(urlCheckKey{failed.token})
 }
 
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
@@ -779,6 +891,10 @@ func (c *Catalog) RefreshTTL() {
 	v := c.Settings.Get()
 	c.urls.configure(time.Duration(v.URLCacheTTL) * time.Second)
 	c.urlChecks.configure(urlCheckCacheTTL(v.URLCacheTTL))
+	if c.sourceSelection != v.SourceSelection {
+		c.sourceSelection = v.SourceSelection
+		c.InvalidateURLs()
+	}
 	c.search.configure(time.Duration(v.SearchCacheTTL) * time.Second)
 	c.metadataSearch.configure(time.Duration(v.SearchCacheTTL) * time.Second)
 }

@@ -48,6 +48,7 @@ func TestInvalidSettingsNeverPartiallyPersist(t *testing.T) {
 	for _, body := range []string{
 		`null`,
 		`{"streamMode":"invalid"}`, `{"coverMode":"force_redirect"}`,
+		`{"sourceSelection":"invalid"}`, `{"sourceSelection":null}`,
 		`{"defaultQuality":"unknown"}`, `{"searchLimit":1.5}`, `{"searchLimit":1e1}`,
 		`{"artistSongLimit":0}`, `{"artistAlbumLimit":51}`, `{"boardLimit":21}`, `{"boardTrackLimit":101}`,
 		`{"showBoards":"yes"}`, `{"publicPlaylists":null}`, `{"publicPlaylists":2}`,

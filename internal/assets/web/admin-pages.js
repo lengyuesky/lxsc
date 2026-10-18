@@ -1,5 +1,5 @@
 // 概览、音源与日志的事件和实现由本模块管理。
-const sourceErrorNames = { timeout: '调用超时', busy: '服务繁忙', cancelled: '已取消', invalid_response: '返回数据无效', script: '脚本调用失败' }
+const sourceErrorNames = { timeout: '调用超时', busy: '服务繁忙', cancelled: '已取消', invalid_response: '返回数据无效', script: '脚本调用失败', unsupported_quality: '不支持此音质', source_auth: '音源认证失效', rate_limited: '音源限流', source_error: '音源接口不可用' }
 const sourceActionNames = { musicUrl: '取链', lyric: '歌词', pic: '封面' }
 
 export function summarizeSourceCalls(items) {

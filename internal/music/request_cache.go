@@ -24,10 +24,11 @@ type cachedResult[V any] struct {
 }
 
 type timedEntry[V any] struct {
-	result  cachedResult[V]
-	created time.Time
-	expires time.Time
-	touched time.Time
+	result    cachedResult[V]
+	published uint64 // 媒体选定时的发布序号，独立于稳定的解析版本
+	created   time.Time
+	expires   time.Time
+	touched   time.Time
 }
 
 // 直链变更在缓存锁内执行；touch 只排队使用时间，后台更新不能创建记录。
@@ -68,6 +69,7 @@ type requestCache[K comparable, V any] struct {
 	serial            uint64
 	now               func() time.Time
 	capacity          int
+	expiry            func(K, V, time.Time, time.Time) time.Time // 可选的结果有效期上限，在创建时设置
 	persistent        cachePersistence[K, V]
 	hits              uint64
 	misses            uint64
@@ -247,12 +249,15 @@ func (c *requestCache[K, V]) execute(ctx context.Context, key flightKey[K], call
 			current, exists := c.entries.Peek(key.key)
 			// 候选集合只决定本次请求能拿什么，不得赋予旧请求覆盖新缓存的权限。
 			// 同一代次按取链启动序号发布，较新的备选仍可替换先完成的旧源。
-			replace := !exists || current.result.token.serial < call.result.token.serial
+			replace := !exists || max(current.published, current.result.token.serial) < call.result.token.serial
 			if err == nil && cacheable && c.ttl != 0 && key.generation == c.generation && replace {
 				now := c.now()
 				entry := timedEntry[V]{result: call.result, created: now, touched: now}
 				if c.ttl > 0 {
 					entry.expires = now.Add(c.ttl)
+				}
+				if c.expiry != nil {
+					entry.expires = c.expiry(key.key, value, now, entry.expires)
 				}
 				if c.entries.Len() == c.capacity && !c.entries.Contains(key.key) {
 					oldest, _, _ := c.entries.GetOldest()

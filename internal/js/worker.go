@@ -111,7 +111,7 @@ var __await = function(v, cb) {
     var msg = e && e.message ? String(e.message) : String(e)
     if (e && e.stack && String(e.stack).indexOf(msg) === -1) msg += ' @ ' + String(e.stack).split('\n').slice(0, 3).join(' | ')
     else if (e && e.stack) msg = String(e.stack).split('\n').slice(0, 4).join(' | ')
-    cb(msg, null, e && e.code)
+    cb(msg, null, e && e.code, e && e.retryAfter)
   })
 }`); err != nil {
 			return err
@@ -281,6 +281,10 @@ func (w *Worker) callInternal(ctx context.Context, produce func(vm *goja.Runtime
 					deliver(jsResult{err: admission.ErrBusy})
 					return goja.Undefined()
 				}
+				if err := classifiedSourceError(call.Argument(2).String(), call.Argument(3).ToInteger()); err != nil {
+					deliver(jsResult{err: err})
+					return goja.Undefined()
+				}
 				deliver(jsResult{err: errors.New(e.String())})
 				return goja.Undefined()
 			}
@@ -324,6 +328,17 @@ func (w *Worker) loopVM() *goja.Runtime { return w.vmRef.Load() }
 func normalizeJSError(err error) error {
 	var ex *goja.Exception
 	if errors.As(err, &ex) {
+		if object, ok := ex.Value().(*goja.Object); ok {
+			if code := object.Get("code"); code != nil {
+				seconds := int64(1)
+				if retry := object.Get("retryAfter"); retry != nil {
+					seconds = retry.ToInteger()
+				}
+				if classified := classifiedSourceError(code.String(), seconds); classified != nil {
+					return classified
+				}
+			}
+		}
 		return errors.New(ex.Value().String())
 	}
 	var ie *goja.InterruptedError

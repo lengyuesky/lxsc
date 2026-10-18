@@ -3,6 +3,8 @@ package js
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +36,8 @@ func classifyOutcome(parent, budgetCtx context.Context, err error) scheduleOutco
 		return scheduleIgnore
 	case errors.Is(err, admission.ErrBusy):
 		return scheduleIgnore
+	case errors.Is(err, ErrNoQuality):
+		return scheduleIgnore
 	case errors.Is(budgetCtx.Err(), context.Canceled):
 		return scheduleSlow
 	default:
@@ -44,12 +48,12 @@ func classifyOutcome(parent, budgetCtx context.Context, err error) scheduleOutco
 const (
 	scheduleSampleWindow = 20               // 每键最多保留样本数
 	scheduleSampleTTL    = 10 * time.Minute // 评分时同时丢弃超龄样本
-	scheduleFailGrace    = 5 * time.Second   // 失败合并窗口：窗口内并发失败只递增一次连续失败
+	scheduleFailGrace    = 5 * time.Second  // 失败合并窗口：窗口内并发失败只递增一次连续失败
 	scheduleBaseCooldown = 30 * time.Second
 	scheduleMaxCooldown  = 5 * time.Minute
 	// 降级成功与"较慢"取消的权重；强失败为 -1，普通成功为 +1。
 	scheduleDowngradeWeight = 0.9
-	scheduleSlowWeight     = -0.25
+	scheduleSlowWeight      = -0.25
 )
 
 type scheduleKey struct {
@@ -69,20 +73,78 @@ type sourceScheduleState struct {
 	samples  [scheduleSampleWindow]scheduleSample
 	next     int
 	consec   int       // 连续强失败次数
-	lastFail time.Time // 最近一次强失败（合并窗口判断）
+	lastFail time.Time // 最近计入的失败批次起点，窗口不能随并发反馈滑动
 	cooldown time.Time // 冷却截止时间；零值表示未冷却
 }
 
 // sourceScheduler 按运行表现为音源排序：滑动窗口评分 + 指数退避冷却。
 // 冷却中的音源排最后但不删除，全部源冷却时仍可兜底；到期后回到正常排序层自然获得探测机会。
 type sourceScheduler struct {
-	mu     sync.Mutex
-	states map[scheduleKey]*sourceScheduleState
-	now    func() time.Time
+	mu         sync.Mutex
+	states     map[scheduleKey]*sourceScheduleState
+	now        func() time.Time
+	probes     map[scheduleKey]*scheduleProbe
+	retryUntil map[scheduleKey]time.Time
+}
+
+type scheduleProbe struct {
+	active bool
+	next   time.Time
 }
 
 func newSourceScheduler() *sourceScheduler {
-	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, now: time.Now}
+	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, probes: map[scheduleKey]*scheduleProbe{}, retryUntil: map[scheduleKey]time.Time{}, now: time.Now}
+}
+
+func (g *sourceScheduler) canCall(id int64, platform string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return !g.now().Before(g.retryUntil[scheduleKey{id, platform, "musicUrl"}])
+}
+
+// BackoffMusicURL 尊重受控的 Retry-After；不通过错误字符串猜测限流。
+func (m *SourceManager) BackoffMusicURL(id int64, platform string, delay time.Duration) {
+	g := m.schedule
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key := scheduleKey{id, platform, "musicUrl"}
+	until := g.now().Add(min(5*time.Minute, max(time.Second, delay)))
+	if until.After(g.retryUntil[key]) {
+		g.retryUntil[key] = until
+	}
+}
+
+// AcquirePlaybackProbe 冷却源保留兜底，但同时只能有一个请求试探；一个请求可继续同源降档。
+func (m *SourceManager) AcquirePlaybackProbe(id int64, platform string) (func(), bool) {
+	g := m.schedule
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.now().Before(g.retryUntil[scheduleKey{id, platform, "musicUrl"}]) {
+		return func() {}, false
+	}
+	recovering := false
+	for _, action := range []string{"musicUrl", "media"} {
+		if state := g.states[scheduleKey{id, platform, action}]; state != nil && !state.cooldown.IsZero() {
+			recovering = true
+		}
+	}
+	if !recovering {
+		return func() {}, true
+	}
+	key := scheduleKey{id, platform, "playback"}
+	probe := g.probes[key]
+	if probe == nil {
+		probe = &scheduleProbe{}
+		g.probes[key] = probe
+	}
+	now := g.now()
+	if probe.active || now.Before(probe.next) {
+		return func() {}, false
+	}
+	probe.active = true
+	probe.next = now.Add(scheduleFailGrace + time.Duration(id%1000)*time.Millisecond)
+	var once sync.Once
+	return func() { once.Do(func() { g.mu.Lock(); probe.active = false; g.mu.Unlock() }) }, true
 }
 
 func (g *sourceScheduler) stateOf(key scheduleKey) *sourceScheduleState {
@@ -108,19 +170,20 @@ func (g *sourceScheduler) record(id int64, platform, action string, outcome sche
 	case scheduleSuccess:
 		s.consec = 0
 		s.cooldown = time.Time{}
+		s.lastFail = time.Time{}
 		sample.weight = 1
 		if downgrade {
 			sample.weight = scheduleDowngradeWeight
 		}
 	case scheduleStrongFail:
-		if s.lastFail.IsZero() || now.Sub(s.lastFail) > scheduleFailGrace {
+		if s.lastFail.IsZero() || now.Sub(s.lastFail) >= scheduleFailGrace {
 			s.consec++
-		}
-		s.lastFail = now
-		if s.consec >= 2 {
-			// 2 次起 30s，逐次翻倍，封顶 5 分钟。
-			shift := uint(min(s.consec-2, 20))
-			s.cooldown = now.Add(min(scheduleBaseCooldown<<shift, scheduleMaxCooldown))
+			s.lastFail = now
+			if s.consec >= 2 {
+				// 2 次起 30s，逐次翻倍，封顶 5 分钟。
+				shift := uint(min(s.consec-2, 20))
+				s.cooldown = now.Add(min(scheduleBaseCooldown<<shift, scheduleMaxCooldown))
+			}
 		}
 		sample.weight = -1
 		sample.ms = -1
@@ -174,6 +237,16 @@ func (g *sourceScheduler) forget(id int64) {
 			delete(g.states, key)
 		}
 	}
+	for key := range g.probes {
+		if key.sourceID == id {
+			delete(g.probes, key)
+		}
+	}
+	for key := range g.retryUntil {
+		if key.sourceID == id {
+			delete(g.retryUntil, key)
+		}
+	}
 }
 
 // ForgetSchedule 与统计清理一样只在删除成功后调用。
@@ -185,7 +258,7 @@ func (m *SourceManager) ForgetSchedule(id int64) {
 
 // ReportMediaOutcome 媒体校验结果反馈，只携带身份与结论，不携带地址或错误原文。
 // 播放层在响应头校验成功或明确拒绝时调用；网络不确定不反馈。
-func (m *SourceManager) ReportMediaOutcome(sourceID int64, platform string, ok bool) {
+func (m *SourceManager) ReportMediaOutcome(sourceID int64, platform string, ok bool, latencyMS ...int64) {
 	if m == nil || m.schedule == nil || sourceID <= 0 || platform == "" {
 		return
 	}
@@ -193,5 +266,78 @@ func (m *SourceManager) ReportMediaOutcome(sourceID int64, platform string, ok b
 	if ok {
 		outcome = scheduleSuccess
 	}
-	m.schedule.record(sourceID, platform, "musicUrl", outcome, false, -1)
+	ms := int64(-1)
+	if len(latencyMS) > 0 {
+		ms = latencyMS[0]
+	}
+	m.schedule.record(sourceID, platform, "media", outcome, false, ms)
+}
+
+// ScheduleStatus 仅用于完整诊断，取链和有效媒体样本分开列出。
+type ScheduleStatus struct {
+	Platform            string    `json:"platform"`
+	Action              string    `json:"action"`
+	Score               float64   `json:"score"`
+	Samples             int       `json:"samples"`
+	Success             int       `json:"success"`
+	Failed              int       `json:"failed"`
+	ConsecutiveFailures int       `json:"consecutiveFailures"`
+	CoolingUntil        time.Time `json:"coolingUntil"`
+	RetryUntil          time.Time `json:"retryUntil"`
+	P50MS               int64     `json:"p50Ms"`
+	P95MS               int64     `json:"p95Ms"`
+	P99MS               int64     `json:"p99Ms"`
+}
+
+func (m *SourceManager) ScheduleSnapshot(id int64) []ScheduleStatus {
+	g := m.schedule
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.now()
+	items := []ScheduleStatus{}
+	for key, state := range g.states {
+		if key.sourceID != id {
+			continue
+		}
+		item := ScheduleStatus{Platform: key.platform, Action: key.action, ConsecutiveFailures: state.consec, CoolingUntil: state.cooldown, RetryUntil: g.retryUntil[scheduleKey{id, key.platform, "musicUrl"}]}
+		var times []int64
+		var sum float64
+		for _, sample := range state.samples {
+			if sample.at.IsZero() || now.Sub(sample.at) > scheduleSampleTTL {
+				continue
+			}
+			item.Samples++
+			sum += sample.weight
+			if sample.weight > 0 {
+				item.Success++
+				if sample.ms >= 0 {
+					times = append(times, sample.ms)
+				}
+			} else if sample.weight == -1 {
+				item.Failed++
+			}
+		}
+		if item.Samples > 0 {
+			item.Score = sum / float64(item.Samples)
+		}
+		if len(times) > 0 {
+			var total int64
+			for _, ms := range times {
+				total += ms
+			}
+			item.Score -= min(float64(total)/float64(len(times))/10000, 0.25)
+			slices.Sort(times)
+			item.P50MS = times[(len(times)-1)*50/100]
+			item.P95MS = times[(len(times)*95+99)/100-1]
+			item.P99MS = times[(len(times)*99+99)/100-1]
+		}
+		items = append(items, item)
+	}
+	slices.SortFunc(items, func(a, b ScheduleStatus) int {
+		if a.Platform != b.Platform {
+			return strings.Compare(a.Platform, b.Platform)
+		}
+		return strings.Compare(a.Action, b.Action)
+	})
+	return items
 }

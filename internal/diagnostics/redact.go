@@ -62,25 +62,31 @@ func RedactValue(value any) any {
 	if json.Unmarshal(raw, &decoded) != nil {
 		return nil
 	}
-	var walk func(any) any
-	walk = func(v any) any {
+	var walk func(any, string) any
+	walk = func(v any, parent string) any {
 		switch v := v.(type) {
 		case map[string]any:
 			for key, child := range v {
+				// errors.script 是固定类别的次数；其他同名正文仍须脱敏。
+				if parent == "errors" && key == "script" {
+					if _, numeric := child.(float64); numeric {
+						continue
+					}
+				}
 				if sensitiveField(key) {
 					v[key] = "[redacted]"
 				} else {
-					v[key] = walk(child)
+					v[key] = walk(child, key)
 				}
 			}
 		case []any:
 			for i, child := range v {
-				v[i] = walk(child)
+				v[i] = walk(child, parent)
 			}
 		case string:
 			return RedactText(v)
 		}
 		return v
 	}
-	return walk(decoded)
+	return walk(decoded, "")
 }

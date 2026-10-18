@@ -70,8 +70,11 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	id := param(r, "id")
 	metadataStarted := time.Now()
 	in, err := s.Catalog.Track(ctx, id)
-	s.mediaEvent("metadata", id, "", "", false, 0, metadataStarted, err)
+	s.mediaRequestEvent(r, "metadata", id, "", "", false, 0, metadataStarted, err)
 	if err != nil {
+		if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
+			event.Error = diagnostics.ErrorCode(err)
+		}
 		if errors.Is(err, admission.ErrBusy) {
 			fail(w, r, ErrBusy, err.Error())
 			return
@@ -103,6 +106,9 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	// 预算只覆盖取得可用响应头之前的工作，不能截断已经开始的整首音频传输。
 	cancel()
 	if err != nil {
+		if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
+			event.Error = diagnostics.ErrorCode(err)
+		}
 		if errors.Is(err, admission.ErrBusy) {
 			fail(w, r, ErrBusy, err.Error())
 			return
@@ -112,6 +118,12 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 			fail(w, r, ErrGeneric, "无法获取可用的播放地址")
 		}
 		return
+	}
+	if event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); event != nil {
+		event.Validation = "unverified"
+		if res.Validated {
+			event.Validation = "validated"
+		}
 	}
 	if headMetadata {
 		s.writeMediaHead(w, r, res, resp)
@@ -140,7 +152,7 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 	}
 	persist()
 	w.Header().Set("Cache-Control", "no-store")
-	s.mediaEvent("redirect", id, in.Source(), res.Result.Quality, res.Cached, http.StatusFound, time.Now(), nil)
+	s.mediaRequestEvent(r, "redirect", id, in.Source(), res.Result.Quality, res.Cached, http.StatusFound, time.Now(), nil)
 	recordMediaResponse(r, http.StatusFound)
 	http.Redirect(w, r, res.Result.URL, http.StatusFound)
 }
@@ -148,6 +160,14 @@ func (s *Server) serveMediaWithError(w http.ResponseWriter, r *http.Request, per
 // mediaEvent 只向独立结构化缓冲写入白名单，不输出签名地址或脚本身份。
 func (s *Server) mediaEvent(stage, id, platform, quality string, cached bool, status int, started time.Time, err error) {
 	s.Diagnostics.Add(diagnostics.Event{Stage: stage, TrackID: id, Platform: platform, Quality: quality, Mode: s.Settings.Get().StreamMode, Cached: cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds()})
+}
+
+func (s *Server) mediaRequestEvent(r *http.Request, stage, id, platform, quality string, cached bool, status int, started time.Time, err error) {
+	e := diagnostics.Event{Stage: stage, TrackID: id, Platform: platform, Quality: quality, Mode: s.Settings.Get().StreamMode, Cached: cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds()}
+	if parent, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); parent != nil {
+		e.RequestID = parent.RequestID
+	}
+	s.Diagnostics.Add(e)
 }
 
 // refererFor 为部分平台的 CDN 添加 Referer/UA
@@ -270,7 +290,7 @@ func (s *Server) proxyStream(w http.ResponseWriter, r *http.Request, in *music.I
 	}
 	copyStarted := time.Now()
 	_, err := httpguard.CopyIdle(w, resp.Body, 30*time.Second)
-	s.mediaEvent("proxy_copy", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, resp.StatusCode, copyStarted, err)
+	s.mediaRequestEvent(r, "proxy_copy", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, resp.StatusCode, copyStarted, err)
 	if err != nil || r.Context().Err() != nil {
 		s.Log.Info("代理传输中断", "id", in.TrackID())
 		return false

@@ -39,13 +39,13 @@ globalThis.__lx_request=({info})=>{
 		quality string
 		url     string
 	}{
-		{nil, 9, "128k", "a/128k"},
-		{[]int64{51, 9}, 9, "128k", "a/128k"},
+		{nil, 51, "flac", "b/flac"},
+		{[]int64{51, 9}, 51, "flac", "b/flac"},
 		{[]int64{51}, 51, "flac", "b/flac"},
 	} {
 		result, err := manager.MusicURLForSources(context.Background(), "wy", map[string]any{"songmid": "one"}, "flac", tc.ids)
 		if err != nil || result.SourceID != tc.id || result.Quality != tc.quality || result.Source != "同名音源" || result.URL != "https://media.invalid/"+tc.url {
-			t.Fatalf("脚本不能伪造身份，排除集合也不能改变源内降级：%+v %v", result, err)
+			t.Fatalf("脚本不能伪造身份，应优先同档并遵守排除集合：%+v %v", result, err)
 		}
 		raw, err := json.Marshal(result)
 		if err != nil || strings.Contains(string(raw), "SourceID") || strings.Contains(string(raw), "sourceId") || strings.Contains(string(raw), "999") {
