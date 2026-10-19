@@ -18,13 +18,24 @@ import (
 )
 
 const (
-	mediaRecoveryTimeout      = 12 * time.Second
+	// mediaRecoveryTimeout 是播放请求取得可用响应头的总预算。
+	// 实测"最高档失效、降到 flac 才成功"的极端链路需要 ~7s，总预算必须留出这条路径。
+	mediaRecoveryTimeout = 9 * time.Second
+	// mediaHeadTimeout 是客户端 HEAD 预检的独立预算：预检失败要尽快回 502，不能与 GET 一样跑满总预算。
+	mediaHeadTimeout = 4 * time.Second
+	// 分档预算：首档等得久一些（多数请求首档即中），后续档快速迭代，避免高档位失败时耗尽总预算。
+	mediaFirstQualityTimeout = 2500 * time.Millisecond
+	mediaNextQualityTimeout  = 1500 * time.Millisecond
+	// mediaCandidateTimeout 是单个候选（一次取链 + 一次媒体校验）的上限。
+	mediaCandidateTimeout     = 2 * time.Second
 	mediaHeaderTimeout        = 3 * time.Second
-	mediaCandidateTimeout     = 4 * time.Second
 	mediaFallbackDelay        = 1500 * time.Millisecond
+	mediaSpeedFallbackDelay   = 600 * time.Millisecond
 	mediaQualityWait          = 200 * time.Millisecond
 	maxConcurrentMediaSources = 2
 	maxMediaAttempts          = 12
+	// crossSourceTimeout 限制跨平台兜底的总时长：它只是最后一档，不能反客为主拖长播放等待。
+	crossSourceTimeout = 4 * time.Second
 )
 
 var (
@@ -61,7 +72,11 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 	if s.Catalog.Sources == nil {
 		return result, nil, errMediaUnavailable
 	}
-	ctx, stopBudget := context.WithTimeout(ctx, mediaRecoveryTimeout)
+	budget := mediaRecoveryTimeout
+	if headMetadata {
+		budget = mediaHeadTimeout
+	}
+	ctx, stopBudget := context.WithTimeout(ctx, budget)
 	defer stopBudget()
 	strategy := s.Settings.Get().SourceSelection
 	ids := s.Catalog.Sources.MusicURLSourceIDs(in.Source())
@@ -70,10 +85,8 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 	if cachedFirst {
 		ids = append([]int64{cached.Result.SourceID}, slices.DeleteFunc(slices.Clone(ids), func(id int64) bool { return id == cached.Result.SourceID })...)
 	}
+	// 任何策略都保留完整降档链：speed 只压缩等待与 hedge 时长，不能把"只有一次机会"交给最高档。
 	qualities := js.QualityChain(music.SelectQuality(quality, in.Qualities()))
-	if strategy == "speed" {
-		qualities = qualities[:1]
-	}
 	if cachedFirst {
 		qualities = append([]string{cached.Result.Quality}, qualities...)
 	}
@@ -125,7 +138,15 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		if len(tasks) == 0 {
 			continue
 		}
-		winner, failures, err := s.raceMediaCandidates(ctx, r, in, tasks, proxy, headMetadata, &calls)
+		// 每档独立预算：本轮超时只说明这一档不可用，应立即进入下一档，而不是耗尽总预算。
+		roundBudget := mediaNextQualityTimeout
+		if round == 0 {
+			roundBudget = mediaFirstQualityTimeout
+		}
+		roundCtx, stopRound := context.WithTimeout(ctx, roundBudget)
+		winner, failures, err := s.raceMediaCandidates(roundCtx, r, in, tasks, proxy, headMetadata, strategy, &calls)
+		roundExpired := errors.Is(roundCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		stopRound()
 		for _, failed := range failures {
 			if failed.err != nil && !errors.Is(failed.err, context.Canceled) {
 				lastFailure = failed.err
@@ -142,6 +163,10 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 				} else if !proxy && !headMetadata && !errors.Is(failed.err, context.Canceled) {
 					uncertain = append(uncertain, failed.resolution)
 				}
+			}
+			if roundExpired {
+				// 本轮是这一档自己的时间用完了，不是源级故障：不让源被判死，留到后续档位继续尝试。
+				continue
 			}
 			// 网络和源级故障不靠重复降档放大；明确过期和未知脚本失败允许同源下一档。
 			if failed.status >= 500 || failed.status == 429 || errors.Is(failed.err, context.DeadlineExceeded) || errors.Is(failed.err, httpguard.ErrNonAudioResponse) || errors.Is(failed.err, errInvalidMediaURL) || errors.Is(failed.err, js.ErrInvalidSourceResponse) || errors.Is(failed.err, js.ErrSourceAuth) || errors.Is(failed.err, js.ErrSourceUnavailable) || errors.Is(failed.err, js.ErrSourceRateLimited) || (failed.status == 0 && failed.resolution.Result.URL != "") {
@@ -174,10 +199,67 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 	if ctx.Err() != nil {
 		return result, nil, ctx.Err()
 	}
+	// 最后一档：原平台所有档位与源都失败时，在其它平台找同一首歌。
+	// HEAD 预检保持快速失败（客户端随后会发 GET，由 GET 承担兜底），避免预检把等待拉长。
+	if !headMetadata {
+		if rescued, rescuedResp, rescueErr := s.crossSourceRescue(ctx, r, in, quality, proxy, &calls); rescued.Result.URL != "" {
+			return rescued, rescuedResp, nil
+		} else if rescueErr != nil {
+			lastFailure = rescueErr
+		}
+	}
 	return result, nil, lastFailure
 }
 
-func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *music.Info, tasks []mediaTask, proxy, headMetadata bool, calls *atomic.Int32) (winner *mediaOutcome, failures []mediaOutcome, resultErr error) {
+// crossSourceRescue 在原平台整体不可用时，用同名同歌手同长度的候选到其它平台取链。
+// 只有原生路径彻底失败才会走到这里，正常播放不会承担额外耗时。
+func (s *Server) crossSourceRescue(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy bool, calls *atomic.Int32) (music.URLResolution, *http.Response, error) {
+	if s.Catalog == nil || s.Catalog.Sources == nil || ctx.Err() != nil {
+		return music.URLResolution{}, nil, nil
+	}
+	rescueCtx, cancel := context.WithTimeout(r.Context(), crossSourceTimeout)
+	defer cancel()
+	started := time.Now()
+	candidate := s.Catalog.FindCrossSourceCandidate(rescueCtx, in)
+	s.Diagnostics.Add(diagnostics.Event{Stage: "cross_source", TrackID: in.TrackID(), Platform: in.Source(), Quality: quality, ElapsedMS: time.Since(started).Milliseconds()})
+	if candidate == nil {
+		return music.URLResolution{}, nil, nil
+	}
+	ids := s.Catalog.Sources.MusicURLSourceIDs(candidate.Source())
+	if len(ids) == 0 {
+		return music.URLResolution{}, nil, errMediaUnavailable
+	}
+	// 兜底只尝试一档，避免换平台后又陷入长时间降档。
+	rescueQuality := music.SelectQuality(quality, candidate.Qualities())
+	if js.QualityRank(rescueQuality) > js.QualityRank("320k") {
+		rescueQuality = js.QualityChain(rescueQuality)[1]
+	}
+	if rescueQuality == "" {
+		rescueQuality = "320k"
+	}
+	tasks := make([]mediaTask, 0, len(ids))
+	for _, id := range ids {
+		tasks = append(tasks, mediaTask{id: id, quality: rescueQuality, exact: true})
+	}
+	winner, _, err := s.raceMediaCandidates(rescueCtx, r, candidate, tasks, proxy, false, "speed", calls)
+	if winner == nil {
+		if err == nil {
+			err = errMediaUnavailable
+		}
+		return music.URLResolution{}, nil, err
+	}
+	// 兜底结果不写入原歌曲的直链缓存：它属于另一个平台的另一条曲目。
+	winner.resolution.Validated = true
+	s.Diagnostics.Add(diagnostics.Event{Stage: "cross_source", TrackID: in.TrackID(), Platform: candidate.Source(), Quality: winner.resolution.Result.Quality, Status: winner.status, ElapsedMS: time.Since(started).Milliseconds()})
+	return winner.resolution, winner.response, nil
+}
+
+func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *music.Info, tasks []mediaTask, proxy, headMetadata bool, strategy string, calls *atomic.Int32) (winner *mediaOutcome, failures []mediaOutcome, resultErr error) {
+	// speed 策略只缩短"等第一名"的时间，不减少可用候选。
+	hedgeDelay := mediaFallbackDelay
+	if strategy == "speed" {
+		hedgeDelay = mediaSpeedFallbackDelay
+	}
 	workCtx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	results := make(chan mediaOutcome, maxConcurrentMediaSources)
@@ -203,7 +285,7 @@ func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *m
 		active++
 		workers.Go(func() { results <- s.tryMediaCandidate(workCtx, r, in, task, proxy, headMetadata, len(tasks), calls) })
 	}
-	hedge := time.NewTimer(mediaFallbackDelay)
+	hedge := time.NewTimer(hedgeDelay)
 	defer hedge.Stop()
 	qualityTimer := time.NewTimer(time.Hour)
 	qualityTimer.Stop()
@@ -269,7 +351,7 @@ func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *m
 			}
 			hedge.Stop()
 			if !busy && next < len(tasks) && active < maxConcurrentMediaSources {
-				hedge.Reset(mediaFallbackDelay)
+				hedge.Reset(hedgeDelay)
 			}
 		}
 	}
@@ -395,6 +477,7 @@ func (s *Server) tryExactMediaCandidate(ctx context.Context, r *http.Request, in
 			}
 		}
 		if expiredMediaStatus(out.status) && round == 0 && failed == nil {
+			// 每源每请求最多刷新一次（task.refreshed 合并），既不放弃刷新机会，也不放大取链次数。
 			if task.refreshed != nil {
 				if _, used := task.refreshed.LoadOrStore(task.id, true); used {
 					return out

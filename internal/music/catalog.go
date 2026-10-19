@@ -506,7 +506,7 @@ func (c *Catalog) PublishPlaybackURL(in *Info, quality string, resolution URLRes
 	// 重新发布只改变缓存键，解析版本保持不变，HEAD/GET 继续共用校验和健康反馈。
 	resolution.key = key
 	c.urls.serial++
-	expires = playbackURLExpiry(key, resolution.Result, created, expires)
+	expires = playbackURLExpiryFor(key, resolution.Result, in.Source(), created, expires)
 	next := timedEntry[js.MusicURLResult]{result: cachedResult[js.MusicURLResult]{value: resolution.Result, token: resolution.token}, published: c.urls.serial, created: created, touched: now, expires: expires}
 	if c.urls.entries.Len() == c.urls.capacity && !c.urls.entries.Contains(key) {
 		oldest, _, _ := c.urls.entries.GetOldest()

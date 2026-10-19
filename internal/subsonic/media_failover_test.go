@@ -382,7 +382,7 @@ func TestMediaHeaderTimeoutTriesDifferentSource(t *testing.T) {
 }
 
 func TestMediaRecoveryTotalBudget(t *testing.T) {
-	if mediaRecoveryTimeout != 12*time.Second || maxConcurrentMediaSources != 2 || maxMediaAttempts != 12 {
+	if mediaRecoveryTimeout != 9*time.Second || mediaHeadTimeout != 4*time.Second || mediaFirstQualityTimeout != 2500*time.Millisecond || mediaNextQualityTimeout != 1500*time.Millisecond || maxConcurrentMediaSources != 2 || maxMediaAttempts != 12 {
 		t.Fatal("恢复上限必须固定且与文档一致")
 	}
 	for _, proxy := range []bool{false, true} {

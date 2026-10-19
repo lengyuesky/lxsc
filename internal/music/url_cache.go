@@ -17,13 +17,31 @@ import (
 
 const downgradedURLTTL = 5 * time.Minute
 
+// shortLivedURLTTL 用于签发即失效的直链平台：缓存过久只会得到 403，再触发一轮无意义的刷新。
+const shortLivedURLTTL = 60 * time.Second
+
+// shortLivedPlatforms 列出直链为分钟级签名的平台。
+var shortLivedPlatforms = map[string]bool{"tx": true}
+
 // 降级候选须定期重新竞争请求档位，即使管理员为普通直链选择了永久缓存。
 func playbackURLExpiry(key urlKey, value js.MusicURLResult, created, expires time.Time) time.Time {
+	return playbackURLExpiryFor(key, value, "", created, expires)
+}
+
+// playbackURLExpiryFor 在降级截断之外，再按平台收紧短签名直链的有效期。
+func playbackURLExpiryFor(key urlKey, value js.MusicURLResult, platform string, created, expires time.Time) time.Time {
+	// 未触发任何收紧条件时保持原有效期（0 表示永久）。
+	limit := expires
 	if js.QualityRank(value.Quality) < js.QualityRank(key.quality) {
-		limit := created.Add(downgradedURLTTL)
-		if expires.IsZero() || limit.Before(expires) {
-			return limit
+		limit = created.Add(downgradedURLTTL)
+	}
+	if shortLivedPlatforms[platform] {
+		if short := created.Add(shortLivedURLTTL); limit.IsZero() || short.Before(limit) {
+			limit = short
 		}
+	}
+	if expires.IsZero() || limit.Before(expires) {
+		return limit
 	}
 	return expires
 }
