@@ -700,6 +700,20 @@ async function main() {
       }
     })
 
+    await check('并发音源数默认值、保存与刷新回显', async page => {
+      await adminSettings(page, url)
+      const input = page.locator('#settingsForm [name=sourceConcurrency]')
+      assert.deepEqual(await input.evaluate(element => [element.type, element.min, element.max]), ['number', '1', '10'])
+      assert.equal(await input.inputValue(), '3')
+      for (const value of ['5', '3']) {
+        await input.fill(value)
+        assert.equal((await saveSettingsUI(page)).sourceConcurrency, Number(value))
+        await page.reload()
+        await page.locator('#settingsForm:not([inert])').waitFor()
+        assert.equal(await input.inputValue(), value)
+      }
+    })
+
     await check('直链缓存五档保存、刷新回显与保存失败保留选择', async page => {
       await adminSettings(page, url)
       const select = page.locator('#settingsForm [name=urlCacheTTL]')

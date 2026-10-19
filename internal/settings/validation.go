@@ -48,7 +48,7 @@ func normalizePatch(patch map[string]json.RawMessage) (map[string]string, error)
 			}
 			encoded, _ := json.Marshal(selections)
 			values[key] = string(encoded)
-		case "urlCacheTTL", "searchCacheTTL", "boardLimit", "boardTrackLimit", "artistSongLimit", "artistAlbumLimit", "searchLimit":
+		case "urlCacheTTL", "searchCacheTTL", "boardLimit", "boardTrackLimit", "artistSongLimit", "artistAlbumLimit", "searchLimit", "sourceConcurrency":
 			value := strings.TrimSpace(string(raw))
 			var text string
 			if json.Unmarshal(raw, &text) == nil {
@@ -68,6 +68,8 @@ func normalizePatch(patch map[string]json.RawMessage) (map[string]string, error)
 					maximum = 20
 				} else if key == "artistAlbumLimit" {
 					maximum = 50
+				} else if key == "sourceConcurrency" {
+					maximum = MaxSourceConcurrency
 				}
 				if number < 1 || number > maximum {
 					err = ErrInvalidSetting

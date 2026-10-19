@@ -33,17 +33,19 @@ if(err || %t) reject(new Error('合成取链失败')); else resolve({url:'https:
 }));`, address, fail)
 }
 
-func TestMusicURLFastPrimaryDoesNotStartBackup(t *testing.T) {
+func TestMusicURLConcurrentSourcesFirstSuccessWins(t *testing.T) {
 	m := startupSources(t,
 		`globalThis.__lx_request=()=>({url:'https://media.invalid/primary'});`,
 		`globalThis.__lx_request=()=>({url:'https://media.invalid/backup'});`,
 	)
 	result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
-	if err != nil || result.SourceID != 1 {
-		t.Fatalf("快速首选源应保持优先: %+v %v", result, err)
+	if err != nil || (result.SourceID != 1 && result.SourceID != 2) {
+		t.Fatalf("并发取链应返回任一成功源: %+v %v", result, err)
 	}
-	if got := m.CallStatisticsOf(2, time.Now(), time.Hour); got.Total.Calls != 0 || got.InFlight != 0 {
-		t.Fatal("首选源及时成功时不得额外请求备用源")
+	for _, id := range []int64{1, 2} {
+		if got := m.CallStatisticsOf(id, time.Now(), time.Hour); got.Total.Calls != 1 || got.InFlight != 0 {
+			t.Fatalf("两个源应同时各请求一次且全部收回: id=%d %+v", id, got)
+		}
 	}
 }
 
@@ -81,8 +83,8 @@ func TestMusicURLSlowPrimaryUsesBackupAndCancelsHTTP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(musicURLFallbackDelay + 2*time.Second):
-		t.Fatal("备用源不应等待首选源耗尽十几秒预算")
+	case <-time.After(2 * time.Second):
+		t.Fatal("备用源不应等待首选源耗尽预算")
 	}
 	select {
 	case <-cancelled:
@@ -136,18 +138,18 @@ func TestMusicURLLimitsParallelSourcesAndCancelsAll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { _, err := m.MusicURL(ctx, "wy", nil, "320k"); done <- err }()
+	go func() { _, err := m.MusicURL(WithMusicURLConcurrency(ctx, 2), "wy", nil, "320k"); done <- err }()
 	for range 2 {
 		select {
 		case <-started:
-		case <-time.After(musicURLFallbackDelay + time.Second):
-			t.Fatal("应依次启动首选和一个备用")
+		case <-time.After(time.Second):
+			t.Fatal("应立即同时启动两个源")
 		}
 	}
 	select {
 	case path := <-started:
-		t.Fatal("两个源在途时不能启动第三个", path)
-	case <-time.After(musicURLFallbackDelay + 20*time.Millisecond):
+		t.Fatal("达到并发上限时不能启动第三个", path)
+	case <-time.After(500 * time.Millisecond):
 	}
 	cancel()
 	select {

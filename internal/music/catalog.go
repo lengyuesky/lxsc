@@ -410,7 +410,8 @@ func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, quality stri
 		selection = fmt.Sprint(sourceIDs)
 		accept = func(value js.MusicURLResult) bool { return slices.Contains(sourceIDs, value.SourceID) }
 	}
-	strategy := c.Settings.Get().SourceSelection
+	current := c.Settings.Get()
+	strategy, concurrency := current.SourceSelection, current.SourceConcurrency
 	selection += "/" + strategy
 	if exact {
 		selection += "/exact:" + requestedQuality
@@ -430,7 +431,7 @@ func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, quality stri
 		}
 	}
 	r, err := c.urls.loadSelected(ctx, key, failedToken, selection, accept, 12*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
-		remoteCtx = js.WithMusicURLPolicy(remoteCtx, strategy, exact)
+		remoteCtx = js.WithMusicURLConcurrency(js.WithMusicURLPolicy(remoteCtx, strategy, exact), concurrency)
 		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), requestedQuality, resolveIDs)
 		if remoteCtx.Err() != nil {
 			err = remoteCtx.Err()

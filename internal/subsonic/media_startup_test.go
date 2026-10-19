@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -127,8 +129,11 @@ func TestMediaDeferredRefreshStillRecoversWhenBackupFails(t *testing.T) {
 					t.Fatal(err)
 				}
 				var paths []string
+				var pathsMu sync.Mutex
 				s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					pathsMu.Lock()
 					paths = append(paths, req.URL.Path)
+					pathsMu.Unlock()
 					status := 503
 					if req.URL.Path == "/a/1" {
 						status = 403
@@ -146,6 +151,10 @@ func TestMediaDeferredRefreshStillRecoversWhenBackupFails(t *testing.T) {
 				want := []string{"/a/1", "/b/1", "/a/2"}
 				if failure == "解析失败" {
 					want = []string{"/a/1", "/a/2"}
+				}
+				// A、B 同时发起，前两次到达顺序不确定；延后的原源刷新必须排在最后。
+				if len(paths) == len(want) {
+					slices.Sort(paths[:len(paths)-1])
 				}
 				if !reflect.DeepEqual(paths, want) {
 					t.Fatalf("备用不可用时仍须补做原源刷新: got=%v want=%v", paths, want)

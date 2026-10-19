@@ -20,6 +20,12 @@ var ErrInvalidSetting = errors.New("设置值不合法")
 
 const DefaultURLCacheTTL = 7 * 24 * 60 * 60
 
+// 播放取链的并发音源数：越大首播越快，但每次播放真实请求的上游越多。
+const (
+	DefaultSourceConcurrency = 3
+	MaxSourceConcurrency     = 10
+)
+
 // 公共接口默认仅在原有来源失败时使用；保存空字符串可关闭回退。
 const DefaultCustomLyricsURL = "https://api.lrc.cx/lyrics"
 const DefaultCustomCoverURL = "https://api.lrc.cx/cover"
@@ -45,48 +51,50 @@ func parseTTL(value string) (int, error) {
 
 // Values 运行时设置
 type Values struct {
-	SearchSources    []string            `json:"searchSources"`    // 聚合搜索的平台及顺序
-	StreamMode       string              `json:"streamMode"`       // 播放方式：redirect / force_redirect / proxy
-	SourceSelection  string              `json:"sourceSelection"`  // quality 同档优先 / speed 有界竞速
-	CoverMode        string              `json:"coverMode"`        // redirect / proxy
-	CustomLyricsURL  string              `json:"customLyricsURL"`  // 现有歌词来源失败后的自定义接口
-	CustomCoverURL   string              `json:"customCoverURL"`   // 原封面无法读取时的自定义接口
-	URLCacheTTL      int                 `json:"urlCacheTTL"`      // 直链缓存秒数，0 关闭，-1 永久
-	SearchCacheTTL   int                 `json:"searchCacheTTL"`   // 搜索缓存秒数
-	DefaultQuality   string              `json:"defaultQuality"`   // 新用户默认音质
-	ShowBoards       bool                `json:"showBoards"`       // 是否在在线音乐目录和歌单中展示榜单
-	BoardSources     []string            `json:"boardSources"`     // 展示榜单的平台
-	BoardSelections  map[string][]string `json:"boardSelections"`  // 缺少平台表示全部，空数组表示不展示
-	BoardLimit       int                 `json:"boardLimit"`       // 旧字段，仅后端兼容读取
-	BoardTrackLimit  int                 `json:"boardTrackLimit"`  // 旧字段，仅后端兼容读取
-	ArtistSongLimit  int                 `json:"artistSongLimit"`  // 歌手页最多歌曲数
-	ArtistAlbumLimit int                 `json:"artistAlbumLimit"` // 歌手页最多专辑数
-	SearchLimit      int                 `json:"searchLimit"`      // 每平台每次搜索条数
-	PublicPlaylists  bool                `json:"publicPlaylists"`  // 新建歌单默认公开
-	ServerName       string              `json:"serverName"`
+	SearchSources     []string            `json:"searchSources"`     // 聚合搜索的平台及顺序
+	StreamMode        string              `json:"streamMode"`        // 播放方式：redirect / force_redirect / proxy
+	SourceSelection   string              `json:"sourceSelection"`   // quality 按档并发 / speed 源内降档并发
+	SourceConcurrency int                 `json:"sourceConcurrency"` // 播放取链同时请求的音源数
+	CoverMode         string              `json:"coverMode"`         // redirect / proxy
+	CustomLyricsURL   string              `json:"customLyricsURL"`   // 现有歌词来源失败后的自定义接口
+	CustomCoverURL    string              `json:"customCoverURL"`    // 原封面无法读取时的自定义接口
+	URLCacheTTL       int                 `json:"urlCacheTTL"`       // 直链缓存秒数，0 关闭，-1 永久
+	SearchCacheTTL    int                 `json:"searchCacheTTL"`    // 搜索缓存秒数
+	DefaultQuality    string              `json:"defaultQuality"`    // 新用户默认音质
+	ShowBoards        bool                `json:"showBoards"`        // 是否在在线音乐目录和歌单中展示榜单
+	BoardSources      []string            `json:"boardSources"`      // 展示榜单的平台
+	BoardSelections   map[string][]string `json:"boardSelections"`   // 缺少平台表示全部，空数组表示不展示
+	BoardLimit        int                 `json:"boardLimit"`        // 旧字段，仅后端兼容读取
+	BoardTrackLimit   int                 `json:"boardTrackLimit"`   // 旧字段，仅后端兼容读取
+	ArtistSongLimit   int                 `json:"artistSongLimit"`   // 歌手页最多歌曲数
+	ArtistAlbumLimit  int                 `json:"artistAlbumLimit"`  // 歌手页最多专辑数
+	SearchLimit       int                 `json:"searchLimit"`       // 每平台每次搜索条数
+	PublicPlaylists   bool                `json:"publicPlaylists"`   // 新建歌单默认公开
+	ServerName        string              `json:"serverName"`
 }
 
 // Defaults 默认值
 func Defaults() Values {
 	return Values{
-		SearchSources:    []string{"wy", "tx", "kw", "kg", "mg"},
-		StreamMode:       "redirect",
-		SourceSelection:  "quality",
-		CoverMode:        "redirect",
-		CustomLyricsURL:  DefaultCustomLyricsURL,
-		CustomCoverURL:   DefaultCustomCoverURL,
-		URLCacheTTL:      DefaultURLCacheTTL,
-		SearchCacheTTL:   600,
-		DefaultQuality:   "320k",
-		ShowBoards:       true,
-		BoardSources:     []string{"wy", "tx", "kw", "kg", "mg"},
-		BoardSelections:  map[string][]string{},
-		BoardLimit:       3,
-		BoardTrackLimit:  30,
-		ArtistSongLimit:  30,
-		ArtistAlbumLimit: 12,
-		SearchLimit:      20,
-		ServerName:       "lxsc",
+		SearchSources:     []string{"wy", "tx", "kw", "kg", "mg"},
+		StreamMode:        "redirect",
+		SourceSelection:   "quality",
+		SourceConcurrency: DefaultSourceConcurrency,
+		CoverMode:         "redirect",
+		CustomLyricsURL:   DefaultCustomLyricsURL,
+		CustomCoverURL:    DefaultCustomCoverURL,
+		URLCacheTTL:       DefaultURLCacheTTL,
+		SearchCacheTTL:    600,
+		DefaultQuality:    "320k",
+		ShowBoards:        true,
+		BoardSources:      []string{"wy", "tx", "kw", "kg", "mg"},
+		BoardSelections:   map[string][]string{},
+		BoardLimit:        3,
+		BoardTrackLimit:   30,
+		ArtistSongLimit:   30,
+		ArtistAlbumLimit:  12,
+		SearchLimit:       20,
+		ServerName:        "lxsc",
 	}
 }
 
@@ -129,6 +137,10 @@ func apply(v Values, m map[string]string) Values {
 		case "sourceSelection":
 			if val == "quality" || val == "speed" {
 				v.SourceSelection = val
+			}
+		case "sourceConcurrency":
+			if n, err := strconv.Atoi(val); err == nil && n > 0 && n <= MaxSourceConcurrency {
+				v.SourceConcurrency = n
 			}
 		case "coverMode":
 			if val == "proxy" || val == "redirect" {

@@ -51,6 +51,7 @@ func TestInvalidSettingsNeverPartiallyPersist(t *testing.T) {
 		`{"sourceSelection":"invalid"}`, `{"sourceSelection":null}`,
 		`{"defaultQuality":"unknown"}`, `{"searchLimit":1.5}`, `{"searchLimit":1e1}`,
 		`{"artistSongLimit":0}`, `{"artistAlbumLimit":51}`, `{"boardLimit":21}`, `{"boardTrackLimit":101}`,
+		`{"sourceConcurrency":0}`, `{"sourceConcurrency":11}`, `{"sourceConcurrency":1.5}`,
 		`{"showBoards":"yes"}`, `{"publicPlaylists":null}`, `{"publicPlaylists":2}`,
 		`{"searchSources":["wy","unknown"]}`, `{"boardSources":["other"]}`, `{"boardSources":[null]}`,
 		`{"searchSources":false}`, `{"searchLimit":true}`, `{"searchLimit":"1.5"}`,
@@ -92,14 +93,14 @@ func TestSettingsAcceptLegacyRepresentationsAndReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	var patch map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(`{"streamMode":"force_redirect","coverMode":"proxy","defaultQuality":"flac24bit","searchSources":"wy, tx,wy","boardSources":[],"showBoards":"false","publicPlaylists":"1","searchLimit":"50","artistAlbumLimit":20,"boardLimit":1,"boardTrackLimit":10,"urlCacheTTL":"-1","searchCacheTTL":"0","serverName":"音乐服务"}`), &patch); err != nil {
+	if err := json.Unmarshal([]byte(`{"streamMode":"force_redirect","coverMode":"proxy","defaultQuality":"flac24bit","searchSources":"wy, tx,wy","boardSources":[],"showBoards":"false","publicPlaylists":"1","searchLimit":"50","artistAlbumLimit":20,"boardLimit":1,"boardTrackLimit":10,"urlCacheTTL":"-1","searchCacheTTL":"0","serverName":"音乐服务","sourceConcurrency":"5"}`), &patch); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := store.Update(ctx, patch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.StreamMode != "force_redirect" || updated.CoverMode != "proxy" || updated.SearchLimit != 50 || updated.ShowBoards || !updated.PublicPlaylists || !reflect.DeepEqual(updated.SearchSources, []string{"wy", "tx"}) || len(updated.BoardSources) != 0 || updated.URLCacheTTL != -1 {
+	if updated.StreamMode != "force_redirect" || updated.CoverMode != "proxy" || updated.SearchLimit != 50 || updated.ShowBoards || !updated.PublicPlaylists || !reflect.DeepEqual(updated.SearchSources, []string{"wy", "tx"}) || len(updated.BoardSources) != 0 || updated.URLCacheTTL != -1 || updated.SourceConcurrency != 5 {
 		t.Fatalf("合法旧参数未正确应用: %+v", updated)
 	}
 	reloaded, err := New(ctx, database)

@@ -266,7 +266,7 @@ func TestManagerDynamicReorderAfterFailures(t *testing.T) {
 		t.Fatalf("冷启动必须按加载顺序: %v", got)
 	}
 	// 反复取链：坏源强失败后评分低于好源，调度器把好源排到前面；
-	// 首选在等待窗口内成功时不再启动备用，坏源不再被浪费调用。
+	// 并发上限内的音源同时请求，坏源失败不影响好源结果。
 	for range 3 {
 		result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
 		if err != nil || result.SourceID != 2 {
@@ -276,9 +276,9 @@ func TestManagerDynamicReorderAfterFailures(t *testing.T) {
 	if got := m.MusicURLSourceIDs("wy"); got[0] != 2 || got[1] != 1 {
 		t.Fatalf("动态排序应把好源排前: %v", got)
 	}
-	// 坏源只被调用过一次（第一次取链），此后不再被首选路径触碰。
-	if got := m.CallStatisticsOf(1, time.Now(), time.Hour); got.Total.Calls != 1 {
-		t.Fatalf("降级后的坏源不应被重复调用: %d", got.Total.Calls)
+	// 两个源都在并发上限内，每次取链各请求一次且全部收回。
+	if got := m.CallStatisticsOf(1, time.Now(), time.Hour); got.Total.Calls != 3 || got.InFlight != 0 {
+		t.Fatalf("并发取链应每次同时请求坏源并收回: %+v", got)
 	}
 	// 冷却兜底：所有源都不可用时仍保留候选身份。
 	if got := m.MusicURLSourceIDs("wy"); len(got) != 2 {

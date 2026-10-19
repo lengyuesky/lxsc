@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	musicURLFallbackDelay   = 1500 * time.Millisecond
-	maxConcurrentURLSources = 2
-	MusicURLSourceTimeout   = 4 * time.Second
-	musicURLQualityWait     = 200 * time.Millisecond
+	// DefaultMusicURLConcurrency 是未指定并发数时同时请求的音源数。
+	DefaultMusicURLConcurrency = 3
+	MusicURLSourceTimeout      = 4 * time.Second
+	musicURLQualityWait        = 200 * time.Millisecond
 )
 
 type musicURLPolicyKey struct{}
@@ -33,7 +33,21 @@ func urlPolicy(ctx context.Context) musicURLPolicy {
 	return p
 }
 
-// 常见的快速取链仍只访问一个音源；慢请求最多增加一个并行备用。
+type musicURLConcurrencyKey struct{}
+
+// WithMusicURLConcurrency 指定一次取链同时请求的音源数，非正数使用默认值。
+func WithMusicURLConcurrency(ctx context.Context, n int) context.Context {
+	return context.WithValue(ctx, musicURLConcurrencyKey{}, n)
+}
+
+func urlConcurrency(ctx context.Context) int {
+	if n, _ := ctx.Value(musicURLConcurrencyKey{}).(int); n > 0 {
+		return n
+	}
+	return DefaultMusicURLConcurrency
+}
+
+// 候选按并发上限同时取链，先成功者胜出，失败立即补位。
 // 调用结束前取消并收回所有工作，避免切歌后遗留 HTTP、计数或脚本任务。
 func (m *SourceManager) musicURLCandidates(ctx context.Context, candidates []*loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	if err := ctx.Err(); err != nil {
@@ -96,33 +110,26 @@ func (m *SourceManager) raceMusicURLCandidates(ctx context.Context, candidates [
 		result *MusicURLResult
 		err    error
 	}
-	results := make(chan outcome, maxConcurrentURLSources)
+	concurrency := min(urlConcurrency(ctx), len(candidates))
+	results := make(chan outcome, concurrency)
 	next, active := 0, 0
 	start := func() {
 		index := next
 		next++
 		active++
+		// 同时启动的候选各自享有完整预算，只按尚未开始的波次预留时间。
+		waves := (len(candidates) - index + concurrency - 1) / concurrency
 		workers.Go(func() {
-			result, err := m.callMusicURLSource(callCtx, ctx, candidates[index], platform, musicInfo, quality, len(candidates)-index)
+			result, err := m.callMusicURLSource(callCtx, ctx, candidates[index], platform, musicInfo, quality, waves)
 			results <- outcome{candidates[index].id, result, err}
 		})
 	}
-	timer := time.NewTimer(musicURLFallbackDelay)
-	defer timer.Stop()
-	var fallback <-chan time.Time
-	busy := false
-	armFallback := func() {
-		timer.Stop()
-		fallback = nil
-		if !busy && next < len(candidates) && active < maxConcurrentURLSources {
-			timer.Reset(musicURLFallbackDelay)
-			fallback = timer.C
-		}
+	for next < concurrency {
+		start()
 	}
-	start()
-	armFallback()
 	var lastErr error = ErrNoSource
 	var best *MusicURLResult
+	busy := false
 	qualityTimer := time.NewTimer(time.Hour)
 	defer qualityTimer.Stop()
 	qualityTimer.Stop()
@@ -155,22 +162,14 @@ func (m *SourceManager) raceMusicURLCandidates(ctx context.Context, candidates [
 					qualityTimer.Reset(musicURLQualityWait)
 					qualityDeadline = qualityTimer.C
 				}
-				if next < len(candidates) && active < maxConcurrentURLSources && !busy {
-					start()
-				}
-				armFallback()
-				continue
+			} else {
+				lastErr = completed.err
+				busy = busy || errors.Is(completed.err, admission.ErrBusy)
 			}
-			lastErr = completed.err
-			busy = busy || errors.Is(completed.err, admission.ErrBusy)
-			// 明确失败立即尝试下一个；繁忙时不扩大请求，仍允许在途音源完成。
+			// 繁忙时不扩大请求，仍允许在途音源完成。
 			if !busy && next < len(candidates) {
 				start()
 			}
-			armFallback()
-		case <-fallback:
-			start()
-			armFallback()
 		}
 	}
 	if best != nil {

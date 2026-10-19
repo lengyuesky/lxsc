@@ -399,9 +399,11 @@ func TestProbeDoesNotAutomaticallyRefreshOrFailOver(t *testing.T) {
 	}
 	_, key := f.create(t, true)
 	calls := 0
+	probed := ""
 	body := &unreadBody{t: t}
 	f.s.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
+		probed = r.URL.String()
 		if r.Header.Get("User-Agent") != "lxsc-debug-probe" || r.Header.Get("Referer") != "" || r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("Range") != "bytes=0-0" {
 			t.Error("主动探测不得改用播放请求头或继承凭据")
 		}
@@ -426,8 +428,9 @@ func TestProbeDoesNotAutomaticallyRefreshOrFailOver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 两个音源并发取链，最快者胜出；探测之后缓存必须仍是被探测的那条链接。
 	cached, err := f.s.Catalog.ResolvePlaybackURL(context.Background(), info, "320k")
-	if err != nil || !cached.Cached || cached.Result.SourceID != 1 {
+	if err != nil || !cached.Cached || cached.Result.URL != probed {
 		t.Fatal("独立探测不能偷偷刷新或切换音源")
 	}
 	if _, err := f.s.DB.GetTrack(context.Background(), "tr-wy-1"); err == nil {

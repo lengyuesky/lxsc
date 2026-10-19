@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,8 @@ func TestMediaFailoverDifferentScriptIDs(t *testing.T) {
 			if _, err := s.Catalog.Sources.Load(context.Background(), 22, mediaFailoverScript("b")); err != nil {
 				t.Fatal(err)
 			}
+			// 本用例验证串行换源的响应关闭顺序与请求头，并发竞速另有专门用例。
+			setSourceConcurrency(t, s, 1)
 			raw, _ := json.Marshal(tc.mode)
 			if _, err := s.Settings.Update(context.Background(), map[string]json.RawMessage{"streamMode": raw}); err != nil {
 				t.Fatal(err)
@@ -143,35 +146,52 @@ func addMediaFallback(t *testing.T, s *Server, id int64, label string) {
 }
 
 func TestMediaFailoverRecoverableFailures(t *testing.T) {
-	for _, proxy := range []bool{false, true} {
-		for _, first := range []int{0, 204, 400, 401, 403, 404, 405, 408, 410, 429, 500, 501, 502, 503, 504} {
-			t.Run(fmt.Sprintf("代理=%t/状态=%d", proxy, first), func(t *testing.T) {
-				s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
-				addMediaFallback(t, s, 22, "b")
-				var paths []string
-				s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					paths = append(paths, req.URL.Path)
-					status := 200
-					if strings.HasPrefix(req.URL.Path, "/a/") {
-						if first == 0 {
-							return nil, &net.DNSError{Err: "合成超时", Name: "不可泄露的签名地址", IsTimeout: true}
-						}
-						status = first
-					}
-					return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("音频")), Request: req}, nil
-				})}
-				extra := ""
-				if proxy {
-					extra = "&proxy=1"
-				}
-				rec := httptest.NewRecorder()
-				s.stream(rec, mediaStabilityRequest(user, info, extra))
-				want := []string{"/a/1", "/b/1"}
-				if !reflect.DeepEqual(paths, want) || (proxy && rec.Body.String() != "音频") || (!proxy && rec.Header().Get("Location") != "https://media.invalid/b/1") {
-					t.Fatalf("可恢复失败必须跳过坏源：请求=%v，响应=%d %v", paths, rec.Code, rec.Header())
-				}
-			})
+	for _, concurrency := range []int{1, 3} {
+		for _, proxy := range []bool{false, true} {
+			for _, first := range []int{0, 204, 400, 401, 403, 404, 405, 408, 410, 429, 500, 501, 502, 503, 504} {
+				t.Run(fmt.Sprintf("并发=%d/代理=%t/状态=%d", concurrency, proxy, first), func(t *testing.T) {
+					testMediaFailoverRecoverableFailure(t, concurrency, proxy, first)
+				})
+			}
 		}
+	}
+}
+
+func testMediaFailoverRecoverableFailure(t *testing.T, concurrency int, proxy bool, first int) {
+	s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
+	addMediaFallback(t, s, 22, "b")
+	setSourceConcurrency(t, s, concurrency)
+	var paths []string
+	var pathsMu sync.Mutex
+	s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		pathsMu.Lock()
+		paths = append(paths, req.URL.Path)
+		pathsMu.Unlock()
+		status := 200
+		if strings.HasPrefix(req.URL.Path, "/a/") {
+			if first == 0 {
+				return nil, &net.DNSError{Err: "合成超时", Name: "不可泄露的签名地址", IsTimeout: true}
+			}
+			status = first
+		}
+		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("音频")), Request: req}, nil
+	})}
+	extra := ""
+	if proxy {
+		extra = "&proxy=1"
+	}
+	rec := httptest.NewRecorder()
+	s.stream(rec, mediaStabilityRequest(user, info, extra))
+	pathsMu.Lock()
+	defer pathsMu.Unlock()
+	// 串行时 A 失败后才访问 B；并发时 A、B 同时发起，A 可能在发出媒体请求前就被 B 的胜出取消。
+	ordered := reflect.DeepEqual(paths, []string{"/a/1", "/b/1"})
+	if concurrency > 1 {
+		sorted := slices.Sorted(slices.Values(paths))
+		ordered = reflect.DeepEqual(sorted, []string{"/a/1", "/b/1"}) || reflect.DeepEqual(sorted, []string{"/b/1"})
+	}
+	if !ordered || (proxy && rec.Body.String() != "音频") || (!proxy && rec.Header().Get("Location") != "https://media.invalid/b/1") {
+		t.Fatalf("可恢复失败必须跳过坏源：请求=%v，响应=%d %v", paths, rec.Code, rec.Header())
 	}
 }
 
@@ -210,9 +230,12 @@ func TestMediaFailoverAllRejectedIsBounded(t *testing.T) {
 				addMediaFallback(t, s, int64(i+2), label)
 			}
 			var paths []string
+			var pathsMu sync.Mutex
 			var reads, closed atomic.Int32
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				pathsMu.Lock()
 				paths = append(paths, req.URL.Path)
+				pathsMu.Unlock()
 				return &http.Response{StatusCode: 403, Header: make(http.Header), Body: &countedMediaBody{Reader: strings.NewReader("错误正文"), reads: &reads, closed: &closed}, Request: req}, nil
 			})}
 			extra := ""
@@ -221,7 +244,9 @@ func TestMediaFailoverAllRejectedIsBounded(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			s.stream(rec, mediaStabilityRequest(user, info, extra))
-			want := []string{"/a/1", "/b/1", "/c/1", "/d/1", "/a/2", "/b/2", "/c/2", "/d/2"}
+			// 并发下到达顺序不确定，只断言每源恰好一次取链加一次刷新。
+			slices.Sort(paths)
+			want := []string{"/a/1", "/a/2", "/b/1", "/b/2", "/c/1", "/c/2", "/d/1", "/d/2"}
 			if !reflect.DeepEqual(paths, want) || reads.Load() != 0 || closed.Load() != 8 {
 				t.Fatalf("完整四源且每源最多刷新一次，不读取失败正文：%v 读取=%d 关闭=%d", paths, reads.Load(), closed.Load())
 			}
@@ -297,6 +322,8 @@ func TestMediaFailoverTerminalBoundaries(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
 			addMediaFallback(t, s, 22, "b")
+			// 终止状态后不得再尝试其它源：串行执行才能确定性地观察到"没有下一次"。
+			setSourceConcurrency(t, s, 1)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var gets, closed atomic.Int32
@@ -374,15 +401,16 @@ func TestMediaHeaderTimeoutTriesDifferentSource(t *testing.T) {
 			elapsed := time.Since(started)
 			pathsMu.Lock()
 			defer pathsMu.Unlock()
-			if elapsed < mediaFallbackDelay-time.Second || elapsed > mediaFallbackDelay+time.Second || !reflect.DeepEqual(paths, []string{"/a/1", "/b/1"}) {
-				t.Fatalf("头超时必须及时取消A并访问B：耗时=%v，请求=%v", elapsed, paths)
+			// A 可能在发出媒体请求前就被 B 的胜出取消，因此只要求 B 被访问且 A 至多一次。
+			if elapsed > time.Second || !slices.Contains(paths, "/b/1") || len(paths) > 2 || (len(paths) == 2 && !slices.Contains(paths, "/a/1")) {
+				t.Fatalf("A 头部挂起时必须与 B 并发并由 B 立即胜出：耗时=%v，请求=%v", elapsed, paths)
 			}
 		})
 	}
 }
 
 func TestMediaRecoveryTotalBudget(t *testing.T) {
-	if mediaRecoveryTimeout != 9*time.Second || mediaHeadTimeout != 4*time.Second || mediaFirstQualityTimeout != 2500*time.Millisecond || mediaNextQualityTimeout != 1500*time.Millisecond || maxConcurrentMediaSources != 2 || maxMediaAttempts != 12 {
+	if mediaRecoveryTimeout != 9*time.Second || mediaHeadTimeout != 4*time.Second || mediaFirstQualityTimeout != 2500*time.Millisecond || mediaNextQualityTimeout != 1500*time.Millisecond || maxMediaAttempts != 24 || mediaSpeedLaneTimeout != 4*time.Second {
 		t.Fatal("恢复上限必须固定且与文档一致")
 	}
 	for _, proxy := range []bool{false, true} {
@@ -390,11 +418,11 @@ func TestMediaRecoveryTotalBudget(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
 			addMediaFallback(t, s, 22, "b")
 			var gets atomic.Int32
-			cancelled := make(chan struct{})
+			cancelled := make(chan struct{}, 2)
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				gets.Add(1)
 				<-req.Context().Done()
-				close(cancelled)
+				cancelled <- struct{}{}
 				return nil, req.Context().Err()
 			})}
 			// 缩短同一个预算上下文，验证头请求也受总预算约束，而不是每轮重置45秒。
@@ -402,19 +430,22 @@ func TestMediaRecoveryTotalBudget(t *testing.T) {
 			defer cancel()
 			started := time.Now()
 			resolution, resp, err := s.prepareMedia(ctx, mediaStabilityRequest(user, info, ""), info, "320k", proxy, false)
-			if time.Since(started) > time.Second || gets.Load() != 1 || resp != nil {
-				t.Fatal("预算结束后不能继续尝试其他源")
+			// 两个源在并发上限内同时发起（慢环境下第二个可能来不及发出），预算结束后不能再有新的尝试。
+			if time.Since(started) > time.Second || gets.Load() < 1 || gets.Load() > 2 || resp != nil {
+				t.Fatal("预算结束后不能继续尝试其他源", gets.Load())
 			}
 			if proxy && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("代理应返回预算超时：%v", err)
 			}
-			if !proxy && (err != nil || resolution.Result.URL != "https://media.invalid/a/1") {
+			if !proxy && (err != nil || (resolution.Result.URL != "https://media.invalid/a/1" && resolution.Result.URL != "https://media.invalid/b/1")) {
 				t.Fatal("仅网络不确定时可保留客户端直连机会")
 			}
-			select {
-			case <-cancelled:
-			case <-time.After(time.Second):
-				t.Fatal("无人等待后上游必须被取消")
+			for range gets.Load() {
+				select {
+				case <-cancelled:
+				case <-time.After(time.Second):
+					t.Fatal("无人等待后上游必须被取消")
+				}
 			}
 		})
 	}
@@ -489,6 +520,8 @@ func TestRedirectUnknownCandidatesRespectLaterRejections(t *testing.T) {
 			}
 			addMediaFallback(t, s, 22, second)
 			addMediaFallback(t, s, 33, "same")
+			// 断言依赖请求先后编号，串行执行以验证不确定/拒绝簿记。
+			setSourceConcurrency(t, s, 1)
 			var calls atomic.Int32
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				n := calls.Add(1)

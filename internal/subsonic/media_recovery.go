@@ -15,6 +15,7 @@ import (
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/music"
+	"lxsc/internal/settings"
 )
 
 const (
@@ -27,13 +28,13 @@ const (
 	mediaFirstQualityTimeout = 2500 * time.Millisecond
 	mediaNextQualityTimeout  = 1500 * time.Millisecond
 	// mediaCandidateTimeout 是单个候选（一次取链 + 一次媒体校验）的上限。
-	mediaCandidateTimeout     = 2 * time.Second
-	mediaHeaderTimeout        = 3 * time.Second
-	mediaFallbackDelay        = 1500 * time.Millisecond
-	mediaSpeedFallbackDelay   = 600 * time.Millisecond
-	mediaQualityWait          = 200 * time.Millisecond
-	maxConcurrentMediaSources = 2
-	maxMediaAttempts          = 12
+	mediaCandidateTimeout = 2 * time.Second
+	// mediaSpeedLaneTimeout 是 speed 策略下单个音源源内降档的总预算，需容纳多档尝试。
+	mediaSpeedLaneTimeout = 4 * time.Second
+	mediaHeaderTimeout    = 3 * time.Second
+	mediaQualityWait      = 200 * time.Millisecond
+	// maxMediaAttempts 限制一次播放准备的取链次数；并发后每档会同时消耗多次。
+	maxMediaAttempts = 24
 	// crossSourceTimeout 限制跨平台兜底的总时长：它只是最后一档，不能反客为主拖长播放等待。
 	crossSourceTimeout = 4 * time.Second
 )
@@ -44,9 +45,12 @@ var (
 )
 
 type mediaTask struct {
-	id        int64
-	quality   string
-	exact     bool
+	id      int64
+	quality string
+	exact   bool
+	// lane 是任务要尝试的档位：精确任务只有 quality 本身；非精确任务为源内降档链，
+	// 由调度方按音源能力与本请求已尝试的档位预先算好。
+	lane      []string
 	failed    *music.URLResolution
 	cached    *music.URLResolution
 	refreshed *sync.Map
@@ -64,8 +68,9 @@ type mediaOutcome struct {
 	headerMS   int64
 }
 
-// prepareMedia 竞速“取链 + 媒体响应头”，完整候选快照受总预算、并行数和调用数限制。
-// 同档优先策略在所有支持该档的源失败后才降档；正文只交付最终胜出的一个响应。
+// prepareMedia 并发竞速“取链 + 媒体响应头”，受总预算、并发音源数和调用数限制。
+// quality 策略按档位轮次并发，所有支持该档的源失败后才降档；
+// speed 策略一轮内所有源并发各自降档。正文只交付最终胜出的一个响应。
 func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
 	finish := s.Catalog.MediaPreparation.Start()
 	defer func() { finish(resultErr) }()
@@ -78,15 +83,18 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 	}
 	ctx, stopBudget := context.WithTimeout(ctx, budget)
 	defer stopBudget()
-	strategy := s.Settings.Get().SourceSelection
+	strategy, concurrency := s.Settings.Get().SourceSelection, s.sourceConcurrency()
 	ids := s.Catalog.Sources.MusicURLSourceIDs(in.Source())
 	cached, cachedFirst := s.Catalog.CachedPlaybackURL(in, quality)
 	cachedFirst = cachedFirst && slices.Contains(ids, cached.Result.SourceID)
 	if cachedFirst {
 		ids = append([]int64{cached.Result.SourceID}, slices.DeleteFunc(slices.Clone(ids), func(id int64) bool { return id == cached.Result.SourceID })...)
 	}
-	// 任何策略都保留完整降档链：speed 只压缩等待与 hedge 时长，不能把"只有一次机会"交给最高档。
+	// quality 按完整降档链逐档并发；speed 只跑最高档一轮，降档在各源内部完成。
 	qualities := js.QualityChain(music.SelectQuality(quality, in.Qualities()))
+	if strategy == "speed" {
+		qualities = qualities[:1]
+	}
 	if cachedFirst {
 		qualities = append([]string{cached.Result.Quality}, qualities...)
 	}
@@ -101,6 +109,7 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 	lastFailure := errMediaUnavailable
 	var calls atomic.Int32
 	var refreshed sync.Map
+	raced := false // 是否已跑过正式竞速档位：缓存轮之后的首个档位仍享有较长预算
 	leases := map[int64]func(){}
 	defer func() {
 		for _, release := range leases {
@@ -111,14 +120,26 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 		cachedRound := cachedFirst && round == 0
 		var tasks []mediaTask
 		for _, id := range ids {
-			taskQuality := q
-			useCached := cachedRound && id == cached.Result.SourceID
-			if cachedRound && !useCached {
-				taskQuality = js.QualityChain(music.SelectQuality(quality, in.Qualities()))[0]
-			}
-			key := candidateKey{id, taskQuality}
-			if attempted[key] || blocked[id] || (strategy != "speed" && !s.Catalog.Sources.SupportsMusicURLQuality(id, in.Source(), taskQuality)) {
+			// 缓存轮只校验缓存候选：命中时不向其它源并发取链，避免放大上游压力。
+			if blocked[id] || (cachedRound && id != cached.Result.SourceID) {
 				continue
+			}
+			task := mediaTask{id: id, quality: q, exact: cachedRound || strategy != "speed", refreshed: &refreshed}
+			if task.exact {
+				if attempted[candidateKey{id, q}] || (strategy != "speed" && !s.Catalog.Sources.SupportsMusicURLQuality(id, in.Source(), q)) {
+					continue
+				}
+				task.lane = []string{q}
+			} else {
+				// speed 在源内逐档降级，跳过本请求已尝试过的档位（如缓存轮失败的档位）。
+				for _, laneQuality := range js.QualityChain(q) {
+					if !attempted[candidateKey{id, laneQuality}] && s.Catalog.Sources.SupportsMusicURLQuality(id, in.Source(), laneQuality) {
+						task.lane = append(task.lane, laneQuality)
+					}
+				}
+				if len(task.lane) == 0 {
+					continue
+				}
 			}
 			if _, owned := leases[id]; !owned {
 				release, ok := s.Catalog.Sources.AcquirePlaybackProbe(id, in.Source())
@@ -128,9 +149,10 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 				}
 				leases[id] = release
 			}
-			attempted[key] = true
-			task := mediaTask{id: id, quality: taskQuality, exact: useCached || strategy != "speed", refreshed: &refreshed}
-			if useCached {
+			for _, laneQuality := range task.lane {
+				attempted[candidateKey{id, laneQuality}] = true
+			}
+			if cachedRound {
 				task.cached = &cached
 			}
 			tasks = append(tasks, task)
@@ -139,14 +161,25 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 			continue
 		}
 		// 每档独立预算：本轮超时只说明这一档不可用，应立即进入下一档，而不是耗尽总预算。
-		roundBudget := mediaNextQualityTimeout
-		if round == 0 {
-			roundBudget = mediaFirstQualityTimeout
+		// 缓存校验与首个竞速档位等得久一些（多数请求在此命中）；speed 只有一轮竞速，直接使用总预算。
+		var roundCtx context.Context
+		var stopRound context.CancelFunc
+		switch {
+		case strategy == "speed" && !cachedRound:
+			roundCtx, stopRound = context.WithCancel(ctx)
+		case !raced:
+			roundCtx, stopRound = context.WithTimeout(ctx, mediaFirstQualityTimeout)
+		default:
+			roundCtx, stopRound = context.WithTimeout(ctx, mediaNextQualityTimeout)
 		}
-		roundCtx, stopRound := context.WithTimeout(ctx, roundBudget)
-		winner, failures, err := s.raceMediaCandidates(roundCtx, r, in, tasks, proxy, headMetadata, strategy, &calls)
+		raced = raced || !cachedRound
+		winner, failures, err := s.raceMediaCandidates(roundCtx, r, in, tasks, proxy, headMetadata, concurrency, &calls)
 		roundExpired := errors.Is(roundCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		stopRound()
+		// 并发下失败按完成先后到达；轮内按调度顺序处理，不确定候选与最终错误不受竞速时序影响。
+		slices.SortStableFunc(failures, func(a, b mediaOutcome) int {
+			return slices.Index(ids, a.task.id) - slices.Index(ids, b.task.id)
+		})
 		for _, failed := range failures {
 			if failed.err != nil && !errors.Is(failed.err, context.Canceled) {
 				lastFailure = failed.err
@@ -241,7 +274,7 @@ func (s *Server) crossSourceRescue(ctx context.Context, r *http.Request, in *mus
 	for _, id := range ids {
 		tasks = append(tasks, mediaTask{id: id, quality: rescueQuality, exact: true})
 	}
-	winner, _, err := s.raceMediaCandidates(rescueCtx, r, candidate, tasks, proxy, false, "speed", calls)
+	winner, _, err := s.raceMediaCandidates(rescueCtx, r, candidate, tasks, proxy, false, s.sourceConcurrency(), calls)
 	if winner == nil {
 		if err == nil {
 			err = errMediaUnavailable
@@ -254,15 +287,22 @@ func (s *Server) crossSourceRescue(ctx context.Context, r *http.Request, in *mus
 	return winner.resolution, winner.response, nil
 }
 
-func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *music.Info, tasks []mediaTask, proxy, headMetadata bool, strategy string, calls *atomic.Int32) (winner *mediaOutcome, failures []mediaOutcome, resultErr error) {
-	// speed 策略只缩短"等第一名"的时间，不减少可用候选。
-	hedgeDelay := mediaFallbackDelay
-	if strategy == "speed" {
-		hedgeDelay = mediaSpeedFallbackDelay
+// sourceConcurrency 返回播放取链同时请求的音源数。
+func (s *Server) sourceConcurrency() int {
+	if n := s.Settings.Get().SourceConcurrency; n > 0 {
+		return n
 	}
+	return settings.DefaultSourceConcurrency
+}
+
+// raceMediaCandidates 按调度顺序同时启动至多 concurrency 个候选，失败立即补位；
+// 首个满足请求档位的有效媒体胜出并取消其余候选。
+func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *music.Info, tasks []mediaTask, proxy, headMetadata bool, concurrency int, calls *atomic.Int32) (winner *mediaOutcome, failures []mediaOutcome, resultErr error) {
+	concurrency = max(1, concurrency)
 	workCtx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
-	results := make(chan mediaOutcome, maxConcurrentMediaSources)
+	// 在途任务不超过 concurrency，缓冲足以让收尾时的工作者全部写入而不阻塞。
+	results := make(chan mediaOutcome, concurrency)
 	var best *mediaOutcome
 	defer func() {
 		cancel()
@@ -278,22 +318,23 @@ func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *m
 		}
 	}()
 	next, active := 0, 0
-	start := func() {
-		task := tasks[next]
-		task.fallback = next > 0
-		next++
-		active++
-		workers.Go(func() { results <- s.tryMediaCandidate(workCtx, r, in, task, proxy, headMetadata, len(tasks), calls) })
+	busy := false
+	fill := func() {
+		for !busy && next < len(tasks) && active < concurrency && (next == 0 || calls.Load() < maxMediaAttempts) {
+			task := tasks[next]
+			task.fallback = next > 0
+			next++
+			active++
+			sourceCount := len(tasks) // 启动前取值：主协程补做刷新时会重新赋值 tasks
+			workers.Go(func() { results <- s.tryMediaCandidate(workCtx, r, in, task, proxy, headMetadata, sourceCount, calls) })
+		}
 	}
-	hedge := time.NewTimer(hedgeDelay)
-	defer hedge.Stop()
 	qualityTimer := time.NewTimer(time.Hour)
 	qualityTimer.Stop()
 	defer qualityTimer.Stop()
 	var qualityDeadline <-chan time.Time
 	var deferred []mediaTask
-	busy := false
-	start()
+	fill()
 	for active > 0 {
 		select {
 		case <-ctx.Done():
@@ -306,10 +347,6 @@ func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *m
 			return nil, failures, ctx.Err()
 		case <-qualityDeadline:
 			return best, failures, nil
-		case <-hedge.C:
-			if !busy && next < len(tasks) && active < maxConcurrentMediaSources {
-				start()
-			}
 		case outcome := <-results:
 			active--
 			if outcome.err == nil {
@@ -339,20 +376,14 @@ func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *m
 					return nil, failures, errMediaUnavailable
 				}
 				if outcome.refresh != nil {
-					deferred = append(deferred, mediaTask{id: outcome.task.id, quality: outcome.task.quality, exact: outcome.task.exact, failed: outcome.refresh, refreshed: outcome.task.refreshed})
+					deferred = append(deferred, mediaTask{id: outcome.task.id, quality: outcome.task.quality, exact: outcome.task.exact, lane: outcome.task.lane, failed: outcome.refresh, refreshed: outcome.task.refreshed})
 				}
 			}
 			if !busy && next == len(tasks) && active == 0 && best == nil && len(deferred) > 0 {
 				tasks = append(tasks, deferred...)
 				deferred = nil
 			}
-			if !busy && next < len(tasks) && calls.Load() < maxMediaAttempts {
-				start()
-			}
-			hedge.Stop()
-			if !busy && next < len(tasks) && active < maxConcurrentMediaSources {
-				hedge.Reset(hedgeDelay)
-			}
+			fill()
 		}
 	}
 	if best != nil {
@@ -369,14 +400,12 @@ func (s *Server) tryMediaCandidate(ctx context.Context, r *http.Request, in *mus
 		return s.tryExactMediaCandidate(ctx, r, in, task, proxy, headMetadata, sourceCount, calls)
 	}
 	// 速度优先允许源内降档，但降档也必须经过媒体校验；全部尝试共用单源预算。
-	ctx, cancel := context.WithTimeout(ctx, mediaCandidateTimeout)
+	// 单档超时只说明这一档慢，单源预算未尽时继续降档。
+	ctx, cancel := context.WithTimeout(ctx, mediaSpeedLaneTimeout)
 	defer cancel()
 	out := mediaOutcome{task: task, err: js.ErrNoQuality}
 	var rejected []string
-	for index, quality := range js.QualityChain(task.quality) {
-		if !s.Catalog.Sources.SupportsMusicURLQuality(task.id, in.Source(), quality) {
-			continue
-		}
+	for index, quality := range task.lane {
 		next := task
 		next.quality, next.exact = quality, true
 		if index > 0 {
@@ -386,7 +415,7 @@ func (s *Server) tryMediaCandidate(ctx context.Context, r *http.Request, in *mus
 		out.task = task
 		rejected = append(rejected, out.rejected...)
 		out.rejected = rejected
-		if out.err == nil || ctx.Err() != nil || out.status == 416 || out.status == 429 || out.status >= 500 || errors.Is(out.err, admission.ErrBusy) || errors.Is(out.err, context.Canceled) || errors.Is(out.err, context.DeadlineExceeded) || errors.Is(out.err, js.ErrSourceAuth) || errors.Is(out.err, js.ErrSourceUnavailable) || errors.Is(out.err, js.ErrSourceRateLimited) || errors.Is(out.err, js.ErrInvalidSourceResponse) || errors.Is(out.err, errInvalidMediaURL) || errors.Is(out.err, httpguard.ErrNonAudioResponse) || (out.status == 0 && out.resolution.Result.URL != "") {
+		if out.err == nil || ctx.Err() != nil || out.status == 416 || out.status == 429 || out.status >= 500 || errors.Is(out.err, admission.ErrBusy) || errors.Is(out.err, context.Canceled) || errors.Is(out.err, js.ErrSourceAuth) || errors.Is(out.err, js.ErrSourceUnavailable) || errors.Is(out.err, js.ErrSourceRateLimited) || errors.Is(out.err, js.ErrInvalidSourceResponse) || errors.Is(out.err, errInvalidMediaURL) || errors.Is(out.err, httpguard.ErrNonAudioResponse) || (out.status == 0 && out.resolution.Result.URL != "") {
 			return out
 		}
 	}

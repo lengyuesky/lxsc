@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -138,13 +139,17 @@ func TestMediaRejectsNonAudioSuccessResponses(t *testing.T) {
 					t.Fatal(err)
 				}
 				// 缓存命中也不能将 HTTP 200 的错误页继续交给播放器。
-				if _, err := s.Catalog.ResolvePlaybackURL(context.Background(), info, "320k"); err != nil {
+				// 只从 A 预热，避免并发取链让 B 抢先写入缓存。
+				if _, err := s.Catalog.ResolvePlaybackURLForSources(context.Background(), info, "320k", []int64{1}, nil); err != nil {
 					t.Fatal(err)
 				}
 				var paths []string
+				var pathsMu sync.Mutex
 				var badReads, badClosed atomic.Int32
 				s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					pathsMu.Lock()
 					paths = append(paths, req.URL.Path)
+					pathsMu.Unlock()
 					if strings.HasPrefix(req.URL.Path, "/a/") || allRejected {
 						return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/html; private=NEVER_EXPORT"}}, Body: &countedMediaBody{Reader: strings.NewReader("PRIVATE_ERROR_PAGE"), reads: &badReads, closed: &badClosed}, Request: req}, nil
 					}

@@ -445,13 +445,13 @@ func (m *SourceManager) SupportsMusicURLQuality(id int64, platform, quality stri
 	return false
 }
 
-// MusicURL 优先尝试评分高的音源，慢请求可并行尝试备用；音质不支持时向下降级。
+// MusicURL 按评分顺序并发请求音源，先成功者返回；音质不支持时向下降级。
 func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	return m.MusicURLForSources(ctx, platform, musicInfo, quality, nil)
 }
 
 // MusicURLForSources 仅在给定脚本集合内取链；nil 表示不限制。
-// 调度评分决定启动顺序，慢请求延迟启动备用，先成功者返回；保留源内音质降级。
+// 调度评分决定启动顺序，按并发上限同时请求，先成功者返回；保留源内音质降级。
 // 此处不校验音频响应，播放层独立决定是否刷新或换源，调试解析不会隐式探测媒体。
 func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
 	candidates := m.candidates(platform, "musicUrl")
