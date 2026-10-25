@@ -247,14 +247,38 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
-	var b userBody
-	if err := json.NewDecoder(r.Body).Decode(&b); err != nil || strings.TrimSpace(b.Name) == "" || b.Password == "" {
-		fail(w, 400, "用户名与密码不能为空")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	var b struct {
+		userBody
+		RandomPassword bool `json:"randomPassword"`
+	}
+	if err := decodeJSON(w, r, &b); err != nil {
+		fail(w, 400, "参数错误")
 		return
+	}
+	if strings.TrimSpace(b.Name) == "" || (!b.RandomPassword && b.Password == "") {
+		fail(w, 400, "用户名与密码不能为空，或选择随机密码")
+		return
+	}
+	if b.RandomPassword && b.Password != "" {
+		fail(w, 400, "随机密码与手动密码不能同时指定")
+		return
+	}
+	generated := ""
+	if b.RandomPassword {
+		var err error
+		generated, err = secret.RandomPassword()
+		if err != nil {
+			fail(w, 500, "随机密码生成失败")
+			return
+		}
+		b.Password = generated
 	}
 	enc, err := s.Secret.Encrypt(b.Password)
 	if err != nil {
-		fail(w, 500, err.Error())
+		fail(w, 500, "密码保存失败")
 		return
 	}
 	u, err := s.DB.CreateUser(r.Context(), strings.TrimSpace(b.Name), enc, b.IsAdmin, b.Quality)
@@ -262,7 +286,11 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "创建失败: "+err.Error())
 		return
 	}
-	writeJSON(w, 200, u)
+	// 保持原用户响应结构；只有随机生成时额外返回一次明文密码。
+	writeJSON(w, 200, struct {
+		*db.User
+		Password string `json:"password,omitempty"`
+	}{u, generated})
 }
 
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {

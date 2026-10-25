@@ -87,6 +87,32 @@ func TestUnifiedSessionAndPermissions(t *testing.T) {
 	if status := jsonRequest(t, alice, http.MethodGet, ts.URL+"/api/admin/backups/status", nil); status != http.StatusForbidden {
 		t.Fatalf("普通用户访问备份接口应返回 403，实际为 %d", status)
 	}
+	anonymous := clientWithJar(t)
+	for _, name := range []string{"alice", "admin"} {
+		target, err := database.GetUserByName(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		base := fmt.Sprintf("%s/api/admin/users/%d", ts.URL, target.ID)
+		for _, request := range []struct {
+			method, path string
+			body         any
+		}{
+			{http.MethodGet, base + "/apikeys", nil},
+			{http.MethodPost, base + "/apikey", map[string]any{"label": "禁止创建", "days": 90}},
+			{http.MethodDelete, base + "/apikeys/forbidden-key", nil},
+		} {
+			if status := jsonRequest(t, alice, request.method, request.path, request.body); status != http.StatusForbidden {
+				t.Fatalf("普通用户不得管理本人或其他用户的 API Key: %s %s -> %d", request.method, request.path, status)
+			}
+			if status := jsonRequest(t, anonymous, request.method, request.path, request.body); status != http.StatusUnauthorized {
+				t.Fatalf("匿名请求不得访问 API Key 管理: %s %s -> %d", request.method, request.path, status)
+			}
+		}
+		if keys, err := database.ListAPIKeys(ctx, target.ID); err != nil || len(keys) != 0 {
+			t.Fatalf("拒绝的请求不得创建 API Key: %v %v", keys, err)
+		}
+	}
 
 	adminClient := clientWithJar(t)
 	if status := jsonRequest(t, adminClient, http.MethodPost, ts.URL+"/api/auth/login", map[string]any{"username": "admin", "password": "pw-admin"}); status != http.StatusOK {

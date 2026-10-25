@@ -281,6 +281,25 @@ func (d *DB) UpdateUser(ctx context.Context, id int64, name, passwordEnc string,
 	return err
 }
 
+// ErrUserPasswordChanged 表示验证后的密码已被其他请求修改，或该用户已删除。
+var ErrUserPasswordChanged = errors.New("用户密码已改变")
+
+// UpdateUserPassword 仅更新密码，并以旧密文作条件，避免覆盖并发改密或其他用户属性。
+func (d *DB) UpdateUserPassword(ctx context.Context, id int64, previousEnc, passwordEnc string) error {
+	res, err := d.sql.ExecContext(ctx, `UPDATE users SET password_enc=? WHERE id=? AND password_enc=?`, passwordEnc, id, previousEnc)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserPasswordChanged
+	}
+	return nil
+}
+
 // UpdateUserQuality 更新用户的默认播放音质。
 func (d *DB) UpdateUserQuality(ctx context.Context, id int64, quality string) error {
 	_, err := d.sql.ExecContext(ctx, `UPDATE users SET quality=? WHERE id=?`, quality, id)

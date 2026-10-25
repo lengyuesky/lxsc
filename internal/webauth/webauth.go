@@ -39,8 +39,9 @@ type session struct {
 
 // Server 提供统一认证接口。
 type Server struct {
-	Auth     *Manager
-	Settings *settings.Store
+	Auth            *Manager
+	Settings        *settings.Store
+	PasswordChanged func(int64) // 改密提交后撤销该用户的其他临时凭据。
 }
 
 // UserView 是暴露给 Web 控制台的用户信息。
@@ -139,6 +140,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/login", s.login)
 	r.Post("/logout", s.logout)
 	r.Get("/me", s.me)
+	r.Put("/password", s.changePassword)
 	return r
 }
 

@@ -17,11 +17,11 @@ function deferred() {
   return { promise, resolve }
 }
 async function settle(page) { await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))) }
-async function login(page, url, user = 'alice') {
+async function login(page, url, user = 'alice', password = 'test-password') {
   await page.goto(url + '/#search')
   await page.locator('#login:not(.hidden)').waitFor()
   await page.locator('#loginForm [name=username]').fill(user)
-  await page.locator('#loginForm [name=password]').fill('test-password')
+  await page.locator('#loginForm [name=password]').fill(password)
   await page.locator('#loginForm button').click()
   await page.locator('#app:not(.hidden)').waitFor()
   await page.locator('#tab-search.active').waitFor()
@@ -233,6 +233,8 @@ async function main() {
       assert.deepEqual(calls[1].body, { confirm: true })
     })
 
+    await require('./account-browser.cjs')({ check, url, login, admin, holdResponse })
+    await require('./clients-browser.cjs')({ check, url, login, artifacts, search, playSearch })
     await require('./optimization-browser.cjs')({ check, url, login, holdResponse })
     await require('./debug-browser.cjs')({ check, url, artifacts, login })
     await require('./listening-browser.cjs')({ check, url, artifacts, login, search, playSearch, holdResponse })

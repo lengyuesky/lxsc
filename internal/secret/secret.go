@@ -81,6 +81,15 @@ func (b *Box) Decrypt(enc string) (string, error) {
 	return string(plain), nil
 }
 
+// RandomPassword 使用 144 位安全随机数生成 24 个 URL 安全字符，不含空格或填充符。
+func RandomPassword() (string, error) {
+	var raw [18]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:]), nil
+}
+
 // RandomToken 随机 token（hex 风格 base64url）
 func RandomToken(n int) string {
 	b := make([]byte, n)

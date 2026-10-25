@@ -1,0 +1,51 @@
+/* 客户端说明复用控制台主题，所有布局都允许窄屏收缩。 */
+.client-guide > .card, .client-guide > .client-section { margin-top: 18px }
+.client-guide .card-title, .client-guide h4 { text-transform: none; letter-spacing: 0; color: var(--fg) }
+.client-guide .card-title { font-size: 16px }
+.client-guide .card-title .muted { font-size: 13px; font-weight: 400 }
+.client-guide h4 { font-size: 14px; margin: 0 0 8px }
+.client-guide p { margin: 6px 0; overflow-wrap: anywhere }
+.client-connection { background: linear-gradient(125deg, var(--pri-soft), transparent 65%), var(--card) }
+.client-connection-fields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 20px }
+.client-field { min-width: 0 }
+.client-field label { margin: 0 0 6px }
+.client-copy-row { display: flex; gap: 8px; align-items: center }
+.client-copy-row input { flex: 1; min-width: 0 }
+.client-copy-row button { flex: none }
+.client-auth-note { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; color: var(--fg-2) }
+.client-network-notice { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); font-size: 12.5px }
+.client-guide .client-network-notice { margin-top: 14px }
+.client-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px }
+.client-section-head .card-title { flex-wrap: wrap; margin-bottom: 4px }
+.client-section-head > .btn { flex: none }
+.client-steps { list-style: none; counter-reset: client-step; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 24px; margin: 22px 0 16px; padding: 0 }
+.client-steps li { counter-increment: client-step; position: relative; min-width: 0; padding-left: 40px }
+.client-steps li::before { content: counter(client-step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--pri-soft); color: var(--pri); font-weight: 700 }
+.client-steps p { color: var(--fg-2); font-size: 13px }
+.client-guide .client-footnote { margin-top: 14px; color: var(--muted); font-size: 12.5px }
+.client-section-title { margin: 0 0 12px; font-size: 15px; color: var(--fg); text-transform: none; letter-spacing: 0 }
+.client-app-grid, .client-usage-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px }
+.client-app-grid > .card { margin: 0; min-width: 0; display: flex; flex-direction: column; align-items: flex-start }
+.client-app-grid h4 .muted { display: block; font-size: 12px; font-weight: 400 }
+.client-app-grid p { margin: 0 0 14px; color: var(--fg-2); font-size: 13px }
+.client-app-grid a { margin-top: auto; font-size: 13px }
+.client-usage-grid > div { min-width: 0 }
+.client-usage-grid p, .client-key-help p { color: var(--fg-2); font-size: 13px }
+.client-prefixes { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px }
+.client-prefixes span { white-space: nowrap }
+.client-faq details { padding: 12px 0; border-top: 1px solid var(--line) }
+.client-faq details:last-child { padding-bottom: 0 }
+.client-faq summary { cursor: pointer; font-weight: 500 }
+.client-faq summary:focus-visible { outline: 2px solid var(--pri); outline-offset: 3px; border-radius: 3px }
+.client-faq details p { margin-top: 10px; color: var(--fg-2); font-size: 13px }
+@media (max-width: 1100px) {
+  .client-connection-fields, .client-usage-grid { grid-template-columns: 1fr }
+  .client-usage-grid { gap: 16px }
+  .client-usage-grid > div + div { padding-top: 14px; border-top: 1px solid var(--line) }
+}
+@media (max-width: 600px) {
+  .client-steps, .client-app-grid { grid-template-columns: 1fr }
+  .client-section-head { flex-direction: column; gap: 10px }
+  .client-app-grid { gap: 10px }
+  .client-connection-fields { gap: 14px }
+}

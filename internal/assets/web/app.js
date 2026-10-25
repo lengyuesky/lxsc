@@ -1,6 +1,9 @@
 // 会话、路由与歌单编辑入口。
 function showLogin() {
   resetDebugSession()
+  resetPasswordSession()
+  resetUserSession()
+  LXSCClients.reset()
   resetPlaybackExperience(true)
   clearAPIKeyDialog()
   if ($('#keyDialog').open) $('#keyDialog').close()
@@ -19,6 +22,9 @@ function showApp() {
 }
 async function initializeSession(data) {
   resetDebugSession()
+  resetPasswordSession()
+  resetUserSession()
+  LXSCClients.reset()
   resetMusicSession()
   LXSCAdminModules.reset()
   LXSCSettings.reset()
@@ -58,14 +64,15 @@ $('#logoutButton').addEventListener('click', async event => {
 })
 
 // ---- 路由 ----
-const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), dashboard: () => LXSCAdminModules.load('admin', 'loadDashboard'), sources: () => LXSCAdminModules.load('admin', 'loadSources'), users: loadUsers, backups: () => LXSCAdminModules.load('backups', 'load'), settings: LXSCSettings.load, search: () => {}, logs: () => LXSCAdminModules.load('admin', 'loadLogs'), debug: () => loadDebug() }
+const loaders = { playlists: loadPlaylistTab, listening: () => loadListening(), clients: LXSCClients.load, dashboard: () => LXSCAdminModules.load('admin', 'loadDashboard'), sources: () => LXSCAdminModules.load('admin', 'loadSources'), users: loadUsers, backups: () => LXSCAdminModules.load('backups', 'load'), settings: LXSCSettings.load, search: () => {}, logs: () => LXSCAdminModules.load('admin', 'loadLogs'), debug: () => loadDebug() }
 function route() {
   LXSCAdminModules.cancelLoad()
   if (!sessionState.me) return
   const fallback = sessionState.me.isAdmin ? 'dashboard' : 'playlists'
   let tab = (location.hash || '#' + fallback).slice(1)
-  if (!loaders[tab] || (!sessionState.me.isAdmin && !['playlists', 'search', 'listening'].includes(tab))) tab = fallback
+  if (!loaders[tab] || (!sessionState.me.isAdmin && !['playlists', 'search', 'listening', 'clients'].includes(tab))) tab = fallback
   if (tab !== 'debug') clearDebugSecret()
+  if (tab !== 'users') closeCreatedUserPassword()
   if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab)
   document.querySelectorAll('nav a[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === tab))
   document.querySelectorAll('.tab').forEach(s => s.classList.toggle('active', s.id === 'tab-' + tab))

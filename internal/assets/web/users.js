@@ -7,9 +7,51 @@ async function loadUsers() {
 }
 async function createUser(e) {
   e.preventDefault()
-  const f = new FormData(e.target)
-  try { await adminAPI('/users', { method: 'POST', body: { name: f.get('name'), password: f.get('password'), quality: f.get('quality'), isAdmin: f.get('isAdmin') === 'on' } }); e.target.reset(); toast('用户已创建'); await loadUsers() } catch (err) { if (!isAbort(err)) toast(err.message, true) }
+  const form = e.currentTarget, button = form.querySelector('button[type=submit]')
+  if (button.disabled) return false
+  const f = new FormData(form), epoch = sessionState.epoch
+  const randomPassword = f.get('randomPassword') === 'on'
+  const body = { name: f.get('name'), quality: f.get('quality'), isAdmin: f.get('isAdmin') === 'on', randomPassword }
+  if (!randomPassword) body.password = f.get('password')
+  button.disabled = true
+  try {
+    const created = await adminAPI('/users', { method: 'POST', body })
+    if (epoch !== sessionState.epoch || !sessionState.me?.isAdmin) return false
+    form.reset(); syncCreatePasswordMode(); toast('用户已创建')
+    if (created.password) {
+      $('#createdUserName').value = created.name
+      $('#createdUserPassword').value = created.password
+      $('#createdUserDialog').showModal()
+    }
+    await loadUsers()
+  } catch (err) { if (!isAbort(err)) toast(err.message, true) }
+  finally { if (epoch === sessionState.epoch) button.disabled = false }
   return false
+}
+function syncCreatePasswordMode() {
+  const form = $('#createUserForm'), random = form.elements.randomPassword.checked
+  form.elements.password.disabled = random
+  form.elements.password.required = !random
+  form.elements.password.placeholder = random ? '创建时自动生成，成功后仅显示一次' : '密码'
+  if (random) form.elements.password.value = ''
+}
+function clearCreatedUserPassword() {
+  $('#createdUserName').value = ''
+  $('#createdUserPassword').value = ''
+}
+function closeCreatedUserPassword() {
+  clearCreatedUserPassword()
+  if ($('#createdUserDialog').open) $('#createdUserDialog').close()
+}
+function resetUserSession() {
+  closeCreatedUserPassword()
+  $('#createUserForm').reset()
+  $('#createUserForm button[type=submit]').disabled = false
+  syncCreatePasswordMode()
+  $('#editUserForm').reset()
+  if ($('#userDialog').open) $('#userDialog').close()
+  usersCache = []
+  $('#userTable tbody').replaceChildren()
 }
 function editUser(id) {
   const u = usersCache.find(x => x.id === id); if (!u) return
@@ -74,6 +116,16 @@ function clearAPIKeyDialog() {
 }
 $('#keyDialog').addEventListener('close', clearAPIKeyDialog)
 $('#keyDialog').addEventListener('cancel', clearAPIKeyDialog)
+$('#createUserForm [name=randomPassword]').addEventListener('change', syncCreatePasswordMode)
+$('#createdUserDialog').addEventListener('close', clearCreatedUserPassword)
+$('#createdUserDialog').addEventListener('cancel', clearCreatedUserPassword)
+$('#copyCreatedUserPassword').addEventListener('click', () => {
+  const field = $('#createdUserPassword')
+  if (!field.value) return
+  field.select()
+  void copyText(field.value)
+})
+$('#closeCreatedUser').addEventListener('click', closeCreatedUserPassword)
 $('#createUserForm').addEventListener('submit', createUser)
 $('#editUserForm').addEventListener('submit', submitUser)
 $('#userTable').addEventListener('click', event => {

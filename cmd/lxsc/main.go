@@ -167,6 +167,7 @@ func run(cfgPath string) error {
 	debugSrv.Logs = logBuf
 	debugSrv.RuntimeInfo = map[string]any{"listen": cfg.Listen, "trustProxy": cfg.TrustProxy, "trustedProxies": cfg.TrustedProxies, "sdkWorkers": cfg.SDKWorkers, "outboundProxy": diagnostics.AddressSummary(cfg.Proxy)}
 	defer debugSrv.Tokens.Close()
+	authSrv.PasswordChanged = debugSrv.Tokens.RevokeOwner
 	adminSrv := &admin.Server{DB: database, Sources: sources, Catalog: catalog, Settings: st, Secret: box, Logs: logBuf, Log: log, HTTP: httpSecure, Version: version, StartAt: time.Now(), Auth: authManager, Backup: backupSrv, Debug: debugSrv}
 	importDir(ctx, adminSrv, srcs, filepath.Join(cfg.DataDir, "sources"), log)
 	if err := catalog.EnableURLCache(cfg.DataDir, cfg.Proxy); err != nil {
