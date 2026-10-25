@@ -251,7 +251,7 @@ const scheduleTestPrelude = `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:
 func TestManagerDynamicReorderAfterFailures(t *testing.T) {
 	m := NewSourceManager(loadAsset(t, "prelude.js"), &http.Client{}, &http.Client{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(m.UnloadAll)
-	// 注入虚拟时钟，让端到端取链的失败能自然跨越合并窗口。
+	// 固定调度时钟，隔离真实耗时与连续失败冷却窗口。
 	fake := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	m.schedule.now = func() time.Time { return fake }
 	broken := scheduleTestPrelude + `globalThis.__lx_request=()=>{throw new Error('渠道故障')};`
@@ -265,10 +265,11 @@ func TestManagerDynamicReorderAfterFailures(t *testing.T) {
 	if got, want := m.MusicURLSourceIDs("wy"), []int64{1, 2}; !slicesEqual(got, want) {
 		t.Fatalf("冷启动必须按加载顺序: %v", got)
 	}
-	// 反复取链：坏源强失败后评分低于好源，调度器把好源排到前面；
-	// 并发上限内的音源同时请求，坏源失败不影响好源结果。
+	// 只允许一个并行源，明确验证启动顺序：首次坏源失败后尝试好源，
+	// 后续调用按更新后的评分直接命中好源，不依赖并发竞速的调度时机。
+	ctx := WithMusicURLConcurrency(context.Background(), 1)
 	for range 3 {
-		result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
+		result, err := m.MusicURL(ctx, "wy", nil, "320k")
 		if err != nil || result.SourceID != 2 {
 			t.Fatalf("应始终返回好源结果: %+v %v", result, err)
 		}
@@ -276,9 +277,11 @@ func TestManagerDynamicReorderAfterFailures(t *testing.T) {
 	if got := m.MusicURLSourceIDs("wy"); got[0] != 2 || got[1] != 1 {
 		t.Fatalf("动态排序应把好源排前: %v", got)
 	}
-	// 两个源都在并发上限内，每次取链各请求一次且全部收回。
-	if got := m.CallStatisticsOf(1, time.Now(), time.Hour); got.Total.Calls != 3 || got.InFlight != 0 {
-		t.Fatalf("并发取链应每次同时请求坏源并收回: %+v", got)
+	if got := m.CallStatisticsOf(1, time.Now(), time.Hour); got.Total.Calls != 1 || got.Total.Failed != 1 || got.InFlight != 0 {
+		t.Fatalf("坏源应只在首次被尝试，排序后不再执行: %+v", got.Total)
+	}
+	if got := m.CallStatisticsOf(2, time.Now(), time.Hour); got.Total.Calls != 3 || got.Total.Success != 3 || got.InFlight != 0 {
+		t.Fatalf("好源应完成全部三次取链且收回额度: %+v", got.Total)
 	}
 	// 冷却兜底：所有源都不可用时仍保留候选身份。
 	if got := m.MusicURLSourceIDs("wy"); len(got) != 2 {

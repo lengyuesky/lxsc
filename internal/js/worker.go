@@ -157,6 +157,16 @@ func (w *Worker) run(fn func(vm *goja.Runtime)) bool {
 	return w.loop.RunOnLoop(func(vm *goja.Runtime) {
 		w.running.Store(true)
 		defer w.running.Store(false)
+		// Buffer.WrapBytes 等原生桥接会把 VM 中断作为 panic 抛出。
+		// 调用方已收到取消结果，回调只需退出；不能让它终止整个事件循环。
+		// 其他 panic 仍向上传递，避免掩盖 Go 实现错误。
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if _, interrupted := recovered.(*goja.InterruptedError); !interrupted {
+					panic(recovered)
+				}
+			}
+		}()
 		fn(vm)
 	})
 }

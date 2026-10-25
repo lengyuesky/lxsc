@@ -34,9 +34,23 @@ if(err || %t) reject(new Error('合成取链失败')); else resolve({url:'https:
 }
 
 func TestMusicURLConcurrentSourcesFirstSuccessWins(t *testing.T) {
+	started := make(chan struct{})
+	var arrivals atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if arrivals.Add(1) == 2 {
+			close(started)
+		}
+		// 两个源的实际 HTTP 都已开始后才返回成功，不能假设快源不会抢先取消另一源。
+		select {
+		case <-started:
+			_, _ = io.WriteString(w, "ready")
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
 	m := startupSources(t,
-		`globalThis.__lx_request=()=>({url:'https://media.invalid/primary'});`,
-		`globalThis.__lx_request=()=>({url:'https://media.invalid/backup'});`,
+		startupRequestScript(server.URL+"/primary", false),
+		startupRequestScript(server.URL+"/backup", false),
 	)
 	result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
 	if err != nil || (result.SourceID != 1 && result.SourceID != 2) {
@@ -50,15 +64,20 @@ func TestMusicURLConcurrentSourcesFirstSuccessWins(t *testing.T) {
 }
 
 func TestMusicURLSlowPrimaryUsesBackupAndCancelsHTTP(t *testing.T) {
-	started, cancelled := make(chan struct{}, 1), make(chan struct{}, 1)
+	started, cancelled := make(chan struct{}), make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/slow" {
-			started <- struct{}{}
+			close(started)
 			<-r.Context().Done()
 			cancelled <- struct{}{}
 			return
 		}
-		_, _ = io.WriteString(w, "ready")
+		// 先确认慢源实际发出了 HTTP，再让快源胜出，稳定验证在途取消。
+		select {
+		case <-started:
+			_, _ = io.WriteString(w, "ready")
+		case <-r.Context().Done():
+		}
 	}))
 	t.Cleanup(server.Close)
 	m := startupSources(t, startupRequestScript(server.URL+"/slow", false), startupRequestScript(server.URL+"/fast", false))
