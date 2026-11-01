@@ -26,9 +26,11 @@ import (
 	"lxsc/internal/config"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/fnmusic"
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/logbuf"
+	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
 	"lxsc/internal/portal"
 	"lxsc/internal/secret"
@@ -176,6 +178,11 @@ func run(cfgPath string) error {
 	defer catalog.CloseURLCache()
 
 	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
+	fn, err := fnmusic.New(ctx, database, catalog, st, authManager, version)
+	if err != nil {
+		return err
+	}
+	fn.Media = &mediastream.Service{Catalog: catalog, Settings: st, HTTP: httpSecure, Log: log, Diagnostics: debugSrv.Events}
 	debugSrv.ProtocolProbe = sub.ProbeProtocol
 	debugSrv.ProtocolEndpoints = sub.ProbeEndpoints()
 	debugSrv.CoverPerformance = sub.CoverPerformance
@@ -206,6 +213,8 @@ func run(cfgPath string) error {
 	r.Use(httpguard.LimitIO)
 	r.Use(cors)
 	r.Get("/healthz", healthHandler(database, sdkPool))
+	r.Get("/trimcon", fn.Probe)
+	r.Mount("/music", fn.Routes())
 	r.Mount("/rest", sub.Routes())
 	r.Mount("/api/auth", authSrv.Routes())
 	r.Mount("/api/app", portalSrv.Routes())

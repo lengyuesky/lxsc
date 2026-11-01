@@ -1,4 +1,4 @@
-package subsonic
+package mediastream
 
 import (
 	"context"
@@ -71,7 +71,7 @@ type mediaOutcome struct {
 // prepareMedia 并发竞速“取链 + 媒体响应头”，受总预算、并发音源数和调用数限制。
 // quality 策略按档位轮次并发，所有支持该档的源失败后才降档；
 // speed 策略一轮内所有源并发各自降档。正文只交付最终胜出的一个响应。
-func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
+func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
 	finish := s.Catalog.MediaPreparation.Start()
 	defer func() { finish(resultErr) }()
 	if s.Catalog.Sources == nil {
@@ -246,7 +246,7 @@ func (s *Server) prepareMedia(ctx context.Context, r *http.Request, in *music.In
 
 // crossSourceRescue 在原平台整体不可用时，用同名同歌手同长度的候选到其它平台取链。
 // 只有原生路径彻底失败才会走到这里，正常播放不会承担额外耗时。
-func (s *Server) crossSourceRescue(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy bool, calls *atomic.Int32) (music.URLResolution, *http.Response, error) {
+func (s *Service) crossSourceRescue(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy bool, calls *atomic.Int32) (music.URLResolution, *http.Response, error) {
 	if s.Catalog == nil || s.Catalog.Sources == nil || ctx.Err() != nil {
 		return music.URLResolution{}, nil, nil
 	}
@@ -288,7 +288,7 @@ func (s *Server) crossSourceRescue(ctx context.Context, r *http.Request, in *mus
 }
 
 // sourceConcurrency 返回播放取链同时请求的音源数。
-func (s *Server) sourceConcurrency() int {
+func (s *Service) sourceConcurrency() int {
 	if n := s.Settings.Get().SourceConcurrency; n > 0 {
 		return n
 	}
@@ -297,7 +297,7 @@ func (s *Server) sourceConcurrency() int {
 
 // raceMediaCandidates 按调度顺序同时启动至多 concurrency 个候选，失败立即补位；
 // 首个满足请求档位的有效媒体胜出并取消其余候选。
-func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *music.Info, tasks []mediaTask, proxy, headMetadata bool, concurrency int, calls *atomic.Int32) (winner *mediaOutcome, failures []mediaOutcome, resultErr error) {
+func (s *Service) raceMediaCandidates(ctx context.Context, r *http.Request, in *music.Info, tasks []mediaTask, proxy, headMetadata bool, concurrency int, calls *atomic.Int32) (winner *mediaOutcome, failures []mediaOutcome, resultErr error) {
 	concurrency = max(1, concurrency)
 	workCtx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
@@ -395,7 +395,7 @@ func (s *Server) raceMediaCandidates(ctx context.Context, r *http.Request, in *m
 	return nil, failures, errMediaUnavailable
 }
 
-func (s *Server) tryMediaCandidate(ctx context.Context, r *http.Request, in *music.Info, task mediaTask, proxy, headMetadata bool, sourceCount int, calls *atomic.Int32) mediaOutcome {
+func (s *Service) tryMediaCandidate(ctx context.Context, r *http.Request, in *music.Info, task mediaTask, proxy, headMetadata bool, sourceCount int, calls *atomic.Int32) mediaOutcome {
 	if task.exact {
 		return s.tryExactMediaCandidate(ctx, r, in, task, proxy, headMetadata, sourceCount, calls)
 	}
@@ -422,7 +422,7 @@ func (s *Server) tryMediaCandidate(ctx context.Context, r *http.Request, in *mus
 	return out
 }
 
-func (s *Server) tryExactMediaCandidate(ctx context.Context, r *http.Request, in *music.Info, task mediaTask, proxy, headMetadata bool, sourceCount int, calls *atomic.Int32) mediaOutcome {
+func (s *Service) tryExactMediaCandidate(ctx context.Context, r *http.Request, in *music.Info, task mediaTask, proxy, headMetadata bool, sourceCount int, calls *atomic.Int32) mediaOutcome {
 	ctx, cancel := context.WithTimeout(ctx, mediaCandidateTimeout)
 	defer cancel()
 	out := mediaOutcome{task: task}
@@ -549,9 +549,9 @@ func (e mediaHTTPError) DiagnosticCode() string {
 	return "upstream_status"
 }
 
-func (s *Server) mediaAttemptEvent(ctx context.Context, r *http.Request, stage string, in *music.Info, quality string, resolution music.URLResolution, status int, started time.Time, err error, attempt int) {
+func (s *Service) mediaAttemptEvent(ctx context.Context, r *http.Request, stage string, in *music.Info, quality string, resolution music.URLResolution, status int, started time.Time, err error, attempt int) {
 	e := diagnostics.Event{Stage: stage, TrackID: in.TrackID(), Platform: in.Source(), Quality: quality, RequestedQuality: param(r, "quality"), Cached: resolution.Cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds(), Attempt: attempt}
-	if parent, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event); parent != nil {
+	if parent, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); parent != nil {
 		e.RequestID = parent.RequestID
 	}
 	if deadline, ok := ctx.Deadline(); ok {

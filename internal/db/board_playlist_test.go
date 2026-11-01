@@ -115,7 +115,7 @@ func TestBoardPlaylistMetadataMigrationFromV4(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 模拟升级前的数据库结构，已有用户和歌单必须继续可用。
-	for _, statement := range []string{"DROP TABLE board_playlist_metadata", "DELETE FROM schema_migrations WHERE version=5"} {
+	for _, statement := range []string{"DROP TABLE board_playlist_metadata", "DROP TABLE client_ids", "DELETE FROM schema_migrations WHERE version>=5"} {
 		if _, err := database.sql.Exec(statement); err != nil {
 			t.Fatal(err)
 		}

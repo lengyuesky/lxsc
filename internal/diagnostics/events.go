@@ -88,7 +88,7 @@ func (b *Events) Add(e Event) {
 	}
 	e.Endpoint = oneOf(e.Endpoint, "ping", "getLicense", "getOpenSubsonicExtensions", "getUser", "getUsers", "getScanStatus", "getMusicFolders", "getIndexes", "getArtists", "getMusicDirectory", "getGenres", "getArtist", "getArtistInfo", "getArtistInfo2", "getAlbum", "getAlbumInfo", "getAlbumInfo2", "getSong", "getTopSongs", "getSimilarSongs", "getSimilarSongs2", "getAlbumList", "getAlbumList2", "getRandomSongs", "getSongsByGenre", "getNowPlaying", "getStarred", "getStarred2", "search", "search2", "search3", "getPlaylists", "getPlaylist", "getLyrics", "getLyricsBySongId", "getPlayQueue", "getBookmarks", "getInternetRadioStations", "getPodcasts", "getNewestPodcasts", "getShares", "getVideos", "getCoverArt", "getSongLists", "stream", "download")
 	e.Method = oneOf(e.Method, "GET", "POST", "HEAD")
-	e.Client = oneOf(e.Client, "amcfy", "stream_music", "other", "unknown")
+	e.Client = oneOf(e.Client, "amcfy", "stream_music", "fnmusic", "other", "unknown")
 	e.Format = oneOf(e.Format, "json", "xml", "jsonp", "binary")
 	e.CoverOrigin = oneOf(e.CoverOrigin, "original", "custom", "stale", "placeholder", "board", "redirect")
 	e.Result = oneOf(e.Result, "ok", "failed", "empty", "unavailable")

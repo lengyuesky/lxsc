@@ -16,18 +16,22 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 
 	"lxsc/internal/admin"
 	"lxsc/internal/assets"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/fnmusic"
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/logbuf"
+	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
 	"lxsc/internal/portal"
 	"lxsc/internal/secret"
@@ -39,7 +43,7 @@ import (
 const sdk = `
 function song(source, key, query) {
   const names=['测试歌曲一','第二首歌曲','<img src=x onerror=alert(1)>'];
-  return {source,songmid:String(key),name:(query ? query+' · ' : '')+names[Number(String(key).replace(/^fail-/,''))-1],singer:'测试歌手',albumName:'合成音频',interval:'00:45',types:[{type:'320k'},{type:'128k'}]};
+  return {source,songmid:String(key),name:(query ? query+' · ' : '')+names[Number(String(key).replace(/^fail-/,''))-1],singer:'测试歌手',albumName:'合成音频',interval:'00:45',types:[{type:'320k'},{type:'128k'}],audioSpec:{format:'wav',codec:'pcm_s16le',size:720044,sampleRate:8000,bitDepth:16,channel:1,duration:45000,bitrate:128000}};
 }
 globalThis.__sdk_call=(path,args)=> {
 	if (path.endsWith('.getLyric')) return Promise.resolve({lyric:'[00:00.00]测试歌词第一行\n[00:10.00]测试歌词第二行',tlyric:'[00:00.00]First line\n[00:10.00]Second line'});
@@ -129,7 +133,28 @@ func run() error {
 	}
 	defer pool.Close()
 	audio := wave()
+	var mediaTrace *os.File
+	var mediaTraceMu sync.Mutex
+	if tracePath := os.Getenv("LXSC_FIXTURE_MEDIA_TRACE"); tracePath != "" {
+		mediaTrace, err = os.OpenFile(tracePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer mediaTrace.Close()
+	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if mediaTrace != nil {
+			observed := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			w = observed
+			defer func() {
+				mediaTraceMu.Lock()
+				defer mediaTraceMu.Unlock()
+				_ = json.NewEncoder(mediaTrace).Encode(map[string]any{
+					"time": time.Now().UTC(), "method": r.Method, "range": r.Header.Get("Range"),
+					"status": observed.Status(), "bytes": observed.BytesWritten(), "syntheticTrack": r.URL.Query().Get("id"),
+				})
+			}()
+		}
 		if strings.HasPrefix(r.URL.Query().Get("id"), "fail-") {
 			http.Error(w, "测试直连受限", http.StatusForbidden)
 			return
@@ -180,6 +205,11 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 	defer debug.Tokens.Close()
 	authServer.PasswordChanged = debug.Tokens.RevokeOwner
 	media := &subsonic.Server{Diagnostics: debug.Events, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, HTTP: client}
+	fn, err := fnmusic.New(ctx, database, catalog, store, auth, "0.1.0")
+	if err != nil {
+		return err
+	}
+	fn.Media = &mediastream.Service{Catalog: catalog, Settings: store, HTTP: client, Log: log, Diagnostics: debug.Events}
 	debug.ProtocolProbe = media.ProbeProtocol
 	debug.ProtocolEndpoints = media.ProbeEndpoints()
 	debug.CoverPerformance = media.CoverPerformance
@@ -193,6 +223,8 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 	r := chi.NewRouter()
 	r.Use(httpguard.ProxyHeaders(nil))
 	r.Use(httpguard.LimitIO)
+	r.Get("/trimcon", fn.Probe)
+	r.Mount("/music", fn.Routes())
 	r.Mount("/api/auth", authServer.Routes())
 	r.Mount("/api/app", app.Routes())
 	r.Mount("/api/admin", management.Routes())

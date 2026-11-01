@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -69,12 +70,30 @@ func fail(w http.ResponseWriter, code int, message string) {
 
 // Authenticate 校验用户名和密码。
 func (m *Manager) Authenticate(ctx context.Context, username, password string) (*db.User, error) {
+	return m.authenticate(ctx, username, func(plain string) bool {
+		return subtle.ConstantTimeCompare([]byte(plain), []byte(password)) == 1
+	})
+}
+
+// AuthenticateSHA256 校验音乐客户端提交的密码摘要，不改变已有密码存储。
+func (m *Manager) AuthenticateSHA256(ctx context.Context, username, digest string) (*db.User, error) {
+	want, err := hex.DecodeString(digest)
+	if err != nil || len(want) != sha256.Size {
+		return nil, db.ErrNotFound
+	}
+	return m.authenticate(ctx, username, func(plain string) bool {
+		sum := sha256.Sum256([]byte(plain))
+		return subtle.ConstantTimeCompare(sum[:], want) == 1
+	})
+}
+
+func (m *Manager) authenticate(ctx context.Context, username string, verify func(string) bool) (*db.User, error) {
 	u, err := m.DB.GetUserByName(ctx, strings.TrimSpace(username))
 	if err != nil {
 		return nil, err
 	}
 	plain, err := m.Secret.Decrypt(u.PasswordEnc)
-	if err != nil || subtle.ConstantTimeCompare([]byte(plain), []byte(password)) != 1 {
+	if err != nil || !verify(plain) {
 		return nil, db.ErrNotFound
 	}
 	return u, nil

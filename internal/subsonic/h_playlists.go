@@ -126,7 +126,7 @@ func (s *Server) getPlaylists(w http.ResponseWriter, r *http.Request) {
 }
 
 func canReadPlaylist(u *db.User, p *db.Playlist) bool {
-	return u != nil && (u.IsAdmin || p.UserID == u.ID || p.Public)
+	return db.CanReadPlaylist(u, p)
 }
 
 func canEditPlaylist(u *db.User, p *db.Playlist) bool {

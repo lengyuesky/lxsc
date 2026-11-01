@@ -52,11 +52,31 @@ func TestBodyLimitAndMediaBudget(t *testing.T) {
 			t.Error("正文大小未限制", err)
 		}
 	}), w, r, ioBudget{read: time.Second, write: time.Second, total: time.Second, body: 2})
-	for _, path := range []string{"/rest/stream.view", "/rest/download", "/api/app/stream"} {
+	for _, path := range []string{"/rest/stream.view", "/rest/download", "/api/app/stream", "/music/api/v1/track/stream?guid=track", "/music/api/v1/track/stream/track"} {
 		if requestBudget(httptest.NewRequest("GET", path, nil)).total != 0 {
 			t.Fatal("正常音频不能受普通请求总期限截断")
 		}
 	}
+}
+
+func TestMusicStreamHasNoOrdinaryTotalDeadline(t *testing.T) {
+	for _, path := range []string{"/music/api/v1/track/stream", "/music/api/v1/track/stream/track"} {
+		t.Run(path, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				request := httptest.NewRequest(method, path, nil)
+				LimitIO(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if _, limited := r.Context().Deadline(); limited {
+						t.Fatal("飞牛音乐正文继承了普通请求总期限")
+					}
+				})).ServeHTTP(httptest.NewRecorder(), request)
+			}
+		})
+	}
+	LimitIO(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, limited := r.Context().Deadline(); !limited {
+			t.Fatal("普通飞牛接口应保留总期限")
+		}
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/music/api/v1/track/list", nil))
 }
 
 type stalledBody struct {

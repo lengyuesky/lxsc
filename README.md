@@ -83,6 +83,19 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 
 支持 `u+p`、`u+t+s`（token）与 OpenSubsonic `apiKey` 三种认证方式。管理员可在「用户 → 管理 API Key」为设备生成带名称与有效期的密钥并逐个撤销。
 
+### 飞牛音乐（实验性）
+
+新增独立的飞牛音乐协议入口，原版 App 使用服务器根地址及现有 lxsc 用户名、密码连接，不需要部署 fnOS 或借官方 NAS 完成认证。它不是 Subsonic 连接方式，也不提供 FN ID、FN Connect 或 NAS 系统账号登录。
+
+- 已在 Mac 上运行的飞牛音乐 1.0.3（构建 103006）实测初始化、音乐独立账号登录、歌单与曲目展示、合成 WAV 播放，以及用户指定独家音源两首真实 FLAC 的播放、暂停/恢复、拖动、手动切歌和自然结束后自动切歌。范围仅限该平台、版本、音源与原始音质组合，不代表 iPhone、Android、其他音源或所有未来版本已兼容。
+- App 的 Wi-Fi 和移动网络播放均需选择「原始音质」；Mac 可能按移动网络偏好选择音质。标准音质会请求转码/HLS，本服务明确不支持，不以虚假的就绪响应兜底。
+- 「原始音质」表示不在 lxsc 中转码；音源取链仍沿用该 lxsc 用户的默认音质和既有降档策略，不保证最高档、原录音或所有上游均可直连。
+- 媒体交付复用现有播放设置。默认直链/302，不为飞牛自动开启代理或音频落盘；管理员已选择的强制 302 仍禁止音频转发。公网部署必须使用 HTTPS，密码摘要也是可重放凭据。
+- 首轮不提供飞牛 App 内的歌单/收藏写入、离线下载、歌词和本地文件扫描；未实现的写接口返回明确错误，现有 Web/Subsonic 功能不受此限制。封面暂用自有占位图。
+- 数据库新增可再生的客户端标识映射表；升级前先备份，已迁移的数据不能由不支持该数据库版本的旧二进制直接打开。
+
+完整证据、尚未通过的验收项及安装包校验限制见 [docs/fnmusic-compatibility.md](docs/fnmusic-compatibility.md)。当前属于初版适配，不是完整兼容承诺。
+
 ## 使用
 
 - **账号与密码**：所有登录用户都可通过侧栏底部「修改密码」验证当前密码后修改本人密码，新密码为 8–128 个字符且不能全为空白；成功后本人所有网页登录会话失效，管理员已有的临时调试凭据也会撤销。使用密码连接的 Subsonic 客户端需更新密码，设备 API Key 不受影响。管理员在「用户」页创建账号时可勾选「随机密码」，由服务端生成 24 位安全随机密码；仅创建成功后展示一次，可复制，关闭或退出登录后清除展示。未勾选时仍手动填写密码。
@@ -164,6 +177,7 @@ node tests/web/browser.cjs
 
 | 文档 | 内容 |
 |---|---|
+| [docs/fnmusic-compatibility.md](docs/fnmusic-compatibility.md) | 原版飞牛音乐独立服务端：边界、初版实现、Mac 实测与剩余验收 |
 | [docs/debug-api.md](docs/debug-api.md) | 管理员 API 调试：凭据、权限与排查流程 |
 | [docs/search-playback-verification.md](docs/search-playback-verification.md) | 搜歌、网页播放与歌单收藏验收 |
 | [docs/listening-verification.md](docs/listening-verification.md) | 听歌统计验收 |

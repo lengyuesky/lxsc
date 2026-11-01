@@ -21,7 +21,7 @@ func migrate(s *sql.DB) error {
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 5 {
+	if version > 6 {
 		return fmt.Errorf("数据库版本 %d 高于当前程序支持版本", version)
 	}
 	if version < 1 {
@@ -104,6 +104,16 @@ func migrate(s *sql.DB) error {
 		for _, statement := range []string{
 			`CREATE TABLE board_playlist_metadata(board_id TEXT PRIMARY KEY, name TEXT NOT NULL, comment TEXT NOT NULL, song_count INTEGER NOT NULL, duration INTEGER NOT NULL, content_hash TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
 			`INSERT INTO schema_migrations(version) VALUES(5)`,
+		} {
+			if _, err = tx.Exec(statement); err != nil {
+				return err
+			}
+		}
+	}
+	if version < 6 {
+		for _, statement := range []string{
+			`CREATE TABLE client_ids(protocol TEXT NOT NULL, kind TEXT NOT NULL, internal_id TEXT NOT NULL, guid TEXT NOT NULL, PRIMARY KEY(protocol,kind,internal_id), UNIQUE(protocol,guid))`,
+			`INSERT INTO schema_migrations(version) VALUES(6)`,
 		} {
 			if _, err = tx.Exec(statement); err != nil {
 				return err

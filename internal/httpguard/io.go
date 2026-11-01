@@ -16,7 +16,7 @@ func requestBudget(r *http.Request) ioBudget {
 	budget := ioBudget{30 * time.Second, 60 * time.Second, 60 * time.Second, 2 << 20}
 	path := strings.TrimSuffix(r.URL.Path, ".view")
 	switch {
-	case path == "/api/app/stream", path == "/rest/stream", path == "/rest/download":
+	case path == "/api/app/stream", path == "/rest/stream", path == "/rest/download", path == "/music/api/v1/track/stream", strings.HasPrefix(path, "/music/api/v1/track/stream/"):
 		// 仅限制准备阶段写入，音频正文由逐次刷新的空闲截止保护，不设总时长。
 		budget.total = 0
 	case strings.HasPrefix(path, "/api/admin/backups/"):

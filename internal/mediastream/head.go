@@ -1,4 +1,4 @@
-package subsonic
+package mediastream
 
 import (
 	"net/http"
@@ -9,7 +9,7 @@ import (
 )
 
 // writeMediaHead 只报告已经验证的音频元数据；实际 GET 仍使用原播放方式。
-func (s *Server) writeMediaHead(w http.ResponseWriter, r *http.Request, resolution music.URLResolution, resp *http.Response) {
+func (s *Service) WriteHead(w http.ResponseWriter, r *http.Request, resolution music.URLResolution, resp *http.Response) {
 	if r.Context().Err() != nil {
 		return
 	}
