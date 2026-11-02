@@ -1,4 +1,4 @@
-package subsonic
+package coverart
 
 import (
 	"context"

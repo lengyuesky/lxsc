@@ -25,6 +25,7 @@ import (
 
 	"lxsc/internal/admin"
 	"lxsc/internal/assets"
+	"lxsc/internal/coverart"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/fnmusic"
@@ -204,15 +205,17 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 	debug := diagnostics.New(database, auth, catalog, sources, store, "browser-test", time.Now())
 	defer debug.Tokens.Close()
 	authServer.PasswordChanged = debug.Tokens.RevokeOwner
-	media := &subsonic.Server{Diagnostics: debug.Events, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, HTTP: client}
+	covers := &coverart.Service{}
+	media := &subsonic.Server{Diagnostics: debug.Events, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, HTTP: client, Covers: covers}
 	fn, err := fnmusic.New(ctx, database, catalog, store, auth, "0.1.0")
 	if err != nil {
 		return err
 	}
 	fn.Media = &mediastream.Service{Catalog: catalog, Settings: store, HTTP: client, Log: log, Diagnostics: debug.Events}
+	fn.Covers, fn.Diagnostics = covers, debug.Events
 	debug.ProtocolProbe = media.ProbeProtocol
 	debug.ProtocolEndpoints = media.ProbeEndpoints()
-	debug.CoverPerformance = media.CoverPerformance
+	debug.CoverPerformance = covers.Performance
 	app := &portal.Server{DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Stream: media.ServeWebStream}
 	management := &admin.Server{Debug: debug, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Sources: sources, Logs: logbuf.New(100), HTTP: client, Version: "浏览器测试", StartAt: time.Now()}
 	debug.Logs = management.Logs

@@ -16,6 +16,7 @@ import (
 )
 
 type userKey struct{}
+type sessionKey struct{}
 
 type session struct {
 	userID   int64
@@ -172,7 +173,9 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			failure(w, http.StatusUnauthorized, "INVALID TOKEN")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, u)))
+		ctx := context.WithValue(r.Context(), userKey{}, u)
+		ctx = context.WithValue(ctx, sessionKey{}, sha256.Sum256([]byte(token)))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -186,6 +189,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) { success(w, s.userV
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	token, _ := requestToken(r)
 	s.sessions.end(token)
+	s.searches.revoke(sha256.Sum256([]byte(token)))
 	setCookie(w, r, "", -1)
 	success(w, map[string]any{})
 }

@@ -46,7 +46,7 @@ func TestCustomCoverFallbackForFailedOrMissingOriginal(t *testing.T) {
 			in := music.FromMap(map[string]any{"source": "wy", "songmid": "cover", "name": "歌名&extra=1", "singer": "歌手", "albumName": "专辑", "img": img})
 			f.server.Catalog.Cache([]*music.Info{in})
 			calls := []string{}
-			f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				calls = append(calls, r.URL.Host)
 				if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" || r.Header.Get("Referer") != "" {
 					t.Fatal("备用封面请求泄露了客户端凭据")
@@ -96,7 +96,7 @@ func TestCustomCoverOriginalWinsAndDisableRestoresRedirect(t *testing.T) {
 	in := music.FromMap(map[string]any{"source": "wy", "songmid": "cover", "name": "歌曲", "img": "https://original.example/cover"})
 	f.server.Catalog.Cache([]*music.Info{in})
 	calls := 0
-	f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		if r.URL.Host != "original.example" {
 			t.Fatal("正常原图不应访问备用接口")
@@ -123,7 +123,7 @@ func TestCustomCoverJSONReferencesAndUnsafeTargets(t *testing.T) {
 		f := newDirectoryTestServer(t)
 		calls := 0
 		picture := customCoverPNG(t)
-		f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			calls++
 			if r.URL.Host == "custom.example" {
 				body, _ := json.Marshal(map[string]any{"data": map[string]string{"url": target}})
@@ -154,7 +154,7 @@ func TestCustomCoverAlbumMetadataNeedsNoTrackScan(t *testing.T) {
 	picture := customCoverPNG(t)
 	id := music.OnlineAlbumID("wy", "album", "专辑名称", "歌手名称", "")
 	f.server.Catalog.SetRequestObserver(func(music.RemoteRequest) { t.Error("封面不应扫描专辑歌曲") })
-	f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		q := r.URL.Query()
 		if q.Has("title") || q.Get("album") != "专辑名称" || q.Get("artist") != "歌手名称" {
 			t.Fatal("专辑封面应只传专辑与歌手")

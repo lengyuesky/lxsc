@@ -1,15 +1,9 @@
 package fnmusic
 
 import (
-	"bytes"
 	"crypto/rand"
 	"errors"
-	"image"
-	"image/color"
-	"image/png"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -67,74 +61,6 @@ func writeMediaError(w http.ResponseWriter, r *http.Request, code int, message s
 	}
 	mediastream.RecordResponse(r, status)
 	failure(w, status, message)
-}
-
-var placeholderOnce sync.Once
-var placeholder []byte
-
-func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("coverId")
-	kind, guid, ok := strings.Cut(id, "_")
-	if !ok || !validGUID(guid) {
-		failure(w, http.StatusNotFound, "封面不存在")
-		return
-	}
-	allowed := false
-	switch kind {
-	case "track":
-		_, err := s.allowedTrack(r, guid)
-		allowed = err == nil
-	case "playlist":
-		_, err := s.allowedPlaylist(r, guid)
-		allowed = err == nil
-	case "album", "artist":
-		id, err := s.resolve(r.Context(), kind, guid)
-		if err == nil {
-			tracks, err := s.visibleTracks(r)
-			if err == nil {
-				for _, track := range tracks {
-					if (kind == "album" && track.AlbumSubID() == id) || (kind == "artist" && track.ArtistSubID() == id) {
-						allowed = true
-						break
-					}
-				}
-			}
-		}
-	}
-	if !allowed {
-		failure(w, http.StatusNotFound, "封面不存在或无权访问")
-		return
-	}
-	placeholderOnce.Do(func() {
-		art := image.NewRGBA(image.Rect(0, 0, 128, 128))
-		for y := 0; y < 128; y++ {
-			for x := 0; x < 128; x++ {
-				d := (x-64)*(x-64) + (y-64)*(y-64)
-				c := color.RGBA{29, 43, 48, 255}
-				if d < 48*48 {
-					c = color.RGBA{62, 86, 89, 255}
-				}
-				if d < 12*12 {
-					c = color.RGBA{217, 158, 91, 255}
-				}
-				art.SetRGBA(x, y, c)
-			}
-		}
-		var buffer bytes.Buffer
-		_ = png.Encode(&buffer, art)
-		placeholder = buffer.Bytes()
-	})
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "private, no-store")
-	_, _ = w.Write(placeholder)
-}
-
-func (s *Server) lyrics(w http.ResponseWriter, r *http.Request) {
-	_, err := s.allowedTrack(r, r.URL.Query().Get("trackGUID"))
-	if resourceError(w, err) {
-		return
-	}
-	success(w, map[string]any{"list": []any{}, "preferred": ""})
 }
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {

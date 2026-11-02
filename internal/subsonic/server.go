@@ -9,8 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"lxsc/internal/admission"
 	"lxsc/internal/authlimit"
+	"lxsc/internal/coverart"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
@@ -20,19 +20,16 @@ import (
 
 // Server Subsonic API 服务
 type Server struct {
-	Diagnostics   *diagnostics.Events
-	DB            *db.DB
-	Catalog       *music.Catalog
-	Settings      *settings.Store
-	Secret        *secret.Box
-	Log           *slog.Logger
-	HTTP          *http.Client // 代理拉流用
-	authLimits    authlimit.Limiter
-	coverOnce     sync.Once
-	coverHTTP     *http.Client
-	coverLimits   *admission.Gate
-	coverDelivery *admission.Gate
-	coverCache    *coverWork
+	Diagnostics *diagnostics.Events
+	DB          *db.DB
+	Catalog     *music.Catalog
+	Settings    *settings.Store
+	Secret      *secret.Box
+	Log         *slog.Logger
+	HTTP        *http.Client // 代理拉流用
+	Covers      *coverart.Service
+	authLimits  authlimit.Limiter
+	coverOnce   sync.Once
 }
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request)

@@ -1,4 +1,4 @@
-package subsonic
+package coverart
 
 import (
 	"context"
@@ -203,13 +203,13 @@ func (c *coverWork) placeholder() {
 	c.mu.Unlock()
 }
 
-func (s *Server) CoverPerformance() any {
-	s.initCoverClient()
-	c := s.coverCache
+func (s *Service) Performance() any {
+	s.init()
+	c := s.cache
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return map[string]any{
-		"admission": s.coverLimits.Stats(), "delivery": s.coverDelivery.Stats(), "userLimit": coverUserConcurrent, "userQueueLimit": coverUserQueueLimit,
+		"admission": s.Limits.Stats(), "delivery": s.Delivery.Stats(), "userLimit": coverUserConcurrent, "userQueueLimit": coverUserQueueLimit,
 		"cacheEntries": c.entries.Len(), "cacheBytes": c.bytes,
 		"maxCacheEntries": coverCacheEntries, "maxCacheBytes": coverCacheBytes,
 		"inFlight": len(c.calls), "waiting": c.waiters, "maxWaiting": coverMaxWaiters,

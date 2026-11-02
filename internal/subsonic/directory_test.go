@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"lxsc/internal/coverart"
 	"lxsc/internal/db"
 	"lxsc/internal/music"
 	"lxsc/internal/settings"
@@ -46,7 +47,7 @@ func newDirectoryTestServer(t *testing.T) directoryTestServer {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
 	t.Cleanup(catalog.StopBoardWarm)
-	return directoryTestServer{server: &Server{DB: database, Catalog: catalog, Settings: store, Log: log}, database: database, store: store, user: user}
+	return directoryTestServer{server: &Server{DB: database, Catalog: catalog, Settings: store, Log: log, Covers: &coverart.Service{}}, database: database, store: store, user: user}
 }
 
 func (fixture directoryTestServer) directory(t *testing.T, id string) map[string]any {

@@ -29,7 +29,7 @@ func (c *Catalog) Search(ctx context.Context, query string, opts SearchOptions) 
 	return list
 }
 
-// SearchChecked 让 HTTP 调用方区分没有结果与所有平台都因过载被拒绝。
+// SearchChecked 让 HTTP 调用方区分没有结果与全部平台失败，保留部分成功结果。
 func (c *Catalog) SearchChecked(ctx context.Context, query string, opts SearchOptions) ([]*Info, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -47,10 +47,14 @@ func (c *Catalog) SearchChecked(ctx context.Context, query string, opts SearchOp
 	opts.Sources = append([]string(nil), opts.Sources...)
 	lists := make(map[string][]*Info, len(opts.Sources))
 	var busy, succeeded bool
+	var lastErr error
 	c.SearchProgress(ctx, query, opts, func(result SearchPlatformResult) {
 		lists[result.Source] = result.Tracks
 		busy = busy || errors.Is(result.Err, admission.ErrBusy)
 		succeeded = succeeded || result.Err == nil
+		if result.Err != nil {
+			lastErr = result.Err
+		}
 	})
 	var merged []*Info
 	for index := 0; ; index++ {
@@ -67,6 +71,9 @@ func (c *Catalog) SearchChecked(ctx context.Context, query string, opts SearchOp
 	}
 	if busy && !succeeded {
 		return merged, admission.ErrBusy
+	}
+	if !succeeded {
+		return merged, lastErr
 	}
 	return merged, nil
 }

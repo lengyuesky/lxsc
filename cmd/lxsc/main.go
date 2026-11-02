@@ -24,6 +24,7 @@ import (
 	"lxsc/internal/assets"
 	"lxsc/internal/backup"
 	"lxsc/internal/config"
+	"lxsc/internal/coverart"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/fnmusic"
@@ -177,15 +178,17 @@ func run(cfgPath string) error {
 	}
 	defer catalog.CloseURLCache()
 
-	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure}
+	covers := &coverart.Service{}
+	sub := &subsonic.Server{Diagnostics: debugSrv.Events, DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, HTTP: httpSecure, Covers: covers}
 	fn, err := fnmusic.New(ctx, database, catalog, st, authManager, version)
 	if err != nil {
 		return err
 	}
 	fn.Media = &mediastream.Service{Catalog: catalog, Settings: st, HTTP: httpSecure, Log: log, Diagnostics: debugSrv.Events}
+	fn.Covers, fn.Diagnostics = covers, debugSrv.Events
 	debugSrv.ProtocolProbe = sub.ProbeProtocol
 	debugSrv.ProtocolEndpoints = sub.ProbeEndpoints()
-	debugSrv.CoverPerformance = sub.CoverPerformance
+	debugSrv.CoverPerformance = covers.Performance
 	warmCtx, stopWarmup := context.WithCancel(ctx)
 	defer stopWarmup()
 	// 启动后预热可见榜单快照，客户端第一次点开榜单直接命中，不再现场分页。

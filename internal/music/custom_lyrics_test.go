@@ -93,7 +93,7 @@ func TestCustomLyricsNativeSourceFirstAndEmptyRetry(t *testing.T) {
 		t.Fatal("原歌词正常时不应访问备用接口", err)
 	}
 	c.SDK = nil
-	c.lyrics.Purge()
+	c.lyrics.purge()
 	if _, err := c.Lyric(context.Background(), in); err == nil || calls != 1 {
 		t.Fatal("空的自定义歌词应失败且允许稍后重试")
 	}

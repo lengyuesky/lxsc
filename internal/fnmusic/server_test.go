@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"lxsc/internal/db"
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
 	"lxsc/internal/secret"
 	"lxsc/internal/settings"
@@ -63,8 +64,12 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Update(ctx, map[string]json.RawMessage{"customLyricsURL": json.RawMessage(`""`), "customCoverURL": json.RawMessage(`""`)}); err != nil {
+		t.Fatal(err)
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
+	t.Cleanup(catalog.StopBoardWarm)
 	infos := []*music.Info{}
 	for _, key := range []string{"one", "two", "public"} {
 		infos = append(infos, music.FromMap(map[string]any{"source": "wy", "songmid": key, "name": key, "singer": "测试歌手", "albumName": "测试专辑", "interval": "00:45"}))
@@ -85,6 +90,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.Diagnostics = &diagnostics.Events{}
 	routes := chi.NewRouter()
 	routes.Get("/trimcon", server.Probe)
 	routes.Mount("/music", server.Routes())

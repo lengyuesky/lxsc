@@ -17,7 +17,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"lxsc/internal/authlimit"
+	"lxsc/internal/coverart"
 	"lxsc/internal/db"
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/httpguard"
 	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
@@ -34,9 +36,12 @@ type Server struct {
 	Version  string
 	GUID     string
 
-	Media *mediastream.Service
+	Media       *mediastream.Service
+	Covers      *coverart.Service
+	Diagnostics *diagnostics.Events
 
 	sessions sessionStore
+	searches searchStore
 	limits   authlimit.Limiter
 }
 
@@ -55,7 +60,7 @@ func New(ctx context.Context, database *db.DB, catalog *music.Catalog, settings 
 			return nil, err
 		}
 	}
-	return &Server{DB: database, Catalog: catalog, Settings: settings, Auth: auth, Version: version, GUID: guid}, nil
+	return &Server{DB: database, Catalog: catalog, Settings: settings, Auth: auth, Version: version, GUID: guid, Covers: &coverart.Service{}}, nil
 }
 
 // Probe 是直连连通性探测，不冒充云中继或真实 NAS 系统身份。
@@ -93,6 +98,16 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/api/v1/play-history/list", s.history)
 		r.Get("/api/v1/album/list", s.albums)
 		r.Get("/api/v1/artist/list", s.artists)
+		r.Get("/api/v1/album/detail", s.albumDetail)
+		r.Get("/api/v1/artist/detail", s.artistDetail)
+		r.Get("/api/v1/track/album-detail/list", s.tracks)
+		r.Get("/api/v1/track/artist-detail/list", s.tracks)
+		r.Get("/api/v1/album/artist-detail/list", s.albums)
+		r.Get("/api/v1/search/track", s.searchTracks)
+		r.Get("/api/v1/search/album", s.searchAlbums)
+		r.Get("/api/v1/search/artist", s.searchArtists)
+		r.Get("/api/v1/search/playlist", s.searchPlaylists)
+		r.Get("/api/v1/search/suggest", s.searchSuggest)
 		r.Get("/api/v1/lyric/list", s.lyrics)
 		r.Post("/api/v1/event/report", s.events)
 		r.Get("/api/v1/track/stream", s.stream)

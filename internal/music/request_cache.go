@@ -133,6 +133,25 @@ func (c *requestCache[K, V]) purge() {
 	c.clearLocked()
 }
 
+// peek is a non-fetching availability check and does not extend the cache lifetime.
+func (c *requestCache[K, V]) peek(key K) (V, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var zero V
+	if c.ttl == 0 {
+		return zero, false
+	}
+	entry, ok := c.entries.Peek(key)
+	if !ok {
+		return zero, false
+	}
+	if !entry.expires.IsZero() && !c.now().Before(entry.expires) {
+		c.removeLocked(key)
+		return zero, false
+	}
+	return entry.result.value, true
+}
+
 // invalidate 只删除仍与失败请求相同的版本，迟到的失败不能删除新结果。
 func (c *requestCache[K, V]) invalidate(key K, token cacheToken) {
 	c.mu.Lock()

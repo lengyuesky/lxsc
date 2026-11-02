@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"lxsc/internal/db"
 	"lxsc/internal/music"
@@ -60,18 +61,28 @@ func (s *Server) visibleTracks(r *http.Request) ([]*music.Info, error) {
 }
 
 func (s *Server) allowedTrack(r *http.Request, guid string) (*music.Info, error) {
+	track, _, err := s.trackAccess(r, guid)
+	return track, err
+}
+
+func (s *Server) trackAccess(r *http.Request, guid string) (*music.Info, bool, error) {
+	if resource, ok := s.searches.get(r.Context(), "track", guid, time.Now()); ok && resource.track != nil {
+		s.Catalog.Cache([]*music.Info{resource.track})
+		return resource.track, true, nil
+	}
 	id, err := s.resolve(r.Context(), "track", guid)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	allowed, err := s.DB.CanReadLibraryTrack(r.Context(), currentUser(r), id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !allowed {
-		return nil, db.ErrNotFound
+		return nil, false, db.ErrNotFound
 	}
-	return s.Catalog.LocalTrack(r.Context(), id)
+	track, err := s.Catalog.LocalTrack(r.Context(), id)
+	return track, false, err
 }
 
 func (s *Server) allowedPlaylist(r *http.Request, guid string) (*db.Playlist, error) {
@@ -100,10 +111,14 @@ func (s *Server) playlistView(ctx context.Context, playlist *db.Playlist) (map[s
 			return nil, err
 		}
 	}
-	count := len(s.Catalog.Tracks(ctx, playlist.TrackIDs))
+	tracks := s.Catalog.Tracks(ctx, playlist.TrackIDs)
+	var coverTrack *music.Info
+	if len(tracks) > 0 {
+		coverTrack = tracks[0]
+	}
 	return map[string]any{
-		"guid": guid, "name": playlist.Name, "coverId": "playlist_" + guid,
-		"trackCount": count, "createdAt": playlist.CreatedAt, "updatedAt": playlist.UpdatedAt,
+		"guid": guid, "name": playlist.Name, "coverId": s.coverID("playlist", guid, coverTrack),
+		"trackCount": len(tracks), "createdAt": playlist.CreatedAt, "updatedAt": playlist.UpdatedAt,
 	}, nil
 }
 
@@ -171,6 +186,9 @@ func (s *Server) playlistTracks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) tracks(w http.ResponseWriter, r *http.Request) {
+	if s.searchGroupTracks(w, r) {
+		return
+	}
 	tracks, err := s.visibleTracks(r)
 	if resourceError(w, err) {
 		return
@@ -258,14 +276,19 @@ func (s *Server) trackView(ctx context.Context, track *music.Info, favorite bool
 	if err != nil {
 		return nil, err
 	}
-	artists := []any{map[string]any{"guid": artistGUID, "name": track.Singer(), "coverId": "artist_" + artistGUID}}
-	album := map[string]any{"guid": albumGUID, "name": track.Album(), "artists": artists, "coverId": "album_" + albumGUID}
+	return s.trackViewWithIDs(track, guid, albumGUID, artistGUID, favorite), nil
+}
+
+func (s *Server) trackViewWithIDs(track *music.Info, guid, albumGUID, artistGUID string, favorite bool) map[string]any {
+	artists := []any{map[string]any{"guid": artistGUID, "name": track.Singer(), "coverId": s.coverID("artist", artistGUID, track)}}
+	album := map[string]any{"guid": albumGUID, "name": track.Album(), "artists": artists, "coverId": s.coverID("album", albumGUID, track)}
+	_, hasLyric := s.Catalog.CachedLyric(track)
 	return map[string]any{
 		"guid": guid, "title": track.Name(), "artists": artists, "album": album, "genres": []any{},
-		"duration": track.Duration() * 1000, "audioSpec": audioSpec(track, guid), "coverId": "track_" + guid,
-		"isFavorite": favorite, "isCue": false, "hasLyric": false, "accessStatus": 0,
+		"duration": track.Duration() * 1000, "audioSpec": audioSpec(track, guid), "coverId": s.coverID("track", guid, track),
+		"isFavorite": favorite, "isCue": false, "hasLyric": hasLyric, "accessStatus": 0,
 		"year": nil, "trackNo": nil, "discNo": nil, "createdAt": 0, "updatedAt": 0,
-	}, nil
+	}
 }
 
 func audioSpec(track *music.Info, guid string) map[string]any {
@@ -285,7 +308,7 @@ func audioSpec(track *music.Info, guid string) map[string]any {
 }
 
 func (s *Server) metadata(w http.ResponseWriter, r *http.Request) {
-	track, err := s.allowedTrack(r, r.URL.Query().Get("guid"))
+	track, transient, err := s.trackAccess(r, r.URL.Query().Get("guid"))
 	if resourceError(w, err) {
 		return
 	}
@@ -293,9 +316,20 @@ func (s *Server) metadata(w http.ResponseWriter, r *http.Request) {
 	if resourceError(w, err) {
 		return
 	}
-	view, err := s.trackView(r.Context(), track, stars[track.TrackID()] != 0)
-	if resourceError(w, err) {
-		return
+	if _, available := s.Catalog.CachedLyric(track); !available {
+		// 只为当前曲目做有界懒加载，不让列表中的每首歌同步访问平台。
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		_, _ = s.loadLyric(ctx, currentUser(r).ID, track)
+		cancel()
+	}
+	var view map[string]any
+	if transient {
+		view = s.trackViewWithIDs(track, identifier("track", track.TrackID()), identifier("album", track.AlbumSubID()), identifier("artist", track.ArtistSubID()), stars[track.TrackID()] != 0)
+	} else {
+		view, err = s.trackView(r.Context(), track, stars[track.TrackID()] != 0)
+		if resourceError(w, err) {
+			return
+		}
 	}
 	success(w, map[string]any{"track": view, "audioSpec": view["audioSpec"]})
 }
@@ -304,6 +338,9 @@ func (s *Server) albums(w http.ResponseWriter, r *http.Request)  { s.groups(w, r
 func (s *Server) artists(w http.ResponseWriter, r *http.Request) { s.groups(w, r, "artist") }
 
 func (s *Server) groups(w http.ResponseWriter, r *http.Request, kind string) {
+	if kind == "album" && s.searchArtistAlbums(w, r) {
+		return
+	}
 	tracks, err := s.visibleTracks(r)
 	if resourceError(w, err) {
 		return
@@ -361,7 +398,7 @@ func (s *Server) groups(w http.ResponseWriter, r *http.Request, kind string) {
 			return
 		}
 		name := item.track.Singer()
-		view := map[string]any{"guid": guid, "coverId": kind + "_" + guid, "trackCount": item.count}
+		view := map[string]any{"guid": guid, "coverId": s.coverID(kind, guid, item.track), "trackCount": item.count}
 		if kind == "album" {
 			name = item.track.Album()
 			artistGUID, err := s.identify(r.Context(), "artist", item.track.ArtistSubID())

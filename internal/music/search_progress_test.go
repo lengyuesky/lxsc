@@ -88,3 +88,19 @@ func TestSearchBudgetReturnsCompletedResults(t *testing.T) {
 		t.Fatalf("超时结果错误: %+v", results)
 	}
 }
+
+func TestSearchCheckedDoesNotMaskAllSourceFailuresAsEmpty(t *testing.T) {
+	c := newStabilityCatalog(t)
+	failure := errors.New("synthetic upstream failure")
+	c.searchCall = func(context.Context, string, ...any) (json.RawMessage, error) { return nil, failure }
+	tracks, err := c.SearchChecked(context.Background(), "synthetic", SearchOptions{Sources: []string{"kw"}})
+	if len(tracks) != 0 || !errors.Is(err, failure) {
+		t.Fatal("all-source failure was reported as a successful empty search", err)
+	}
+	c.searchCall = func(context.Context, string, ...any) (json.RawMessage, error) {
+		return json.RawMessage(`{"list":[]}`), nil
+	}
+	if tracks, err := c.SearchChecked(context.Background(), "synthetic", SearchOptions{Sources: []string{"kw"}}); len(tracks) != 0 || err != nil {
+		t.Fatal("real empty search should remain a successful empty result", err)
+	}
+}

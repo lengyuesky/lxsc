@@ -144,3 +144,85 @@ func TestMetadataSearchFailureCanRetryAndBusyIsExplicit(t *testing.T) {
 		t.Fatal("失败被缓存，恢复后无法重试", albums, err)
 	}
 }
+
+func TestMetadataSearchBoundsPlatformPages(t *testing.T) {
+	for _, source := range []string{"wy", "tx", "kw"} {
+		for _, kind := range []string{"artist", "album"} {
+			for _, tc := range []struct {
+				name     string
+				limit    int
+				rawCount int
+				want     int
+				more     bool
+			}{
+				{name: "oversized", limit: 2, rawCount: 5, want: 2, more: true},
+				{name: "hard_cap", limit: 100, rawCount: 55, want: 50, more: true},
+				{name: "full", limit: 20, rawCount: 20, want: 20, more: true},
+				{name: "short", limit: 20, rawCount: 19, want: 19},
+			} {
+				t.Run(source+"/"+kind+"/"+tc.name, func(t *testing.T) {
+					c := newDirectoryTestCatalog(t)
+					ctx := context.Background()
+					limit := min(50, tc.limit)
+					items := make([]map[string]any, tc.rawCount)
+					for i := range items {
+						items[i] = map[string]any{
+							"id":         fmt.Sprintf("entity-%03d", i),
+							"name":       fmt.Sprintf("bounded %s %03d", kind, i),
+							"artistName": fmt.Sprintf("bounded artist %03d", i),
+							"artistId":   fmt.Sprintf("artist-%03d", i),
+						}
+						if source == "kw" {
+							items[i] = map[string]any{
+								"source":    source,
+								"songmid":   fmt.Sprintf("song-%03d", i),
+								"name":      fmt.Sprintf("bounded song %03d", i),
+								"singer":    fmt.Sprintf("bounded artist %03d", i),
+								"singerId":  fmt.Sprintf("artist-%03d", i),
+								"albumName": fmt.Sprintf("bounded album %03d", i),
+								"albumId":   fmt.Sprintf("album-%03d", i),
+							}
+						}
+					}
+					raw, err := json.Marshal(map[string]any{"list": items})
+					if err != nil {
+						t.Fatal(err)
+					}
+					var calls atomic.Int32
+					call := func(_ context.Context, path string, args ...any) (json.RawMessage, error) {
+						calls.Add(1)
+						method := "extendSearch.searchSinger"
+						if kind == "album" {
+							method = "extendSearch.searchAlbum"
+						}
+						if source == "kw" {
+							method = "musicSearch.search"
+						}
+						if path != source+"."+method || len(args) != 3 || args[0] != "bounded" || args[1] != 3 || args[2] != limit {
+							return nil, fmt.Errorf("unexpected search request: %s %v", path, args)
+						}
+						return raw, nil
+					}
+					c.SetRemoteCallerForTest(call)
+					c.searchCall = call
+					opts := SearchOptions{Sources: []string{source}, Page: 3, Limit: tc.limit}
+					for pass := range 2 {
+						result, err := c.searchMetadata(ctx, "bounded", kind, opts)
+						if err != nil || len(result.Artists)+len(result.Albums) != tc.want || result.HasMore != tc.more {
+							t.Fatalf("pass %d: page escaped its bound: artists=%d albums=%d more=%v err=%v", pass, len(result.Artists), len(result.Albums), result.HasMore, err)
+						}
+						if kind == "artist" && result.Artists[tc.want-1].Name != fmt.Sprintf("bounded artist %03d", tc.want-1) {
+							t.Fatal("artist page changed upstream ordering")
+						}
+						if kind == "album" && result.Albums[tc.want-1].Name != fmt.Sprintf("bounded album %03d", tc.want-1) {
+							t.Fatal("album page changed upstream ordering")
+						}
+					}
+					if calls.Load() != 1 {
+						t.Fatal("bounded page no longer shares its cached request", calls.Load())
+					}
+				})
+			}
+		}
+	}
+}

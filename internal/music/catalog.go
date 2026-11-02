@@ -63,7 +63,7 @@ type Catalog struct {
 	searchMetrics      map[string]*metrics.Operation
 	urlMetrics         metrics.Operation
 	MediaPreparation   metrics.Operation
-	lyrics             *lru.LRU[string, *Lyrics]
+	lyrics             *requestCache[string, *Lyrics]
 	customHTTP         *http.Client
 	customLimits       *admission.Gate
 	generic            *lru.LRU[string, json.RawMessage]
@@ -105,7 +105,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		sourceSelection:   v.SourceSelection,
 		search:            newRequestCache[searchKey, []*Info](500, time.Duration(v.SearchCacheTTL)*time.Second),
 		metadataSearch:    newRequestCache[metadataSearchKey, metadataSearchResult](500, time.Duration(v.SearchCacheTTL)*time.Second),
-		lyrics:            lru.NewLRU[string, *Lyrics](2000, nil, 6*time.Hour),
+		lyrics:            newRequestCache[string, *Lyrics](2000, 6*time.Hour),
 		customHTTP:        httpguard.NewPublicClient(nil, nil),
 		customLimits:      admission.New(8, 16, 0, 0),
 		generic:           lru.NewLRU[string, json.RawMessage](500, nil, 30*time.Minute),
@@ -124,6 +124,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 	c.urlChecks.expiry = playbackCheckExpiry
 	c.boardFlight.gate = c.workLimits
 	c.metadataSearch.gate = c.workLimits
+	c.lyrics.gate = c.workLimits
 	c.searchCall = func(ctx context.Context, path string, args ...any) (json.RawMessage, error) {
 		if c.SDK == nil {
 			return nil, errors.New("sdk 未初始化")
@@ -748,15 +749,28 @@ func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 	if in == nil {
 		return nil, errors.New("歌曲不存在")
 	}
-	id := in.TrackID()
 	customURL := c.Settings.Get().CustomLyricsURL
-	if customURL != "" {
-		// 配置变更后不能继续命中旧接口的歌词，旧请求收尾也不会污染新配置。
-		id += "\x00" + customURL
+	result, err := c.lyrics.load(ctx, lyricCacheKey(in, customURL), nil, 12*time.Second, func(workCtx context.Context) (*Lyrics, bool, error) {
+		lyrics, err := c.loadLyric(workCtx, in, customURL)
+		return lyrics, err == nil && lyrics != nil, err
+	})
+	return result.value, err
+}
+
+func lyricCacheKey(in *Info, customURL string) string {
+	// 配置变更隔离成功缓存及在途请求，旧请求收尾不能污染新配置。
+	return in.TrackID() + "\x00" + customURL
+}
+
+// CachedLyric only observes usable, read-only lyrics; lists never trigger upstream work.
+func (c *Catalog) CachedLyric(in *Info) (*Lyrics, bool) {
+	if in == nil {
+		return nil, false
 	}
-	if l, ok := c.lyrics.Get(id); ok {
-		return l, nil
-	}
+	return c.lyrics.peek(lyricCacheKey(in, c.Settings.Get().CustomLyricsURL))
+}
+
+func (c *Catalog) loadLyric(ctx context.Context, in *Info, customURL string) (*Lyrics, error) {
 	var r js.LyricResult
 	err := errors.New("歌词 SDK 未初始化")
 	if c.SDK != nil {
@@ -771,7 +785,6 @@ func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 	}
 	if err == nil {
 		if l := usableLyrics(r); l != nil {
-			c.lyrics.Add(id, l)
 			return l, nil
 		}
 		err = errors.New("歌词为空")
@@ -789,7 +802,6 @@ func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 		cancel()
 		if sourceErr == nil && result != nil {
 			if l := usableLyrics(*result); l != nil {
-				c.lyrics.Add(id, l)
 				return l, nil
 			}
 		}
@@ -797,7 +809,6 @@ func (c *Catalog) Lyric(ctx context.Context, in *Info) (*Lyrics, error) {
 	if customURL != "" && ctx.Err() == nil {
 		l, customErr := c.customLyric(ctx, in, customURL)
 		if customErr == nil {
-			c.lyrics.Add(id, l)
 			return l, nil
 		}
 		err = customErr
@@ -882,7 +893,7 @@ func (c *Catalog) PurgeMetadataCaches() {
 	c.search.purge()
 	c.metadataSearch.purge()
 	c.generic.Purge()
-	c.lyrics.Purge()
+	c.lyrics.purge()
 }
 
 // RefreshTTL 幂等地应用最新 TTL，仅失效发生变化的缓存。

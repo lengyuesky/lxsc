@@ -1,30 +1,12 @@
-package subsonic
+package diagnostics
 
 import (
 	"errors"
 	"net/http"
 	"strconv"
-
-	"lxsc/internal/admission"
-	"lxsc/internal/diagnostics"
 )
 
-func recordCoverOutcome(r *http.Request, origin string, cached bool, err error) {
-	event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event)
-	if event == nil {
-		return
-	}
-	event.CoverOrigin, event.Cached = origin, cached
-	event.Error = diagnostics.ErrorCode(err)
-	if errors.Is(err, admission.ErrBusy) {
-		event.Error = "busy"
-	}
-	if origin == "placeholder" || origin == "stale" {
-		event.Result = "unavailable"
-	}
-}
-
-type coverResponseWriter struct {
+type responseWriter struct {
 	http.ResponseWriter
 	status            int
 	written, expected int64
@@ -32,8 +14,8 @@ type coverResponseWriter struct {
 	flushed           bool
 }
 
-func (w *coverResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-func (w *coverResponseWriter) WriteHeader(status int) {
+func (w *responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *responseWriter) WriteHeader(status int) {
 	if w.status != 0 {
 		return
 	}
@@ -41,7 +23,7 @@ func (w *coverResponseWriter) WriteHeader(status int) {
 	w.flushed = false
 	w.ResponseWriter.WriteHeader(status)
 }
-func (w *coverResponseWriter) Write(data []byte) (int, error) {
+func (w *responseWriter) Write(data []byte) (int, error) {
 	if w.status == 0 {
 		w.WriteHeader(http.StatusOK)
 	}
@@ -55,7 +37,7 @@ func (w *coverResponseWriter) Write(data []byte) (int, error) {
 	return n, err
 }
 
-func (w *coverResponseWriter) FlushError() error {
+func (w *responseWriter) FlushError() error {
 	if w.status == 0 {
 		w.WriteHeader(http.StatusOK)
 	}
@@ -67,23 +49,25 @@ func (w *coverResponseWriter) FlushError() error {
 	return err
 }
 
-func (w *coverResponseWriter) Flush() { _ = w.FlushError() }
+func (w *responseWriter) Flush() { _ = w.FlushError() }
 
-// 覆盖图片、302、304 和错误响应，并在最终刷新后记录真实写出结果。
-func captureCoverResponse(w http.ResponseWriter, r *http.Request) (http.ResponseWriter, func()) {
-	event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event)
+// CaptureResponse records counts and delivery failures without inspecting response contents.
+// The caller owns the event lifecycle and sets its protocol, result and resource fields.
+func CaptureResponse(w http.ResponseWriter, r *http.Request, event *Event) (http.ResponseWriter, func()) {
 	if event == nil {
 		return w, func() {}
 	}
-	capture := &coverResponseWriter{ResponseWriter: w}
+	capture := &responseWriter{ResponseWriter: w}
 	return capture, func() {
-		event.Status, event.Format = capture.status, "binary"
+		event.Status = capture.status
 		if event.Error == "" {
 			event.Error = "none"
 		}
 		if capture.status == 0 || capture.status >= 400 {
 			event.Result = "failed"
-		} else if event.CoverOrigin != "placeholder" && event.CoverOrigin != "stale" {
+		} else if event.CoverOrigin == "placeholder" || event.CoverOrigin == "stale" {
+			event.Result = "unavailable"
+		} else if event.Result == "" {
 			event.Result = "ok"
 		}
 		expected := capture.expected
@@ -102,6 +86,10 @@ func captureCoverResponse(w http.ResponseWriter, r *http.Request) (http.Response
 				issue = "write_error"
 			}
 		}
-		recordClientDelivery(r, int(capture.written), int(expected), issue)
+		written := capture.written
+		event.BytesWritten, event.ResponseBytes = &written, &expected
+		if issue != "" {
+			event.Result, event.Error = "failed", issue
+		}
 	}
 }

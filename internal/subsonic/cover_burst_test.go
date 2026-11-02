@@ -69,7 +69,7 @@ func TestCoverBurstQueuesSixDistinctImages(t *testing.T) {
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
 	var calls atomic.Int32
-	f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		select {
@@ -90,8 +90,8 @@ func TestCoverBurstQueuesSixDistinctImages(t *testing.T) {
 			t.Fatal("前四张封面未进入上游")
 		}
 	}
-	waitCoverCondition(t, func() bool { return f.server.coverLimits.Stats().Queued == 2 })
-	if stats := f.server.coverLimits.Stats(); stats.Active != 4 || stats.Rejected != 0 {
+	waitCoverCondition(t, func() bool { return f.server.Covers.Limits.Stats().Queued == 2 })
+	if stats := f.server.Covers.Limits.Stats(); stats.Active != 4 || stats.Rejected != 0 {
 		t.Fatalf("同一用户的其他封面应排队，不能立即拒绝：%+v", stats)
 	}
 	unblock()
@@ -105,7 +105,7 @@ func TestCoverBurstQueuesSixDistinctImages(t *testing.T) {
 			t.Fatal("排队中的封面未完成")
 		}
 	}
-	if calls.Load() != 6 || f.server.coverLimits.Stats().Active != 0 || f.server.coverLimits.Stats().Queued != 0 {
+	if calls.Load() != 6 || f.server.Covers.Limits.Stats().Active != 0 || f.server.Covers.Limits.Stats().Queued != 0 {
 		t.Fatal("请求遗漏或名额未释放")
 	}
 	for _, event := range f.server.Diagnostics.List() {
@@ -119,7 +119,7 @@ func TestCoverLargeImageIsCached(t *testing.T) {
 	f, router, tracks := burstCoverFixture(t, 1)
 	picture := append(customCoverPNG(t), make([]byte, 2<<20)...)
 	var calls atomic.Int32
-	f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls.Add(1)
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(picture))}, nil
 	})}
@@ -142,13 +142,13 @@ func TestCoverBusyAndQueueTimeoutReturnTemporaryImage(t *testing.T) {
 	for _, queue := range []int{0, 1} {
 		t.Run(fmt.Sprint(queue), func(t *testing.T) {
 			f, router, tracks := burstCoverFixture(t, 1)
-			f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				t.Error("没有上游名额时不应绕过限制调用备用接口")
 				return nil, errors.New("不应调用")
 			})}
 			f.server.initCoverClient()
-			f.server.coverLimits = admission.New(1, queue, 1, queue)
-			permit, err := f.server.coverLimits.Reserve(f.user.ID)
+			f.server.Covers.Limits = admission.New(1, queue, 1, queue)
+			permit, err := f.server.Covers.Limits.Reserve(f.user.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,7 +177,7 @@ func TestCoverPlaceholderDoesNotPoisonRecoveryOrHidePermissions(t *testing.T) {
 	f, router, tracks := burstCoverFixture(t, 1)
 	picture := customCoverPNG(t)
 	var restored atomic.Bool
-	f.server.coverHTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	f.server.Covers.HTTP = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		if !restored.Load() {
 			return &http.Response{StatusCode: 503, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("失败"))}, nil
 		}

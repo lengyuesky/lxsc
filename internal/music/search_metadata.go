@@ -199,7 +199,8 @@ func (c *Catalog) searchSourceMetadata(ctx context.Context, source, query, kind 
 			return out, err
 		}
 		out.HasMore = len(payload.List) >= limit
-		for _, item := range payload.List {
+		// 上游可能忽略页长；截断原始页，避免超量结果进入缓存。
+		for _, item := range payload.List[:min(limit, len(payload.List))] {
 			if kind == "artist" {
 				ref := artistRefFromMap(source, item)
 				if ref.Name != "" && validPlatformID(ref.ID) {
@@ -224,7 +225,7 @@ func (c *Catalog) searchSourceMetadata(ctx context.Context, source, query, kind 
 	artistIndexes, albumIndexes := map[string]int{}, map[string]int{}
 	artistAlbums := map[string]map[string]bool{}
 	seenTracks := map[string]bool{}
-	for _, track := range tracks {
+	for _, track := range tracks[:min(limit, len(tracks))] {
 		if seenTracks[track.TrackID()] {
 			continue
 		}
