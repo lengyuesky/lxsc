@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 仅在 GitHub Ubuntu runner 中配置官方 APT 源；本地已有 FFmpeg 时直接复用。
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   ciRelease=$(awk -F= '$1 == "VERSION_CODENAME" { gsub(/"/, "", $2); print $2 }' /etc/os-release)
@@ -13,7 +14,8 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   esac
   ciSources=$(mktemp "${RUNNER_TEMP:-/tmp}/lxsc-ubuntu-XXXXXX.sources")
   ciOptions=$(mktemp "${RUNNER_TEMP:-/tmp}/lxsc-apt-XXXXXX.conf")
-  trap 'rm -f "$ciSources" "$ciOptions"' EXIT
+  ciHosts=$(mktemp "${RUNNER_TEMP:-/tmp}/lxsc-ubuntu-XXXXXX.hosts")
+  trap 'rm -f "$ciSources" "$ciOptions" "$ciHosts"' EXIT
   cat > "$ciSources" <<EOF
 Types: deb
 URIs: $ciArchive
@@ -44,6 +46,11 @@ EOF
   done
   sudo install -m 644 "$ciSources" /etc/apt/sources.list.d/ubuntu.sources
   sudo install -m 644 "$ciOptions" /etc/apt/apt.conf.d/80-lxsc-ci-network
+  # runner 的系统 DNS 对 Ubuntu 域名持续失败，通过 HTTPS DNS 获取临时地址。
+  ciArchiveHost=${ciArchive#https://}; ciArchiveHost=${ciArchiveHost%%/*}
+  ciSecurityHost=${ciSecurity#https://}; ciSecurityHost=${ciSecurityHost%%/*}
+  node scripts/ci-ubuntu-hosts.mjs "$ciArchiveHost" "$ciSecurityHost" > "$ciHosts"
+  sudo tee -a /etc/hosts < "$ciHosts" >/dev/null
   printf 'CI 架构=%s，CPU=%s\n' "$ciArch" "$(nproc)"
   awk '/MemTotal/ { printf "CI 内存=%.0f MiB\n", $2 / 1024 }' /proc/meminfo
 fi
