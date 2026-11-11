@@ -32,6 +32,9 @@ type Catalog struct {
 	Sources       *js.SourceManager
 	Settings      *settings.Store
 	Log           *slog.Logger
+	// AudioCheck 仅供隔离协议夹具注入；生产使用 httpguard.VerifyAudio。
+	// 客户端请求与运行设置不能关闭内容验证。
+	AudioCheck func(context.Context, *http.Response) error
 
 	tracks             *lru.LRU[string, *Info]
 	albums             *lru.LRU[string, []*Info]
@@ -453,7 +456,7 @@ func (c *Catalog) ReportPlaybackOutcome(resolution URLResolution, platform strin
 	if c.Sources == nil || resolution.Result.SourceID <= 0 {
 		return
 	}
-	key := urlCheckKey{resolution.token}
+	key := urlCheckKey{token: resolution.token}
 	c.mediaFeedbackMu.Lock()
 	defer c.mediaFeedbackMu.Unlock()
 	if previous, exists := c.mediaFeedback[key]; exists && (!previous || ok) {
@@ -530,7 +533,8 @@ func (c *Catalog) InvalidatePlaybackURL(failed URLResolution) {
 		}
 	}
 	c.urls.mu.Unlock()
-	c.urlChecks.forget(urlCheckKey{failed.token})
+	c.urlChecks.forget(urlCheckKey{token: failed.token})
+	c.urlChecks.forget(urlCheckKey{token: failed.token, audio: true})
 }
 
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。

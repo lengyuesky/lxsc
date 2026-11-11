@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldfl
 
 # 阶段 3：仅目标架构的运行层安装系统包时需要 QEMU；3.24 处于常规支持期
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 1000 lxsc
+RUN apk add --no-cache ca-certificates tzdata ffmpeg && adduser -D -u 1000 lxsc
 ENV LXSC_DATA_DIR=/data LXSC_LISTEN=:8080 TZ=Asia/Shanghai
 LABEL org.opencontainers.image.source="https://github.com/lengyuesky/lxsc"
 COPY --from=build /lxsc /usr/local/bin/lxsc

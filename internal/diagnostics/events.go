@@ -79,7 +79,7 @@ func (b *Events) Add(e Event) {
 	if b == nil {
 		return
 	}
-	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe")
+	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe", "audio_probe")
 	if e.Stage == "" {
 		return
 	}
@@ -130,9 +130,9 @@ func (b *Events) Add(e Event) {
 	e.RequestedQuality = Quality(e.RequestedQuality)
 	e.Attempt = min(100, max(0, e.Attempt))
 	e.BudgetMS = min(12000, max(0, e.BudgetMS))
-	e.Validation = oneOf(e.Validation, "validated", "unverified", "failed")
+	e.Validation = oneOf(e.Validation, "validated", "headers_only", "unverified", "failed")
 	e.Mode = Mode(e.Mode)
-	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "upstream_error", "encode_error", "write_error", "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error")
+	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "invalid_audio", "decoder_unavailable", "upstream_error", "encode_error", "write_error", "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error")
 	if e.Error == "" {
 		e.Error = "upstream_error"
 	}

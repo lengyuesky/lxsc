@@ -8,7 +8,7 @@
 
 ## 特性
 
-- Go 编写，单二进制、无 CGO，Docker 镜像约 30 MB，常驻内存约 30–60 MB
+- Go 主程序，无 CGO；Docker 镜像包含 FFmpeg，用于有界音频片段的实际解码验证
 - 音源脚本与各平台搜索 SDK 运行在内置的 [goja](https://github.com/dop251/goja) JS 引擎中，只暴露 `lx` 对象等白名单全局，脚本无法访问文件系统
 - 多用户账号、Web 统一控制台（搜歌、连续播放、歌单收藏，以及音源、用户、设置、备份和日志管理）
 - 播放默认 `302` 重定向到音源直链，可切换为禁止音频转发的强制 `302` 模式或服务端代理转发
@@ -57,7 +57,7 @@ docker compose up -d --pull never
 
 ### 本地运行
 
-需要 Go 1.27+（以 `go.mod` 为准）；JS 桥接产物已随仓库提交，`go build` 不依赖 Node。
+需要 Go 1.27+（以 `go.mod` 为准）和位于 PATH 的 FFmpeg；JS 桥接产物已随仓库提交，`go build` 不依赖 Node。播放验证会实际解码有界音频片段，缺少解码器不会退回仅看响应头的验证。
 
 ```bash
 go build -o lxsc ./cmd/lxsc
@@ -111,6 +111,7 @@ cd js-bridge && bun install --frozen-lockfile && bun run build
 - **音源更新**：通过 URL 导入时默认开启每日自动更新，按北京时间凌晨 3:00 检查；停机后补查最近一次过期计划，停用音源时暂停。管理员可在音源卡片的「更新设置」补填或修改来源、开关自动更新，也可点击「立即检查更新」。内容变化且新脚本初始化成功后才替换；失败保留旧脚本，最多再重试两次，间隔为 5 分钟、30 分钟。详情见 [音源自动更新](docs/source-updates.md)。
 - **歌词**：支持 OpenSubsonic `getLyricsBySongId` 同步歌词，有翻译时作为第二个歌词轨（`lang=zho`）返回；`getLyrics` 返回原文+翻译合并的 LRC。
 - **音质**：每个用户可在控制台设置默认播放音质；Subsonic 客户端传 `maxBitRate` 会向下限制，歌曲或音源不支持所选音质时自动降级；网页不做音频转码。
+- **音频验证**：候选必须在服务端实际读取有界片段并成功解码才算可用；HTTP 状态、MIME 或文件头不能单独证明成功。QQ 和 HTTP 直链不会自动变成代理。网页首播失败会有界降档，详见 [音频内容验证](docs/audio-validation.md)。
 - **箭头音乐（Amcfy Music）**：选择 **Subsonic** 类型连接。艺术家/专辑搜索与歌曲搜索独立处理，打开榜单即返回完整快照并缓存，空榜单不会被误当成空歌单。
 
 ## 配置
@@ -182,6 +183,7 @@ node tests/web/browser.cjs
 |---|---|
 | [docs/fnmusic-compatibility.md](docs/fnmusic-compatibility.md) | 原版飞牛音乐独立服务端：边界、初版实现、Mac 实测与剩余验收 |
 | [docs/debug-api.md](docs/debug-api.md) | 管理员 API 调试：凭据、权限与排查流程 |
+| [docs/audio-validation.md](docs/audio-validation.md) | 服务端实际解码验证、直链边界和私有音频探测 |
 | [docs/search-playback-verification.md](docs/search-playback-verification.md) | 搜歌、网页播放与歌单收藏验收 |
 | [docs/listening-verification.md](docs/listening-verification.md) | 听歌统计验收 |
 | [docs/playback-startup-verification.md](docs/playback-startup-verification.md) | 播放启动等待优化验收 |

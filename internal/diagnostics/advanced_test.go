@@ -250,6 +250,35 @@ func TestFullProtocolAdminDelegationLimitsAndRevocation(t *testing.T) {
 	}
 }
 
+func TestAudioVerificationIsExplicitAndRequiresInspectionScope(t *testing.T) {
+	f := newFixture(t)
+	_, full := fullCredential(t, f)
+	_, basic := f.create(t, true)
+	f.s.ProtocolEndpoints = []string{"stream"}
+	calls := 0
+	f.s.ProtocolProbe = func(ctx context.Context, user *db.User, request ProtocolRequest) (ProtocolResult, error) {
+		calls++
+		if !request.VerifyAudio {
+			t.Error("独立音频验证入口未要求内容验证")
+		}
+		return ProtocolResult{Status: 200, Format: "binary", Validation: "validated", ProtocolStatus: "ok"}, nil
+	}
+	body := `{"trackId":"tr-wy-1","quality":"320k"}`
+	if w := f.call("POST", "/api/debug/probe/audio", body, basic, nil); w.Code != 403 || calls != 0 {
+		t.Fatal("只取头权限越权读取音频", w.Code, calls)
+	}
+	if w := f.call("POST", "/api/debug/probe/audio", body, full, nil); w.Code != 200 || calls != 1 {
+		t.Fatal("完整权限不能执行内容验证", w.Code, calls)
+	}
+	last := f.s.Events.List()[0]
+	if last.Stage != "audio_probe" || last.Validation != "validated" {
+		t.Fatal("真实音频验证被误记成客户端播放或取头", last)
+	}
+	if w := f.call("POST", "/api/debug/probe/playback", `{"trackId":"tr-wy-1","verifyAudio":true}`, full, nil); w.Code != 400 || calls != 1 {
+		t.Fatal("原取头入口接受了提升能力的参数", w.Code, calls)
+	}
+}
+
 func jsonNumber(value int64) string { data, _ := json.Marshal(value); return string(data) }
 
 func TestFullEventWindowAndRate(t *testing.T) {

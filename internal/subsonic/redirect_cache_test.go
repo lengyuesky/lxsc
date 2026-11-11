@@ -124,8 +124,8 @@ func TestRedirectProbeUnknownAndRefreshFailure(t *testing.T) {
 				if _, err := s.DB.GetTrack(context.Background(), info.TrackID()); err == nil {
 					t.Fatal("刷新失败不能记录播放")
 				}
-			} else if rec.Code != 302 || rec.Header().Get("Location") != "https://cdn.example/1" {
-				t.Fatalf("不确定结果应继续客户端直连: %d %v", rec.Code, rec.Header())
+			} else if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
+				t.Fatalf("未取得音频不能继续客户端直连: %d %v", rec.Code, rec.Header())
 			}
 			if strings.Contains(rec.Body.String(), "敏感地址") {
 				t.Fatal("不能透传包含签名的网络错误")

@@ -14,6 +14,7 @@ import (
 	"lxsc/internal/admission"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
 )
 
@@ -113,7 +114,7 @@ func (s *Server) ProbeProtocol(ctx context.Context, user *db.User, probe diagnos
 	capture := &probeCapture{headers: make(http.Header)}
 	result := diagnostics.ProtocolResult{}
 	if media {
-		local.probePlayback(capture, request, &result)
+		local.probePlayback(capture, request, &result, probe.VerifyAudio)
 	} else {
 		handler(capture, request)
 	}
@@ -150,7 +151,12 @@ func (s *Server) ProbeProtocol(ctx context.Context, user *db.User, probe diagnos
 	return result, nil
 }
 
-func (s *Server) probePlayback(w http.ResponseWriter, r *http.Request, result *diagnostics.ProtocolResult) {
+func (s *Server) probePlayback(w http.ResponseWriter, r *http.Request, result *diagnostics.ProtocolResult, verifyAudio bool) {
+	result.Validation = "failed"
+	if !verifyAudio {
+		r = r.WithContext(mediastream.HeaderProbe(r.Context()))
+		result.Validation = "headers_only"
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), mediaRecoveryTimeout)
 	defer cancel()
 	user := currentUser(r)
@@ -184,10 +190,17 @@ func (s *Server) probePlayback(w http.ResponseWriter, r *http.Request, result *d
 	}
 	result.Mode = mode
 	if err != nil {
+		result.Error = diagnostics.ErrorCode(err)
 		writeErr(w, r, ErrGeneric, "无法获取可用的播放地址")
 		return
 	}
 	result.SourceID, result.Quality, result.Cached = resolution.Result.SourceID, resolution.Result.Quality, resolution.Cached
+	if resolution.Validated {
+		result.Validation = "validated"
+	}
+	if verifyAudio && proxy && !headMetadata {
+		result.Mode = "proxy"
+	}
 	if headMetadata {
 		s.writeMediaHead(w, r, resolution, response)
 		return

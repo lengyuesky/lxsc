@@ -157,6 +157,52 @@ test('媒体错误停止，不自动跳过列表；手动重试和下一首可�
   assert.equal(player.status, 'playing')
 })
 
+test('首播失败有界降档，保持同一首歌；恢复后停止重试', async () => {
+  const { player, audio } = fixture({
+    streamURL: (track, options) => '/stream?id=' + track.id + '&quality=' + (options.quality || 'flac'),
+    recoveryQualities: () => ['320k', '128k'],
+  })
+  player.playList(songs(), 0)
+  audio.fail()
+  assert.equal(player.index, 0)
+  assert.match(audio.src, /quality=320k/)
+  audio.fail()
+  assert.match(audio.src, /quality=128k/)
+  audio.fail()
+  assert.equal(player.status, 'error')
+  assert.equal(audio.loads, 3)
+  player.next()
+  assert.match(audio.src, /quality=flac/)
+  await Promise.resolve()
+  audio.currentTime = 1
+  audio.dispatchEvent(new Event('timeupdate'))
+  audio.fail()
+  assert.equal(player.status, 'error')
+  assert.equal(audio.loads, 4, '已经播放的歌曲不能因正文错误重播整首')
+})
+
+test('自动降档后旧播放拒绝和旧错误不能覆盖新音源，清理也会终止恢复', async () => {
+  const pending = deferred()
+  const { player, audio } = fixture({
+    streamURL: (track, options) => '/stream?id=' + track.id + '&quality=' + (options.quality || 'flac'),
+    recoveryQualities: () => ['320k', '128k'],
+  })
+  audio.playResult = () => pending.promise
+  player.playList(songs(), 0)
+  const oldError = player.listeners.find(([name]) => name === 'error')[1]
+  audio.playResult = null
+  audio.fail()
+  pending.reject(new Error('旧音源拒绝'))
+  oldError()
+  await Promise.resolve()
+  assert.match(audio.src, /quality=320k/)
+  assert.equal(player.status, 'playing')
+  player.clear()
+  oldError()
+  assert.equal(player.status, 'idle')
+  assert.equal(audio.src, '')
+})
+
 test('浏览器拒绝自动播放时等待手动点击，不跳歌或重试', async () => {
   const { player, audio } = fixture()
   audio.playResult = () => Promise.reject(new DOMException('需要用户手势', 'NotAllowedError'))

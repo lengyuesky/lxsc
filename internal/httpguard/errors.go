@@ -17,7 +17,7 @@ func ErrorCode(err error) string {
 	var classified interface{ DiagnosticCode() string }
 	if errors.As(err, &classified) {
 		switch code := classified.DiagnosticCode(); code {
-		case "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error", "dns", "tls", "timeout", "connect", "cancelled", "blocked_target", "redirect_limit", "non_audio":
+		case "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error", "dns", "tls", "timeout", "connect", "cancelled", "blocked_target", "redirect_limit", "non_audio", "invalid_audio", "decoder_unavailable":
 			return code
 		}
 	}
@@ -78,5 +78,5 @@ type sanitizedError string
 func (e sanitizedError) Error() string          { return string(e) }
 func (e sanitizedError) DiagnosticCode() string { return string(e) }
 func (e sanitizedError) Is(target error) bool {
-	return (e == "timeout" && target == context.DeadlineExceeded) || (e == "cancelled" && target == context.Canceled) || (e == "non_audio" && target == ErrNonAudioResponse)
+	return (e == "timeout" && target == context.DeadlineExceeded) || (e == "cancelled" && target == context.Canceled) || (e == "non_audio" && target == ErrNonAudioResponse) || (e == "invalid_audio" && target == ErrInvalidAudio) || (e == "decoder_unavailable" && target == ErrDecoderUnavailable)
 }

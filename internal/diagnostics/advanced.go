@@ -18,10 +18,11 @@ import (
 )
 
 type ProtocolRequest struct {
-	Endpoint string            `json:"endpoint"`
-	Method   string            `json:"method"`
-	Format   string            `json:"format"`
-	Params   map[string]string `json:"params"`
+	Endpoint    string            `json:"endpoint"`
+	Method      string            `json:"method"`
+	Format      string            `json:"format"`
+	Params      map[string]string `json:"params"`
+	VerifyAudio bool              `json:"-"` // 只由独立音频验证入口设置，不接受客户端传参。
 }
 
 type ProtocolResult struct {
@@ -41,6 +42,7 @@ type ProtocolResult struct {
 	Lines          *int              `json:"lines,omitempty"`
 	CoverOrigin    string            `json:"coverOrigin,omitempty"`
 	Error          string            `json:"error,omitempty"`
+	Validation     string            `json:"validation,omitempty"`
 }
 
 type ProtocolProbeFunc func(context.Context, *db.User, ProtocolRequest) (ProtocolResult, error)
@@ -49,8 +51,11 @@ func (s *Server) advancedRoutes(r chi.Router) {
 	r.Get("/inspect/{kind}", s.inspect)
 	r.Post("/inspect/logs", s.inspectLogs)
 	r.Post("/maintenance", s.maintain)
-	r.Post("/probe/protocol", func(w http.ResponseWriter, r *http.Request) { s.protocolProbe(w, r, false) })
-	r.Post("/probe/playback", func(w http.ResponseWriter, r *http.Request) { s.protocolProbe(w, r, true) })
+	r.Post("/probe/protocol", func(w http.ResponseWriter, r *http.Request) { s.protocolProbe(w, r, false, false) })
+	r.Post("/probe/playback", func(w http.ResponseWriter, r *http.Request) { s.protocolProbe(w, r, true, false) })
+	r.Post("/probe/audio", func(w http.ResponseWriter, r *http.Request) {
+		s.protocolProbe(w, r, true, true)
+	})
 }
 
 func (s *Server) inspect(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +213,7 @@ func (s *Server) maintain(w http.ResponseWriter, r *http.Request) {
 	output(w, 200, map[string]any{"ok": true, "operation": operation, "data": RedactValue(result)})
 }
 
-func (s *Server) protocolProbe(w http.ResponseWriter, r *http.Request, playback bool) {
+func (s *Server) protocolProbe(w http.ResponseWriter, r *http.Request, playback, verifyAudio bool) {
 	if !requireScopes(w, r, "probe", "inspect") {
 		return
 	}
@@ -218,6 +223,7 @@ func (s *Server) protocolProbe(w http.ResponseWriter, r *http.Request, playback 
 	}
 	values, ok := objectBody(w, r, fields...)
 	request := ProtocolRequest{Method: "GET", Format: "json", Params: map[string]string{}}
+	request.VerifyAudio = verifyAudio
 	var userID int64
 	if !ok || (values["userId"] != nil && json.Unmarshal(values["userId"], &userID) != nil) || userID < 0 {
 		failure(w, 400, "invalid_protocol_probe")
@@ -294,9 +300,13 @@ func (s *Server) protocolProbe(w http.ResponseWriter, r *http.Request, playback 
 	if playback {
 		stage = "playback_probe"
 	}
+	if verifyAudio {
+		stage = "audio_probe"
+	}
 	event := Event{Stage: stage, Endpoint: request.Endpoint, Method: request.Method, TrackID: request.Params["id"], Status: result.Status, Result: "ok", Error: "none", ElapsedMS: time.Since(started).Milliseconds()}
 	event.Format, event.ProtocolCode, event.Count, event.Lines = result.Format, result.ProtocolCode, result.Count, result.Lines
 	event.CoverOrigin, event.Cached = result.CoverOrigin, result.Cached
+	event.Validation = result.Validation
 	if result.Error != "" {
 		event.Error = result.Error
 	}

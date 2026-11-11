@@ -37,6 +37,8 @@ lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{wy:{name:'测试',type:'mus
 		t.Fatal(err)
 	}
 	catalog := music.NewCatalog(f.db, nil, sources, f.service.Settings, f.service.Log)
+	// 此夹具隔离会话、响应头与缓存契约；真实解码由内容及浏览器回归覆盖。
+	catalog.AudioCheck = func(context.Context, *http.Response) error { return nil }
 	f.service.Catalog = catalog
 	media := &subsonic.Server{DB: f.db, Catalog: catalog, Settings: f.service.Settings, Secret: f.service.Secret, Log: f.service.Log, HTTP: client}
 	f.service.Stream = media.ServeWebStream
