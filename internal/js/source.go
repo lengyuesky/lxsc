@@ -110,37 +110,68 @@ type loadedSource struct {
 
 // SourceManager 管理所有音源脚本
 type SourceManager struct {
-	mu         sync.RWMutex
-	loaded     map[int64]*loadedSource
-	statistics map[int64]*sourceCalls
-	schedule   *sourceScheduler
-	prelude    string
-	http       *http.Client
-	httpIns    *http.Client
-	log        *slog.Logger
-	CallTime   time.Duration
+	mu          sync.RWMutex
+	operationMu sync.Mutex
+	operations  map[int64]*sync.Mutex
+	loaded      map[int64]*loadedSource
+	statistics  map[int64]*sourceCalls
+	schedule    *sourceScheduler
+	prelude     string
+	http        *http.Client
+	httpIns     *http.Client
+	log         *slog.Logger
+	CallTime    time.Duration
 }
 
 // NewSourceManager 创建管理器
 func NewSourceManager(prelude string, secure, insecure *http.Client, log *slog.Logger) *SourceManager {
+	if log == nil {
+		log = slog.Default()
+	}
 	return &SourceManager{loaded: map[int64]*loadedSource{}, statistics: map[int64]*sourceCalls{}, schedule: newSourceScheduler(), prelude: prelude, http: secure, httpIns: insecure, log: log, CallTime: 20 * time.Second}
 }
 
 // Load 加载（或重载）一个脚本；返回其能力
 func (m *SourceManager) Load(ctx context.Context, id int64, script string) (*SourceStatus, error) {
-	m.Unload(id)
+	operation := m.sourceOperation(id)
+	operation.Lock()
+	defer operation.Unlock()
+	m.unload(id)
+	ls, inited, err := m.newLoadedSource(id, script)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.attachSourceCalls(ls)
+	m.loaded[id] = ls
+	m.mu.Unlock()
+	err = m.initializeSource(ctx, ls, script, inited)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		ls.state, ls.err = "error", err.Error()
+		m.log.Error("音源加载失败", "source", ls.meta.Name, "err", err)
+		return m.statusOf(ls), err
+	}
+	m.log.Info("音源已加载", "source", ls.meta.Name, "version", ls.meta.Version, "platforms", platformKeys(ls.platforms))
+	return m.statusOf(ls), nil
+}
+
+// 调用方持有 m.mu 写锁。
+func (m *SourceManager) attachSourceCalls(ls *loadedSource) {
+	ls.calls = m.statistics[ls.id]
+	if ls.calls == nil {
+		ls.calls = &sourceCalls{since: ls.loadedAt}
+		m.statistics[ls.id] = ls.calls
+	}
+}
+
+func (m *SourceManager) newLoadedSource(id int64, script string) (*loadedSource, <-chan string, error) {
 	meta := ParseScriptMeta(script)
 	if meta.Name == "" {
 		meta.Name = fmt.Sprintf("音源#%d", id)
 	}
 	ls := &loadedSource{id: id, meta: meta, platforms: map[string]PlatformCap{}, state: "loading", loadedAt: time.Now(), logs: newRingLog(200)}
-	m.mu.Lock()
-	ls.calls = m.statistics[id]
-	if ls.calls == nil {
-		ls.calls = &sourceCalls{since: ls.loadedAt}
-		m.statistics[id] = ls.calls
-	}
-	m.mu.Unlock()
 	inited := make(chan string, 1)
 	w, err := New(Options{
 		Name:         fmt.Sprintf("source-%d", id),
@@ -168,31 +199,23 @@ func (m *SourceManager) Load(ctx context.Context, id int64, script string) (*Sou
 		OnConsole: func(level, msg string) { ls.logs.add(fmt.Sprintf("[%s] %s", level, msg)) },
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ls.worker = w
-	m.mu.Lock()
-	m.loaded[id] = ls
-	m.mu.Unlock()
+	return ls, inited, nil
+}
 
-	fail := func(e error) (*SourceStatus, error) {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		ls.state = "error"
-		ls.err = e.Error()
-		m.log.Error("音源加载失败", "source", meta.Name, "err", e)
-		return m.statusOf(ls), e
-	}
-
+func (m *SourceManager) initializeSource(ctx context.Context, ls *loadedSource, script string, inited <-chan string) error {
 	loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if _, err := w.CallJSON(loadCtx, "__lx_setScriptInfo", map[string]any{
+	meta := ls.meta
+	if _, err := ls.worker.CallJSON(loadCtx, "__lx_setScriptInfo", map[string]any{
 		"name": meta.Name, "description": meta.Description, "version": meta.Version, "author": meta.Author, "homepage": meta.Homepage, "rawScript": script,
 	}); err != nil {
-		return fail(err)
+		return err
 	}
-	if err := w.RunScript(loadCtx, fmt.Sprintf("source_%d.js", id), script); err != nil {
-		return fail(fmt.Errorf("脚本执行出错: %w", err))
+	if err := ls.worker.RunScript(loadCtx, fmt.Sprintf("source_%d.js", ls.id), script); err != nil {
+		return fmt.Errorf("脚本执行出错: %w", err)
 	}
 	select {
 	case p := <-inited:
@@ -200,7 +223,7 @@ func (m *SourceManager) Load(ctx context.Context, id int64, script string) (*Sou
 			Sources map[string]json.RawMessage `json:"sources"`
 		}
 		if err := json.Unmarshal([]byte(p), &d); err != nil || d.Sources == nil {
-			return fail(errors.New("inited 数据缺少 sources"))
+			return errors.New("inited 数据缺少 sources")
 		}
 		platforms := map[string]PlatformCap{}
 		for _, pf := range append(append([]string{}, AllPlatforms...), "local") {
@@ -215,21 +238,20 @@ func (m *SourceManager) Load(ctx context.Context, id int64, script string) (*Sou
 			platforms[pf] = cap
 		}
 		if len(platforms) == 0 {
-			return fail(errors.New("脚本未声明任何受支持的平台"))
+			return errors.New("脚本未声明任何受支持的平台")
 		}
 		m.mu.Lock()
 		ls.platforms = platforms
 		m.mu.Unlock()
 	case <-time.After(3 * time.Second):
-		return fail(errors.New("初始化超时，请确保脚本调用了 lx.send('inited', ...)"))
+		return errors.New("初始化超时，请确保脚本调用了 lx.send('inited', ...)")
 	case <-ctx.Done():
-		return fail(ctx.Err())
+		return ctx.Err()
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	ls.state = "ready"
-	m.log.Info("音源已加载", "source", meta.Name, "version", meta.Version, "platforms", platformKeys(ls.platforms))
-	return m.statusOf(ls), nil
+	m.mu.Unlock()
+	return nil
 }
 
 func parsePlatformCap(raw json.RawMessage) (PlatformCap, bool) {
@@ -289,6 +311,13 @@ func platformKeys(m map[string]PlatformCap) []string {
 
 // Unload 卸载脚本
 func (m *SourceManager) Unload(id int64) {
+	operation := m.sourceOperation(id)
+	operation.Lock()
+	defer operation.Unlock()
+	m.unload(id)
+}
+
+func (m *SourceManager) unload(id int64) {
 	m.mu.Lock()
 	ls, ok := m.loaded[id]
 	if ok {

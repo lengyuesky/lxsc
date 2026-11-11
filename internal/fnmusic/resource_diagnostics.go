@@ -27,3 +27,17 @@ func (s *Server) beginResourceDiagnostic(w http.ResponseWriter, r *http.Request,
 		events.Add(*event)
 	}
 }
+
+func recordCollectionDiagnostic(event *diagnostics.Event, r *http.Request, total, count int) {
+	if event == nil {
+		return
+	}
+	event.Count, event.Total, event.Result = &count, &total, "ok"
+	if count == 0 {
+		event.Result = "empty"
+	}
+	if hasPagination(r) {
+		number, size := pageParams(r)
+		event.Page, event.PageSize = &number, &size
+	}
+}

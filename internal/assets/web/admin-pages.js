@@ -24,6 +24,15 @@ export function sourceCallHealth(summary, state = 'ready') {
   return rate >= .95 ? { tone: 'ok', label: '正常' } : rate >= .8 ? { tone: 'warn', label: '波动' } : { tone: 'err', label: '异常' }
 }
 
+export function sourceUpdateState(source) {
+  const results = { imported: '已导入', updated: '已更新', unchanged: '内容未变化', failed: '更新失败' }
+  return {
+    automatic: !source.url ? '尚未设置来源 URL' : !source.autoUpdate ? '每日自动更新已关闭' : !source.enabled ? '已停用，自动更新暂停' : '每日自动更新已开启 · 北京时间 3:00',
+    result: source.updateRunning ? '正在检查更新…' : results[source.updateResult] || '尚未检查',
+    failed: !source.updateRunning && source.updateResult === 'failed',
+  }
+}
+
 export function createAdmin({ $, adminAPI, esc, platName, fmtDur, formatBytes, formatTime, toast, isAbort }) {
 const countText = value => Number(value || 0).toLocaleString('zh-CN')
 const rateText = summary => (summary?.success || 0) + (summary?.failed || 0) ? (summary.success / (summary.success + summary.failed) * 100).toFixed(1).replace(/\.0$/, '') + '%' : '—'
@@ -33,6 +42,10 @@ const callTimeFormatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short',
 const callTimeText = value => callTimeFormatter.format(new Date(value))
 let sourceStatsData = null, sourceStatsController = null, sourceStatsVersion = 0, sourceStatsTimer = null
 let sourceListController = null, sourceListVersion = 0, periodLabels = []
+let sourceUpdateController = null, sourceUpdateVersion = 0, sourceUpdateTimer = null
+let sourceEditID = null, sourceEditSaving = false, sourceEditController = null, sourceSessionVersion = 0
+const sourceCache = new Map(), sourceChecks = new Map()
+const sourceTimeFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' })
 const sourceStatsVisible = () => !document.hidden && !$('#app').classList.contains('hidden') && $('#tab-sources').classList.contains('active')
 
 function cancelSourceStats() {
@@ -137,19 +150,155 @@ function selectSourceStatistics(id) {
   $('#sourceStatsPanel').scrollIntoView({ block: 'start' })
 }
 
+function sourceUpdateHTML(source) {
+  const state = sourceUpdateState(source)
+  const date = value => value ? sourceTimeFormatter.format(new Date(Number(value) * 1000)) : '暂无记录'
+  return `<div class="source-update-head"><span>${esc(state.automatic)}</span><span class="badge ${state.failed ? 'err' : source.updateRunning ? 'pri' : 'off'}">${esc(state.result)}</span></div><div class="muted hint">最近检查：${esc(date(source.lastCheckedAt))}<br>脚本更新时间：${esc(date(source.scriptUpdatedAt))}${source.nextCheckAt && !source.updateRunning ? `<br>下次检查：${esc(date(source.nextCheckAt))}` : ''}</div>${state.failed && source.updateError ? `<p class="err hint">${esc(source.updateError)}</p>` : ''}`
+}
+
+function cancelSourceUpdates() {
+  sourceUpdateVersion++
+  sourceUpdateController?.abort()
+  sourceUpdateController = null
+  clearTimeout(sourceUpdateTimer)
+}
+
+function scheduleSourceUpdates(delay = 30000) {
+  clearTimeout(sourceUpdateTimer)
+  if (sourceStatsVisible()) sourceUpdateTimer = setTimeout(() => refreshSourceUpdates(), delay)
+}
+
+async function refreshSourceUpdates() {
+  sourceUpdateController?.abort()
+  const controller = new AbortController(), version = ++sourceUpdateVersion, listVersion = sourceListVersion
+  sourceUpdateController = controller
+  try {
+    const sources = await adminAPI('/sources', { signal: controller.signal })
+    if (version !== sourceUpdateVersion || listVersion !== sourceListVersion || !sourceStatsVisible()) return
+    for (const source of sources) {
+      sourceCache.set(source.id, source)
+      const state = $(`[data-source-update="${source.id}"]`)
+      const summary = sourceUpdateHTML(source)
+      if (state && state.innerHTML !== summary) state.innerHTML = summary
+      const versionLabel = $(`[data-source-version="${source.id}"]`)
+      if (versionLabel) versionLabel.textContent = 'v' + (source.version || source.status?.version || '')
+      const parts = sourceRuntimeParts(source)
+      for (const key of ['badge', 'chips', 'error', 'alert', 'health', 'meta']) {
+        const node = $(`[data-source-${key}="${source.id}"]`)
+        if (node && node.innerHTML !== parts[key]) node.innerHTML = parts[key]
+      }
+      const name = $(`[data-source-name="${source.id}"]`)
+      if (name) name.textContent = source.name
+      const toggle = $(`[data-source-action="toggle"][data-source-id="${source.id}"]`)
+      if (toggle) { toggle.dataset.enabled = String(!source.enabled); toggle.textContent = source.enabled ? '停用' : '启用' }
+      const check = $(`[data-source-action="check"][data-source-id="${source.id}"]`)
+      if (check) check.disabled = !source.url || source.updateRunning || sourceChecks.has(source.id)
+    }
+    scheduleSourceUpdates(sources.some(source => source.updateRunning) ? 2000 : 30000)
+  } catch (error) {
+    if (version === sourceUpdateVersion && !isAbort(error)) scheduleSourceUpdates()
+  } finally {
+    if (version === sourceUpdateVersion) sourceUpdateController = null
+  }
+}
+
+function editSourceUpdate(id) {
+  const source = sourceCache.get(id)
+  if (!source || sourceEditSaving) return
+  sourceEditID = id
+  $('#sourceUpdateName').textContent = source.name
+  $('#sourceUpdateForm [name=url]').value = source.url || ''
+  $('#sourceUpdateForm [name=autoUpdate]').checked = !!source.autoUpdate
+  $('#sourceUpdateError').textContent = ''
+  $('#sourceUpdateDialog').showModal()
+}
+
+function closeSourceUpdate() {
+  if (sourceEditSaving) return
+  $('#sourceUpdateDialog').close()
+  $('#sourceUpdateForm').reset()
+  $('#sourceUpdateName').textContent = ''
+  $('#sourceUpdateError').textContent = ''
+  sourceEditID = null
+}
+
+async function saveSourceUpdate(event) {
+  event.preventDefault()
+  if (sourceEditID === null || sourceEditSaving) return
+  const form = new FormData(event.target), id = sourceEditID, session = sourceSessionVersion
+  const url = String(form.get('url') || '').trim(), autoUpdate = form.get('autoUpdate') === 'on'
+  if (autoUpdate && !url) { $('#sourceUpdateError').textContent = '请先填写来源 URL'; return }
+  const controller = new AbortController()
+  sourceEditController = controller
+  sourceEditSaving = true
+  $('#saveSourceUpdate').disabled = $('#closeSourceUpdate').disabled = true
+  $('#sourceUpdateError').textContent = '正在保存…'
+  cancelSourceUpdates()
+  try {
+    await adminAPI('/sources/' + id, { method: 'PUT', body: { url, autoUpdate }, signal: controller.signal })
+    if (session !== sourceSessionVersion) return
+    sourceEditSaving = false
+    closeSourceUpdate()
+    await loadSources()
+    toast('音源更新设置已保存')
+  } catch (error) {
+    if (session === sourceSessionVersion && !isAbort(error)) $('#sourceUpdateError').textContent = error.message
+  } finally {
+    if (session === sourceSessionVersion) {
+      sourceEditSaving = false
+      sourceEditController = null
+      $('#saveSourceUpdate').disabled = $('#closeSourceUpdate').disabled = false
+      scheduleSourceUpdates()
+    }
+  }
+}
+
+async function checkSourceUpdate(id) {
+  if (sourceChecks.has(id)) return
+  const source = sourceCache.get(id)
+  if (!source?.url) { toast('请先填写来源 URL', true); return }
+  const controller = new AbortController(), session = sourceSessionVersion
+  sourceChecks.set(id, controller)
+  const button = $(`[data-source-action="check"][data-source-id="${id}"]`)
+  if (button) button.disabled = true
+  const state = $(`[data-source-update="${id}"]`)
+  if (state) state.innerHTML = sourceUpdateHTML({ ...source, updateRunning: true })
+  try {
+    const result = await adminAPI('/sources/' + id + '/check', { method: 'POST', signal: controller.signal })
+    if (session !== sourceSessionVersion) return
+    toast(result.updateResult === 'updated' ? '音源脚本已更新' : '脚本内容未变化')
+  } catch (error) {
+    if (session === sourceSessionVersion && !isAbort(error)) toast(error.message, true)
+  } finally {
+    if (session === sourceSessionVersion) {
+      sourceChecks.delete(id)
+      await loadSources()
+    }
+  }
+}
+
 // ---- 概览 ----
-function sourceCard(s, brief) {
+function sourceRuntimeParts(s) {
   const st = s.status
   const badge = !s.enabled ? '<span class="badge off">已停用</span>' : !st ? '<span class="badge off">未加载</span>' : st.state === 'ready' ? '<span class="badge ok">就绪</span>' : st.state === 'loading' ? '<span class="badge pri">加载中</span>' : '<span class="badge err">错误</span>'
   const chips = st && st.platforms ? Object.entries(st.platforms).map(([p, c]) => `<span class="chip"><b>${esc(platName[p] || p)}</b><span>${esc((c.qualitys || []).join('/'))}</span></span>`).join('') : ''
   const h = st?.health
   const health = h?.samples ? `<div class="note">近一小时最近 ${h.samples} 次解析：成功率 ${Math.round(h.success / h.samples * 100)}% · 平均 ${h.averageMs} ms · 降级 ${h.downgrades} 次<br><small>失败分类：${esc(Object.entries(h.errors || {}).map(([key, count]) => `${({ timeout: '超时', busy: '繁忙', cancelled: '取消', script: '脚本失败' })[key] || key} ${count}`).join(' · ') || '无')}。解析成功不代表客户端实际播放成功；重载后重置。</small></div>` : '<p class="muted hint">暂无近期解析样本</p>'
-  const err = st && st.error ? `<div class="note err">${esc(st.error)}</div>` : ''
+  const error = st && st.error ? `<div class="note err">${esc(st.error)}</div>` : ''
   const alert = st && st.alert ? `<div class="note warn">脚本提示更新：${esc(st.alert)}</div>` : ''
-  const meta = [s.description, s.author, s.homepage ? `<a href="${esc(s.homepage)}" target="_blank" rel="noopener">主页</a>` : ''].map((x, i) => i === 2 ? x : esc(x || '')).filter(Boolean).join(' · ')
+  const homepage = /^https?:\/\//i.test(s.homepage || '') ? `<a href="${esc(s.homepage)}" target="_blank" rel="noopener">主页</a>` : esc(s.homepage || '')
+  const meta = [esc(s.description || ''), esc(s.author || ''), homepage].filter(Boolean).join(' · ')
+  return { badge, chips: chips || '<span class="muted hint">无平台信息</span>', error, alert, health, meta }
+}
+
+function sourceCard(s, brief) {
+  const st = s.status
+  const parts = sourceRuntimeParts(s)
   const actions = brief ? '' : `<div class="actions">
       <button class="sec sm" data-source-action="toggle" data-source-id="${s.id}" data-enabled="${!s.enabled}">${s.enabled ? '停用' : '启用'}</button>
       <button class="sec sm" data-source-action="reload" data-source-id="${s.id}"><svg class="icon"><use href="#i-refresh"/></svg>重新加载</button>
+      <button class="sec sm" data-source-action="check" data-source-id="${s.id}" ${!s.url || s.updateRunning || sourceChecks.has(s.id) ? 'disabled' : ''}>立即检查更新</button>
+      <button class="sec sm" data-source-action="update-settings" data-source-id="${s.id}">更新设置</button>
       <button class="sec sm" data-source-action="test" data-source-id="${s.id}"><svg class="icon"><use href="#i-zap"/></svg>测试取链</button>
       <button class="sec sm" data-source-action="statistics" data-source-id="${s.id}">调用统计</button>
       <a class="btn sec sm" href="/api/admin/sources/${s.id}/script" download>下载脚本</a>
@@ -158,10 +307,10 @@ function sourceCard(s, brief) {
     ${st && st.logs && st.logs.length ? `<details><summary>脚本日志（${st.logs.length}）</summary><pre>${esc(st.logs.slice(-50).join('\n'))}</pre></details>` : ''}`
   return `<div class="card src">
     <div class="src-head"><div>
-      <div class="src-title">${esc(s.name)} ${badge} <span class="ver">v${esc(s.version || st?.version || '')}</span></div>
-      ${meta ? `<div class="meta">${meta}</div>` : ''}
+      <div class="src-title"><span data-source-name="${s.id}">${esc(s.name)}</span><span data-source-badge="${s.id}">${parts.badge}</span><span class="ver" data-source-version="${s.id}">v${esc(s.version || st?.version || '')}</span></div>
+      <div class="meta" data-source-meta="${s.id}">${parts.meta}</div>
     </div></div>
-    <div class="chips">${chips || '<span class="muted hint">无平台信息</span>'}</div>${err}${alert}${health}${actions}</div>`
+    <div class="chips" data-source-chips="${s.id}">${parts.chips}</div><div data-source-error="${s.id}">${parts.error}</div><div data-source-alert="${s.id}">${parts.alert}</div><div data-source-health="${s.id}">${parts.health}</div>${brief ? '' : `<div class="source-update" data-source-update="${s.id}">${sourceUpdateHTML(s)}</div>`}${actions}</div>`
 }
 
 async function loadDashboard() {
@@ -195,13 +344,17 @@ async function loadSources() {
   await Promise.all([loadSourceList(), loadSourceStatistics()])
 }
 async function loadSourceList() {
+  cancelSourceUpdates()
   sourceListController?.abort()
   const controller = new AbortController(), version = ++sourceListVersion
   sourceListController = controller
   try {
     const srcs = await adminAPI('/sources', { signal: controller.signal })
     if (version !== sourceListVersion) return
+    sourceCache.clear()
+    for (const source of srcs) sourceCache.set(source.id, source)
     $('#sourceList').innerHTML = srcs.length ? srcs.map(s => sourceCard(s, false)).join('') : '<div class="card empty">暂无音源脚本，请在上方上传或从 URL 导入</div>'
+    scheduleSourceUpdates(srcs.some(source => source.updateRunning) ? 2000 : 30000)
   } finally { if (version === sourceListVersion) sourceListController = null }
 }
 async function uploadSource(e) {
@@ -213,7 +366,7 @@ async function uploadSource(e) {
 async function importSource(e) {
   e.preventDefault()
   const fd = new FormData(e.target)
-  try { const r = await adminAPI('/sources/import', { method: 'POST', body: { url: fd.get('url') } }); e.target.reset(); await loadSources(); if (r.status?.error) toast('已保存，但加载失败：' + r.status.error, true); else toast('音源已添加') } catch (err) { toast(err.message, true) }
+  try { const r = await adminAPI('/sources/import', { method: 'POST', body: { url: fd.get('url'), autoUpdate: fd.get('autoUpdate') === 'on' } }); e.target.reset(); await loadSources(); if (r.status?.error) toast('已保存，但加载失败：' + r.status.error, true); else toast('音源已添加') } catch (err) { toast(err.message, true) }
   return false
 }
 async function toggleSource(id, enabled) { await adminAPI('/sources/' + id, { method: 'PUT', body: { enabled } }); await loadSources() }
@@ -242,11 +395,14 @@ $('#sourceList').addEventListener('click', event => {
   const button = event.target.closest('[data-source-action]')
   if (!button) return
   const id = Number(button.dataset.sourceId)
-  const actions = { toggle: () => toggleSource(id, button.dataset.enabled === 'true'), reload: () => reloadSource(id), test: () => testSource(id), statistics: () => selectSourceStatistics(id), delete: () => deleteSource(id) }
+  const actions = { toggle: () => toggleSource(id, button.dataset.enabled === 'true'), reload: () => reloadSource(id), check: () => checkSourceUpdate(id), 'update-settings': () => editSourceUpdate(id), test: () => testSource(id), statistics: () => selectSourceStatistics(id), delete: () => deleteSource(id) }
   Promise.resolve(actions[button.dataset.sourceAction]?.()).catch(error => { if (!isAbort(error)) toast(error.message, true) })
 })
 $('#uploadSourceForm').addEventListener('submit', uploadSource)
 $('#importSourceForm').addEventListener('submit', importSource)
+$('#sourceUpdateForm').addEventListener('submit', saveSourceUpdate)
+$('#closeSourceUpdate').addEventListener('click', closeSourceUpdate)
+$('#sourceUpdateDialog').addEventListener('cancel', event => { if (sourceEditSaving) event.preventDefault(); else closeSourceUpdate() })
 $('#refreshDashboard').addEventListener('click', () => loadDashboard().catch(error => toast(error.message, true)))
 $('#refreshLogs').addEventListener('click', () => loadLogs().catch(error => toast(error.message, true)))
 $('#refreshSourceStats').addEventListener('click', () => loadSourceStatistics())
@@ -260,14 +416,24 @@ for (const type of ['mouseover', 'focusin', 'click']) $('#sourceStatsBody').addE
   const period = event.target.closest('[data-source-period]')
   if (period) $('#sourceStatsPeriod').textContent = periodLabels[Number(period.dataset.sourcePeriod)] || ''
 })
-window.addEventListener('hashchange', () => { if (!sourceStatsVisible()) cancelSourceStats() })
+window.addEventListener('hashchange', () => { if (!sourceStatsVisible()) { cancelSourceStats(); cancelSourceUpdates() } })
 document.addEventListener('visibilitychange', () => {
-  if (!sourceStatsVisible()) cancelSourceStats()
-  else void loadSourceStatistics()
+  if (!sourceStatsVisible()) { cancelSourceStats(); cancelSourceUpdates() }
+  else { void loadSourceStatistics(); void refreshSourceUpdates() }
 })
 
 function reset() {
   cancelSourceStats()
+  cancelSourceUpdates()
+  sourceSessionVersion++
+  sourceEditController?.abort()
+  sourceEditController = null
+  sourceEditSaving = false
+  $('#saveSourceUpdate').disabled = $('#closeSourceUpdate').disabled = false
+  closeSourceUpdate()
+  for (const controller of sourceChecks.values()) controller.abort()
+  sourceChecks.clear()
+  sourceCache.clear()
   sourceListVersion++
   sourceListController?.abort()
   sourceListController = null

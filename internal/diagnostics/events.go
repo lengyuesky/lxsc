@@ -22,6 +22,9 @@ type Event struct {
 	BoardIDs         []string  `json:"boardIds,omitempty"`
 	Result           string    `json:"result,omitempty"`
 	Count            *int      `json:"count,omitempty"`
+	Total            *int      `json:"total,omitempty"`
+	Page             *int      `json:"page,omitempty"`
+	PageSize         *int      `json:"pageSize,omitempty"`
 	Lines            *int      `json:"lines,omitempty"`
 	Synced           *bool     `json:"synced,omitempty"`
 	ProtocolCode     *int      `json:"protocolCode,omitempty"`
@@ -106,7 +109,7 @@ func (b *Events) Add(e Event) {
 	}
 	e.BoardIDs = boardIDs
 	// 复制指针字段，调用方不能在入环后修改已校验数据。
-	for _, field := range []**int{&e.Count, &e.Lines, &e.ProtocolCode} {
+	for _, field := range []**int{&e.Count, &e.Total, &e.Page, &e.PageSize, &e.Lines, &e.ProtocolCode} {
 		if *field != nil {
 			value := min(1000000, max(0, **field))
 			*field = &value

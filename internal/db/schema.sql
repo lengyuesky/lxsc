@@ -33,7 +33,17 @@ CREATE TABLE IF NOT EXISTS sources (
   enabled     INTEGER NOT NULL DEFAULT 1,
   priority    INTEGER NOT NULL DEFAULT 100,
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  url               TEXT NOT NULL DEFAULT '',
+  auto_update       INTEGER NOT NULL DEFAULT 0,
+  last_checked_at   INTEGER NOT NULL DEFAULT 0,
+  script_updated_at INTEGER NOT NULL DEFAULT 0,
+  update_result     TEXT NOT NULL DEFAULT '',
+  update_error      TEXT NOT NULL DEFAULT '',
+  update_slot       TEXT NOT NULL DEFAULT '',
+  update_attempts   INTEGER NOT NULL DEFAULT 0,
+  retry_at          INTEGER NOT NULL DEFAULT 0,
+  update_revision   INTEGER NOT NULL DEFAULT 1
 );
 
 -- 见过的歌曲元数据（搜索/歌单/榜单结果），json 为 SDK 返回的原始 musicInfo

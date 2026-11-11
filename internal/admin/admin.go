@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,20 +32,22 @@ import (
 
 // Server 管理服务
 type Server struct {
-	DB          *db.DB
-	Sources     *js.SourceManager
-	Catalog     *music.Catalog
-	Settings    *settings.Store
-	Secret      *secret.Box
-	Logs        *logbuf.Buffer
-	Log         *slog.Logger
-	HTTP        *http.Client
-	Version     string
-	StartAt     time.Time
-	Auth        *webauth.Manager
-	Backup      *backup.Service
-	Debug       *diagnostics.Server
-	maintenance atomic.Bool
+	DB                   *db.DB
+	Sources              *js.SourceManager
+	Catalog              *music.Catalog
+	Settings             *settings.Store
+	Secret               *secret.Box
+	Logs                 *logbuf.Buffer
+	Log                  *slog.Logger
+	HTTP                 *http.Client
+	Version              string
+	StartAt              time.Time
+	Auth                 *webauth.Manager
+	Backup               *backup.Service
+	Debug                *diagnostics.Server
+	maintenance          atomic.Bool
+	sourceUpdatesOnce    sync.Once
+	sourceUpdatesRuntime *sourceUpdateRuntime
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -101,6 +104,7 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/sources/{id}", s.updateSource)
 	r.Delete("/sources/{id}", s.deleteSource)
 	r.Post("/sources/{id}/reload", s.reloadSource)
+	r.Post("/sources/{id}/check", s.checkSource)
 	r.Post("/sources/{id}/test", s.testSource)
 	r.Get("/sources/{id}/script", s.sourceScript)
 	r.Post("/search", s.searchTest)
@@ -362,20 +366,33 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 
 type sourceView struct {
 	*db.Source
-	Status *js.SourceStatus `json:"status"`
+	Status        *js.SourceStatus `json:"status"`
+	UpdateRunning bool             `json:"updateRunning"`
+	NextCheckAt   int64            `json:"nextCheckAt,omitempty"`
+}
+
+func (s *Server) sourceView(src *db.Source) sourceView {
+	runtime := s.sourceUpdates()
+	return sourceView{Source: src, Status: s.Sources.StatusOf(src.ID), UpdateRunning: runtime.control(src.ID).running.Load(), NextCheckAt: sourceNextCheck(src, runtime.now())}
+}
+
+func writeSourceJSON(w http.ResponseWriter, code int, value any) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	writeJSON(w, code, value)
 }
 
 func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
-	list, err := s.DB.ListSources(r.Context())
+	list, err := s.DB.ListSourceSummaries(r.Context())
 	if err != nil {
 		fail(w, 500, err.Error())
 		return
 	}
 	out := make([]sourceView, 0, len(list))
 	for _, src := range list {
-		out = append(out, sourceView{Source: src, Status: s.Sources.StatusOf(src.ID)})
+		out = append(out, s.sourceView(src))
 	}
-	writeJSON(w, 200, out)
+	writeSourceJSON(w, 200, out)
 }
 
 func (s *Server) sourceScript(w http.ResponseWriter, r *http.Request) {
@@ -424,6 +441,10 @@ func readScript(r *http.Request) (script, name string, err error) {
 
 // AddSource 新增并加载音源（供导入与上传共用）
 func (s *Server) AddSource(ctx context.Context, script, name string) (*db.Source, *js.SourceStatus, error) {
+	return s.addSource(ctx, script, name, "", false)
+}
+
+func (s *Server) addSource(ctx context.Context, script, name, address string, automatic bool) (*db.Source, *js.SourceStatus, error) {
 	script = strings.TrimPrefix(script, "\uFEFF")
 	if strings.TrimSpace(script) == "" {
 		return nil, nil, errors.New("脚本为空")
@@ -435,7 +456,13 @@ func (s *Server) AddSource(ctx context.Context, script, name string) (*db.Source
 	if name == "" {
 		name = "未命名音源"
 	}
-	src, err := s.DB.CreateSource(ctx, &db.Source{Name: name, Description: meta.Description, Version: meta.Version, Author: meta.Author, Homepage: meta.Homepage, Script: script, Enabled: true})
+	entry := &db.Source{Name: name, Description: meta.Description, Version: meta.Version, Author: meta.Author, Homepage: meta.Homepage, Script: script, Enabled: true, URL: address, AutoUpdate: automatic}
+	if address != "" {
+		checked := s.sourceUpdates().now()
+		entry.LastCheckedAt, entry.ScriptUpdatedAt, entry.UpdateResult = checked.Unix(), checked.Unix(), "imported"
+		entry.UpdateSlot, _ = sourcePlanSlot(checked)
+	}
+	src, err := s.DB.CreateSource(ctx, entry)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -458,62 +485,64 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	writeJSON(w, 200, sourceView{Source: src, Status: st})
+	view := s.sourceView(src)
+	view.Status = st
+	writeSourceJSON(w, 200, view)
 }
 
 func (s *Server) importSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URL  string `json:"url"`
-		Name string `json:"name"`
+		URL        string `json:"url"`
+		Name       string `json:"name"`
+		AutoUpdate *bool  `json:"autoUpdate"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !strings.HasPrefix(body.URL, "http") {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&body); err != nil {
 		fail(w, 400, "URL 无效")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, body.URL, nil)
-	req.Header.Set("User-Agent", "lxsc")
-	resp, err := s.HTTP.Do(req)
-	if err != nil {
-		fail(w, 400, "下载失败: "+err.Error())
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		fail(w, 400, "下载失败: "+resp.Status)
-		return
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		fail(w, 400, "下载失败: "+err.Error())
-		return
-	}
-	src, st, err := s.AddSource(r.Context(), string(b), body.Name)
+	address, err := sourceAddress(body.URL)
 	if err != nil {
 		fail(w, 400, err.Error())
 		return
 	}
-	writeJSON(w, 200, sourceView{Source: src, Status: st})
+	script, err := s.downloadSource(r.Context(), address)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	automatic := body.AutoUpdate == nil || *body.AutoUpdate
+	src, st, err := s.addSource(r.Context(), script, body.Name, address, automatic)
+	if err != nil {
+		fail(w, 400, err.Error())
+		return
+	}
+	view := s.sourceView(src)
+	view.Status = st
+	writeSourceJSON(w, 200, view)
 }
 
 func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	src, err := s.DB.GetSource(r.Context(), id)
-	if err != nil {
-		fail(w, 404, "不存在")
-		return
-	}
 	var body struct {
-		Name    *string `json:"name"`
-		Enabled *bool   `json:"enabled"`
-		Script  *string `json:"script"`
+		Name       *string `json:"name"`
+		Enabled    *bool   `json:"enabled"`
+		Script     *string `json:"script"`
+		URL        *string `json:"url"`
+		AutoUpdate *bool   `json:"autoUpdate"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		fail(w, 400, "参数错误")
 		return
 	}
-	upd := &db.Source{ID: id, Name: src.Name, Enabled: src.Enabled}
+	control := s.lockSourceControl(id)
+	defer control.mu.Unlock()
+	src, err := s.DB.GetSource(r.Context(), id)
+	if err != nil {
+		fail(w, 404, "不存在")
+		return
+	}
+	copy := *src
+	upd := &copy
 	if body.Name != nil && *body.Name != "" {
 		upd.Name = *body.Name
 	}
@@ -525,11 +554,31 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 		meta := js.ParseScriptMeta(upd.Script)
 		upd.Description, upd.Version, upd.Author, upd.Homepage = meta.Description, meta.Version, meta.Author, meta.Homepage
 	}
-	if err := s.DB.UpdateSource(r.Context(), upd); err != nil {
+	if body.URL != nil {
+		upd.URL = strings.TrimSpace(*body.URL)
+		if upd.URL != "" {
+			var err error
+			upd.URL, err = sourceAddress(upd.URL)
+			if err != nil {
+				fail(w, 400, err.Error())
+				return
+			}
+		} else {
+			upd.AutoUpdate = false
+		}
+	}
+	if body.AutoUpdate != nil {
+		upd.AutoUpdate = *body.AutoUpdate
+	}
+	if upd.AutoUpdate && upd.URL == "" {
+		fail(w, 400, "请先填写来源 URL")
+		return
+	}
+	if err := s.DB.SaveSourceConfig(r.Context(), src, upd); err != nil {
 		fail(w, 500, err.Error())
 		return
 	}
-	invalidateURLs := upd.Enabled != src.Enabled || upd.Script != ""
+	invalidateURLs := upd.Enabled != src.Enabled || body.Script != nil
 	defer func() {
 		if invalidateURLs {
 			s.Catalog.InvalidateURLs()
@@ -554,11 +603,15 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Sources.Unload(id)
 	}
-	writeJSON(w, 200, sourceView{Source: src, Status: st})
+	view := s.sourceView(src)
+	view.Status = st
+	writeSourceJSON(w, 200, view)
 }
 
 func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	control := s.lockSourceControl(id)
+	defer control.mu.Unlock()
 	defer s.Catalog.InvalidateURLs()
 	s.Sources.Unload(id)
 	if err := s.DB.DeleteSource(r.Context(), id); err != nil {
@@ -572,9 +625,15 @@ func (s *Server) deleteSource(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) reloadSource(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	control := s.lockSourceControl(id)
+	defer control.mu.Unlock()
 	src, err := s.DB.GetSource(r.Context(), id)
 	if err != nil {
 		fail(w, 404, "不存在")
+		return
+	}
+	if err := s.DB.TouchSourceRevision(r.Context(), src); err != nil {
+		fail(w, 409, "音源设置已变化，请重试")
 		return
 	}
 	defer s.Catalog.InvalidateURLs()

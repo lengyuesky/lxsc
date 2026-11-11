@@ -21,7 +21,7 @@ func migrate(s *sql.DB) error {
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 6 {
+	if version > 7 {
 		return fmt.Errorf("数据库版本 %d 高于当前程序支持版本", version)
 	}
 	if version < 1 {
@@ -118,6 +118,49 @@ func migrate(s *sql.DB) error {
 			if _, err = tx.Exec(statement); err != nil {
 				return err
 			}
+		}
+	}
+	if version < 7 {
+		rows, err := tx.Query(`PRAGMA table_info(sources)`)
+		if err != nil {
+			return err
+		}
+		columns := map[string]bool{}
+		for rows.Next() {
+			var index, required, primary int
+			var name, kind string
+			var value any
+			if err := rows.Scan(&index, &name, &kind, &required, &value, &primary); err != nil {
+				rows.Close()
+				return err
+			}
+			columns[name] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, column := range []struct{ name, definition string }{
+			{"url", "TEXT NOT NULL DEFAULT ''"},
+			{"auto_update", "INTEGER NOT NULL DEFAULT 0"},
+			{"last_checked_at", "INTEGER NOT NULL DEFAULT 0"},
+			{"script_updated_at", "INTEGER NOT NULL DEFAULT 0"},
+			{"update_result", "TEXT NOT NULL DEFAULT ''"},
+			{"update_error", "TEXT NOT NULL DEFAULT ''"},
+			{"update_slot", "TEXT NOT NULL DEFAULT ''"},
+			{"update_attempts", "INTEGER NOT NULL DEFAULT 0"},
+			{"retry_at", "INTEGER NOT NULL DEFAULT 0"},
+			{"update_revision", "INTEGER NOT NULL DEFAULT 1"},
+		} {
+			if !columns[column.name] {
+				if _, err := tx.Exec(`ALTER TABLE sources ADD COLUMN ` + column.name + ` ` + column.definition); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES(7)`); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()

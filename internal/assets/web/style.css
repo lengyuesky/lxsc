@@ -347,6 +347,9 @@ button.source-call-bar:hover, button.source-call-bar:focus-visible { background:
 .src details { margin-top: 10px }
 .src details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none }
 .src details pre { margin: 8px 0 0; max-height: 260px; padding: 10px 12px; font-size: 12px; background: var(--log-bg); color: var(--log-fg); border-radius: var(--radius-sm); overflow: auto; white-space: pre-wrap }
+.source-update { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg) }
+.source-update-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; font-size: 12px }
+.source-update p { margin: 6px 0 0 }
 .empty { text-align: center; color: var(--muted); padding: 40px 16px }
 
 /* ========== 日志 ========== */

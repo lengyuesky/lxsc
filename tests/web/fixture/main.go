@@ -218,6 +218,8 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'测试',type:'musi
 	debug.CoverPerformance = covers.Performance
 	app := &portal.Server{DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Stream: media.ServeWebStream}
 	management := &admin.Server{Debug: debug, DB: database, Catalog: catalog, Settings: store, Secret: box, Log: log, Auth: auth, Sources: sources, Logs: logbuf.New(100), HTTP: client, Version: "浏览器测试", StartAt: time.Now()}
+	stopSourceUpdates := management.StartSourceUpdates(ctx)
+	defer stopSourceUpdates()
 	debug.Logs = management.Logs
 	web, err := assets.WebHandler()
 	if err != nil {

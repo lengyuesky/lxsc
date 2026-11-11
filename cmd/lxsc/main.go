@@ -196,6 +196,8 @@ func run(cfgPath string) error {
 	portalSrv := &portal.Server{DB: database, Catalog: catalog, Settings: st, Secret: box, Log: log, Auth: authManager, Stream: sub.ServeWebStream}
 	stopSubscriptions := portalSrv.StartSubscriptions(ctx)
 	defer stopSubscriptions()
+	stopSourceUpdates := adminSrv.StartSourceUpdates(ctx)
+	defer stopSourceUpdates()
 	webHandler, err := assets.WebHandler()
 	if err != nil {
 		return err

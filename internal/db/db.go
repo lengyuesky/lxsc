@@ -354,37 +354,59 @@ func (d *DB) CreateAPIKey(ctx context.Context, userID int64, key, label string) 
 
 // Source 音源脚本记录
 type Source struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Version     string `json:"version"`
-	Author      string `json:"author"`
-	Homepage    string `json:"homepage"`
-	Script      string `json:"-"`
-	Enabled     bool   `json:"enabled"`
-	CreatedAt   int64  `json:"createdAt"`
-	UpdatedAt   int64  `json:"updatedAt"`
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	Version         string `json:"version"`
+	Author          string `json:"author"`
+	Homepage        string `json:"homepage"`
+	Script          string `json:"-"`
+	Enabled         bool   `json:"enabled"`
+	CreatedAt       int64  `json:"createdAt"`
+	UpdatedAt       int64  `json:"updatedAt"`
+	URL             string `json:"url"`
+	AutoUpdate      bool   `json:"autoUpdate"`
+	LastCheckedAt   int64  `json:"lastCheckedAt"`
+	ScriptUpdatedAt int64  `json:"scriptUpdatedAt"`
+	UpdateResult    string `json:"updateResult"`
+	UpdateError     string `json:"updateError,omitempty"`
+	UpdateSlot      string `json:"-"`
+	UpdateAttempts  int    `json:"-"`
+	RetryAt         int64  `json:"retryAt,omitempty"`
+	UpdateRevision  int64  `json:"-"`
 }
 
 // sourceCols 仍读取 priority 列以保持既有库兼容；该列已不再参与任何逻辑，扫入丢弃变量。
-const sourceCols = `id, name, description, version, author, homepage, script, enabled, priority, created_at, updated_at`
+const sourceCols = `id, name, description, version, author, homepage, script, enabled, priority, created_at, updated_at,
+	url, auto_update, last_checked_at, script_updated_at, update_result, update_error, update_slot, update_attempts, retry_at, update_revision`
 
 func scanSource(row interface{ Scan(...any) error }) (*Source, error) {
 	var s Source
-	var enabled, legacyPriority int
-	if err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Version, &s.Author, &s.Homepage, &s.Script, &enabled, &legacyPriority, &s.CreatedAt, &s.UpdatedAt); err != nil {
+	var enabled, automatic, legacyPriority int
+	if err := row.Scan(&s.ID, &s.Name, &s.Description, &s.Version, &s.Author, &s.Homepage, &s.Script, &enabled, &legacyPriority, &s.CreatedAt, &s.UpdatedAt,
+		&s.URL, &automatic, &s.LastCheckedAt, &s.ScriptUpdatedAt, &s.UpdateResult, &s.UpdateError, &s.UpdateSlot, &s.UpdateAttempts, &s.RetryAt, &s.UpdateRevision); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	s.Enabled = enabled == 1
+	s.AutoUpdate = automatic == 1
 	return &s, nil
 }
 
 // ListSources 按加载顺序（ID 升序）列出音源
 func (d *DB) ListSources(ctx context.Context) ([]*Source, error) {
-	rows, err := d.sql.QueryContext(ctx, `SELECT `+sourceCols+` FROM sources ORDER BY id ASC`)
+	return d.listSources(ctx, sourceCols)
+}
+
+// ListSourceSummaries 不读取脚本正文，供调度检查和管理页状态刷新使用。
+func (d *DB) ListSourceSummaries(ctx context.Context) ([]*Source, error) {
+	return d.listSources(ctx, strings.Replace(sourceCols, " script,", " '',", 1))
+}
+
+func (d *DB) listSources(ctx context.Context, columns string) ([]*Source, error) {
+	rows, err := d.sql.QueryContext(ctx, `SELECT `+columns+` FROM sources ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -408,8 +430,14 @@ func (d *DB) GetSource(ctx context.Context, id int64) (*Source, error) {
 // CreateSource 新增音源
 func (d *DB) CreateSource(ctx context.Context, s *Source) (*Source, error) {
 	t := now()
-	res, err := d.sql.ExecContext(ctx, `INSERT INTO sources(name, description, version, author, homepage, script, enabled, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), t, t)
+	updated := s.ScriptUpdatedAt
+	if updated == 0 {
+		updated = t
+	}
+	res, err := d.sql.ExecContext(ctx, `INSERT INTO sources(name, description, version, author, homepage, script, enabled, created_at, updated_at,
+		url, auto_update, last_checked_at, script_updated_at, update_result, update_slot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), t, t,
+		s.URL, boolInt(s.AutoUpdate), s.LastCheckedAt, updated, s.UpdateResult, s.UpdateSlot)
 	if err != nil {
 		return nil, err
 	}
@@ -420,11 +448,11 @@ func (d *DB) CreateSource(ctx context.Context, s *Source) (*Source, error) {
 // UpdateSource 更新音源（script 为空则不更新脚本）
 func (d *DB) UpdateSource(ctx context.Context, s *Source) error {
 	if s.Script != "" {
-		_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, description=?, version=?, author=?, homepage=?, script=?, enabled=?, updated_at=? WHERE id=?`,
-			s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), now(), s.ID)
+		_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, description=?, version=?, author=?, homepage=?, script=?, enabled=?, updated_at=?, script_updated_at=?, update_revision=update_revision+1 WHERE id=?`,
+			s.Name, s.Description, s.Version, s.Author, s.Homepage, s.Script, boolInt(s.Enabled), now(), now(), s.ID)
 		return err
 	}
-	_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, enabled=?, updated_at=? WHERE id=?`, s.Name, boolInt(s.Enabled), now(), s.ID)
+	_, err := d.sql.ExecContext(ctx, `UPDATE sources SET name=?, enabled=?, updated_at=?, update_revision=update_revision+1 WHERE id=?`, s.Name, boolInt(s.Enabled), now(), s.ID)
 	return err
 }
 

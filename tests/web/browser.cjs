@@ -810,6 +810,7 @@ async function main() {
     await require('./improvements-browser.cjs')({ check, url, login, search, playSearch, createPlaylist, selectPlaylistUI, artifacts })
     await require('./six-features-browser.cjs')({ check, url, login, search, playSearch, createPlaylist, selectPlaylistUI, artifacts })
     await require('./source-statistics-browser.cjs')({ check, url, login, artifacts })
+    await require('./source-updates-browser.cjs')({ check, url, login, artifacts })
   } finally {
     if (admin) await admin.dispose()
     if (browser) await browser.close()

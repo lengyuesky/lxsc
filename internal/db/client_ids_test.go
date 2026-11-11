@@ -24,7 +24,7 @@ func TestClientIDMigrationPreservesExistingMusicData(t *testing.T) {
 	if err := database.UpsertTracks(ctx, []Track{{ID: "tr-wy-existing", Source: "wy", Name: "原有曲目", JSON: []byte(`{"source":"wy","songmid":"existing"}`)}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{"DROP TABLE client_ids", "DELETE FROM schema_migrations WHERE version=6"} {
+	for _, statement := range []string{"DROP TABLE client_ids", "DELETE FROM schema_migrations WHERE version>=6"} {
 		if _, err := database.sql.Exec(statement); err != nil {
 			t.Fatal(err)
 		}

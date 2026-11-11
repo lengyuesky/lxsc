@@ -107,10 +107,18 @@ func TestCoverFourKindsReturnRealImageAndShareCache(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatal("protocol resource kinds did not share the same image cache", calls.Load())
 	}
+	coverEvents := 0
 	for _, event := range f.server.Diagnostics.List() {
+		if event.Endpoint != "getCoverArt" {
+			continue
+		}
+		coverEvents++
 		if event.CoverOrigin != "original" || event.Result != "ok" || event.BytesWritten == nil || event.ResponseBytes == nil || *event.BytesWritten != int64(len(picture)) || *event.BytesWritten != *event.ResponseBytes {
 			t.Fatal("cover diagnostic lost origin or delivery counts", event)
 		}
+	}
+	if coverEvents != 8 {
+		t.Fatalf("cover diagnostics omitted requests: got %d, want 8", coverEvents)
 	}
 }
 

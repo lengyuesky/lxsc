@@ -21,6 +21,10 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		"grantedScopes":      requestScopes(r),
 		"maximumScopes":      MaximumScopes(),
 		"responseDelivery": map[string]string{
+			"count":         "本次列表响应的实际条目数；歌单摘要对象不以待加载歌曲数冒充列表条目数",
+			"total":         "飞牛歌单列表与曲目列表在分页前的总条目数",
+			"page":          "飞牛歌单显式分页请求的有效页码；无分页请求省略",
+			"pageSize":      "飞牛歌单显式分页请求的有效每页条目数；无分页请求省略",
 			"requestId":     "真实客户端请求由服务端独立生成，与响应 X-Request-ID 对应",
 			"bytesWritten":  "协议或封面正文被 ResponseWriter 接受的实际字节数，写入失败、短写或网络刷新失败时 result=failed、error=write_error；刷新失败时仍可能等于 responseBytes",
 			"responseBytes": "预期协议或封面正文长度；与 bytesWritten 相等也不证明客户端接收或解析成功，音频正文不适用",

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"lxsc/internal/db"
+	"lxsc/internal/diagnostics"
 	"lxsc/internal/music"
 )
 
@@ -123,6 +124,10 @@ func (s *Server) playlistView(ctx context.Context, playlist *db.Playlist) (map[s
 }
 
 func (s *Server) playlists(w http.ResponseWriter, r *http.Request) {
+	event, finish := s.beginResourceDiagnostic(w, r, "getPlaylists", "json")
+	defer finish()
+	w, finishResponse := diagnostics.CaptureResponse(w, r, event)
+	defer finishResponse()
 	playlists, err := s.DB.ListPlaylists(r.Context(), currentUser(r).ID)
 	if err != nil {
 		failure(w, http.StatusInternalServerError, "歌单读取失败")
@@ -137,14 +142,21 @@ func (s *Server) playlists(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, view)
 	}
-	if r.URL.Query().Get("page") == "" && r.URL.Query().Get("size") == "" {
+	if !hasPagination(r) {
+		recordCollectionDiagnostic(event, r, len(items), len(items))
 		success(w, map[string]any{"list": items, "total": len(items)})
 		return
 	}
+	start, end := pageBounds(r, len(items))
+	recordCollectionDiagnostic(event, r, len(items), end-start)
 	page(w, r, items)
 }
 
 func (s *Server) playlistDetail(w http.ResponseWriter, r *http.Request) {
+	event, finish := s.beginResourceDiagnostic(w, r, "getPlaylist", "json")
+	defer finish()
+	w, finishResponse := diagnostics.CaptureResponse(w, r, event)
+	defer finishResponse()
 	playlist, err := s.allowedPlaylist(r, r.URL.Query().Get("guid"))
 	if resourceError(w, err) {
 		return
@@ -153,6 +165,7 @@ func (s *Server) playlistDetail(w http.ResponseWriter, r *http.Request) {
 	if resourceError(w, err) {
 		return
 	}
+	event.Result = "ok"
 	success(w, view)
 }
 
@@ -178,11 +191,21 @@ func (s *Server) playlistBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) playlistTracks(w http.ResponseWriter, r *http.Request) {
+	event, finish := s.beginResourceDiagnostic(w, r, "getPlaylist", "json")
+	defer finish()
+	w, finishResponse := diagnostics.CaptureResponse(w, r, event)
+	defer finishResponse()
 	playlist, err := s.allowedPlaylist(r, r.URL.Query().Get("playlistGUID"))
 	if resourceError(w, err) {
 		return
 	}
-	s.writeTracks(w, r, s.Catalog.Tracks(r.Context(), playlist.TrackIDs))
+	tracks := s.Catalog.Tracks(r.Context(), playlist.TrackIDs)
+	// 原版客户端的无分页歌单请求需要一次返回整个歌单。
+	start, end := 0, len(tracks)
+	if hasPagination(r) {
+		start, end = pageBounds(r, len(tracks))
+	}
+	s.writeTrackPage(w, r, tracks, start, end, event)
 }
 
 func (s *Server) tracks(w http.ResponseWriter, r *http.Request) {
@@ -227,13 +250,17 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeTracks(w http.ResponseWriter, r *http.Request, tracks []*music.Info) {
+	start, end := pageBounds(r, len(tracks))
+	s.writeTrackPage(w, r, tracks, start, end, nil)
+}
+
+func (s *Server) writeTrackPage(w http.ResponseWriter, r *http.Request, tracks []*music.Info, start, end int, event *diagnostics.Event) {
 	stars, err := s.DB.StarredSet(r.Context(), currentUser(r).ID)
 	if resourceError(w, err) {
 		return
 	}
 	appliedSort := sortTracks(r, tracks)
-	items := make([]any, 0, len(tracks))
-	start, end := pageBounds(r, len(tracks))
+	items := make([]any, 0, end-start)
 	for _, track := range tracks[start:end] {
 		view, err := s.trackView(r.Context(), track, stars[track.TrackID()] != 0)
 		if resourceError(w, err) {
@@ -241,6 +268,7 @@ func (s *Server) writeTracks(w http.ResponseWriter, r *http.Request, tracks []*m
 		}
 		items = append(items, view)
 	}
+	recordCollectionDiagnostic(event, r, len(tracks), len(items))
 	success(w, map[string]any{"list": items, "total": len(tracks), "sort": appliedSort})
 }
 
@@ -479,7 +507,12 @@ func sortItems(r *http.Request, items []any) string {
 	return requested
 }
 
-func pageBounds(r *http.Request, total int) (int, int) {
+func hasPagination(r *http.Request) bool {
+	query := r.URL.Query()
+	return query.Get("page") != "" || query.Get("size") != ""
+}
+
+func pageParams(r *http.Request) (int, int) {
 	query := r.URL.Query()
 	number, err := strconv.Atoi(query.Get("page"))
 	if err != nil || number < 1 {
@@ -490,6 +523,11 @@ func pageBounds(r *http.Request, total int) (int, int) {
 		size = 100
 	}
 	size = min(size, 500)
+	return number, size
+}
+
+func pageBounds(r *http.Request, total int) (int, int) {
+	number, size := pageParams(r)
 	start := total
 	if number-1 <= total/size {
 		start = min((number-1)*size, total)
