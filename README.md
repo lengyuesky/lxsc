@@ -37,6 +37,7 @@ docker compose up -d
 ### Actions 镜像标签
 
 - 推送 `main` 通过检查后发布 `latest` 与 `sha-<完整提交 SHA>`；推送 `v*` 标签发布同名镜像标签（如 `v1.2.3`）及 SHA 标签，不覆盖 `latest`；PR 只检查和构建，不推送。
+- 公有仓库使用免费的标准 Linux runner（每个 4 核、16 GB）：AMD64 和 ARM64 分别原生编译、并行构建；每个实际镜像成功解码合成音频后，才合并发布完整双架构标签。测试、浏览器与基准并行但均保留为发布门禁，竞态编译缓存与浏览器缓存分别保存。
 - 发布仅使用本次运行的 `GITHUB_TOKEN` 与 `packages: write`，无长期 PAT；第三方 Actions 固定完整提交 SHA（`.github/actions-pins.json`）。
 - Fork 或首次发布到新包后，须在 GitHub `Packages → lxsc → Package settings` 将包可见性设为 `Public` 并实际验证匿名拉取。
 

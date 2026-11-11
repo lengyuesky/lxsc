@@ -9,6 +9,7 @@ elif [[ $# -gt 0 ]]; then
   echo '用法：bash scripts/check.sh [--race]' >&2
   exit 2
 fi
+bash -n scripts/*.sh
 go test "${args[@]}" ./cmd/... ./internal/... ./tests/web/fixture/...
 go vet ./cmd/... ./internal/... ./tests/web/fixture/...
 node --test tests/*.test.mjs tests/web/*.test.cjs
