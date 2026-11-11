@@ -109,11 +109,19 @@ func (b *Events) Add(e Event) {
 	}
 	e.BoardIDs = boardIDs
 	// 复制指针字段，调用方不能在入环后修改已校验数据。
-	for _, field := range []**int{&e.Count, &e.Total, &e.Page, &e.PageSize, &e.Lines, &e.ProtocolCode} {
+	for _, field := range []**int{&e.Count, &e.Total, &e.Page, &e.Lines, &e.ProtocolCode} {
 		if *field != nil {
 			value := min(1000000, max(0, **field))
 			*field = &value
 		}
+	}
+	if e.PageSize != nil {
+		value := *e.PageSize
+		// -1 是飞牛客户端读取全部条目的协议标记。
+		if value != -1 {
+			value = min(1000000, max(0, value))
+		}
+		e.PageSize = &value
 	}
 	for _, field := range []**int64{&e.BytesWritten, &e.ResponseBytes} {
 		if *field != nil {

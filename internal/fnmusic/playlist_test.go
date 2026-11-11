@@ -75,13 +75,17 @@ func TestPlaylistTracksUnpagedAndExplicitPagination(t *testing.T) {
 				{"无分页", "", 0, total, 0, 0, false},
 				{"语言参数", "&lan=zh-CN", 0, total, 0, 0, false},
 				{"空分页参数", "&page=&size=", 0, total, 0, 0, false},
+				{"原版客户端读取全部", "&page=1&size=-1&sort=&lan=zh-CN", 0, total, 1, -1, false},
+				{"全量标记不按页切片", "&page=9&size=-1", 0, total, 1, -1, false},
 				{"显式第二页", "&page=2&size=100", 100, 200, 2, 100, false},
 				{"仅指定页码", "&page=2", 100, 200, 2, 100, false},
 				{"第七页", "&page=7&size=100", min(600, total), min(700, total), 7, 100, false},
 				{"保留每页上限", "&page=1&size=5000", 0, min(500, total), 1, 500, false},
 				{"无效分页使用默认值", "&page=invalid&size=0", 0, 100, 1, 100, false},
+				{"其他负数沿用默认分页", "&page=1&size=-2", 0, 100, 1, 100, false},
 				{"越界页", "&page=999&size=100", total, total, 999, 100, false},
 				{"无分页排序", "&sort=title,desc", 0, total, 0, 0, true},
+				{"全量排序", "&page=1&size=-1&sort=title,desc", 0, total, 1, -1, true},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					w := request(f, http.MethodGet, endpoint+tc.params, token, nil)
@@ -122,6 +126,10 @@ func TestPlaylistTracksUnpagedAndExplicitPagination(t *testing.T) {
 			library := payload(t, request(f, http.MethodGet, "/music/api/v1/track/list", token, nil))
 			if len(library["list"].([]any)) != 100 || library["total"] != float64(total+2) {
 				t.Fatal("音乐库列表的默认分页发生变化")
+			}
+			allLibrary := payload(t, request(f, http.MethodGet, "/music/api/v1/track/list?page=1&size=-1", token, nil))
+			if len(allLibrary["list"].([]any)) != total+2 || allLibrary["total"] != float64(total+2) {
+				t.Fatal("音乐库列表未保留客户端显式读取全部的语义")
 			}
 			raw, _ := json.Marshal(f.server.Diagnostics.List())
 			for _, private := range []string{token, guid, "pl-synthetic-large", "alice", "私密合成歌单", "私密合成曲目", "私密合成歌手", "私密合成备注"} {

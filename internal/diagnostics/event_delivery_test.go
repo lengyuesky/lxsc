@@ -37,4 +37,16 @@ func TestEventPaginationFieldsAreBoundedAndCopied(t *testing.T) {
 	if *got.Count != 0 || *got.Total != 1000000 || *got.Page != 0 || *got.PageSize != 1000000 {
 		t.Fatalf("分页诊断字段未按范围限制: %+v", got)
 	}
+	page, size = 1, -1
+	events.Add(Event{Stage: "client_response", Page: &page, PageSize: &size, Error: "none"})
+	page, size = 9, 100
+	got = events.List()[2]
+	if *got.Page != 1 || *got.PageSize != -1 {
+		t.Fatalf("客户端读取全部的标记未保留或没有独立复制: %+v", got)
+	}
+	size = -2
+	events.Add(Event{Stage: "client_response", PageSize: &size, Error: "none"})
+	if *events.List()[3].PageSize != 0 {
+		t.Fatal("其他负数页长未按范围限制")
+	}
 }

@@ -519,6 +519,10 @@ func pageParams(r *http.Request) (int, int) {
 		number = 1
 	}
 	size, err := strconv.Atoi(query.Get("size"))
+	// 原版客户端使用 size=-1 读取整个列表，不按 page 切片。
+	if err == nil && size == -1 {
+		return 1, -1
+	}
 	if err != nil || size < 1 {
 		size = 100
 	}
@@ -528,6 +532,9 @@ func pageParams(r *http.Request) (int, int) {
 
 func pageBounds(r *http.Request, total int) (int, int) {
 	number, size := pageParams(r)
+	if size == -1 {
+		return 0, total
+	}
 	start := total
 	if number-1 <= total/size {
 		start = min((number-1)*size, total)
