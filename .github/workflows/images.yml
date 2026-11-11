@@ -196,6 +196,9 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
+    outputs:
+      digest_amd64: ${{ steps.digest.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.digest.outputs.digest_arm64 }}
     permissions:
       contents: read
       packages: write
@@ -263,19 +266,13 @@ jobs:
           LXSC_IMAGE_REF: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
         run: bash scripts/check-image-audio.sh "$LXSC_IMAGE_REF"
       - name: 保存经过验证的镜像 digest
+        id: digest
         env:
           LXSC_IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          LXSC_IMAGE_ARCH: ${{ matrix.arch }}
         run: |
           [[ "$LXSC_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          mkdir -p "$RUNNER_TEMP/digests"
-          touch "$RUNNER_TEMP/digests/${LXSC_IMAGE_DIGEST#sha256:}"
-      - name: 上传当前架构的 digest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: image-digest-${{ matrix.arch }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
+          echo "digest_${LXSC_IMAGE_ARCH}=$LXSC_IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
   manifest:
     name: 合并并发布双架构标签
@@ -287,12 +284,6 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: 下载两份已验证的 digest
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: image-digest-*
-          merge-multiple: true
       - name: 规范镜像名称
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
@@ -318,16 +309,17 @@ jobs:
         env:
           LXSC_IMAGE_NAME: ${{ steps.image.outputs.name }}
           LXSC_IMAGE_METADATA: ${{ steps.metadata.outputs.json }}
+          LXSC_DIGEST_AMD64: ${{ needs.publish.outputs.digest_amd64 }}
+          LXSC_DIGEST_ARM64: ${{ needs.publish.outputs.digest_arm64 }}
         run: |
           tagArgs=()
           while IFS= read -r imageTag; do
             tagArgs+=(-t "$imageTag")
           done < <(jq -r '.tags[]' <<< "$LXSC_IMAGE_METADATA")
           digestArgs=()
-          for digestFile in "$RUNNER_TEMP/digests/"*; do
-            imageDigest="${digestFile##*/}"
-            [[ "$imageDigest" =~ ^[0-9a-f]{64}$ ]]
-            digestArgs+=("$LXSC_IMAGE_NAME@sha256:$imageDigest")
+          for imageDigest in "$LXSC_DIGEST_AMD64" "$LXSC_DIGEST_ARM64"; do
+            [[ "$imageDigest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            digestArgs+=("$LXSC_IMAGE_NAME@$imageDigest")
           done
           [[ ${#digestArgs[@]} -eq 2 && ${#tagArgs[@]} -ge 2 ]]
           docker buildx imagetools create "${tagArgs[@]}" "${digestArgs[@]}"

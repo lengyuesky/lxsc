@@ -34,7 +34,11 @@ test('PR 构建没有登录、推送或包写入权限，发布必须等待检�
   assert.doesNotMatch(publish, /tags: \$\{\{ steps\.metadata\.outputs\.tags/)
   assert.match(manifest, /needs: \[publish\]/)
   assert.match(manifest, /github\.event_name != 'pull_request'/)
-  assert.match(manifest, /image-digest-\*/)
+  assert.match(publish, /digest_amd64: \$\{\{ steps\.digest\.outputs\.digest_amd64 \}\}/)
+  assert.match(publish, /digest_arm64: \$\{\{ steps\.digest\.outputs\.digest_arm64 \}\}/)
+  assert.match(manifest, /needs\.publish\.outputs\.digest_amd64/)
+  assert.match(manifest, /needs\.publish\.outputs\.digest_arm64/)
+  assert.doesNotMatch(manifest, /download-artifact|image-digest-/)
   assert.match(manifest, /digestArgs\[@\]\} -eq 2/)
   assert.match(manifest, /imagetools create/)
   assert.match(manifest, /sort == \["amd64", "arm64"\]/)
@@ -95,7 +99,7 @@ test('公有仓库使用免费标准原生 runner，架构并行且解码门禁�
   }
   assert.doesNotMatch(workflow, /setup-qemu|ubuntu-.*(?:large|8core|16core)/)
   const publish = workflow.split('\n  publish:')[1].split('\n  manifest:')[0]
-  assert(publish.indexOf('scripts/check-image-audio.sh') < publish.indexOf('上传当前架构的 digest'))
+  assert(publish.indexOf('scripts/check-image-audio.sh') < publish.indexOf('保存经过验证的镜像 digest'))
 })
 
 test('竞态、浏览器和基准拥有独立编译缓存，APT 等待有界且索引失败即停止', () => {
