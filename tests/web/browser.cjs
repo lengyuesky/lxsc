@@ -418,7 +418,10 @@ async function main() {
       assert.notEqual(await page.locator('#toast').innerText(), '已刷新')
     })
 
-    await check('直连失败停下且不自动代理，失效会话释放播放器', async page => {
+    await check('首播失败有界降档，失效会话释放播放器', async page => {
+      assert.equal((await page.request.put(url + '/api/app/profile', { data: { quality: '320k' } })).status(), 200)
+      await page.reload()
+      await page.locator('#app:not(.hidden)').waitFor()
       const streams = []
       page.on('request', request => { if (request.url().includes('/api/app/stream?')) streams.push(request.url()) })
       // 由真实测试上游返回 403；不依赖浏览器对重定向后请求的路由拦截。
@@ -427,7 +430,8 @@ async function main() {
       await page.locator('#searchTable [data-song-action=play]').first().click()
       await page.waitForFunction(() => webPlayer.status === 'error')
       await settle(page)
-      assert.equal(streams.length, 1)
+      assert.equal(streams.length, 2)
+      assert.deepEqual(streams.map(address => new URL(address).searchParams.get('quality')), ['320k', '128k'])
       assert.equal(streams[0].includes('proxy='), false)
       assert.equal(await page.evaluate(() => webPlayer.index), 0)
       assert.equal((await page.request.post(url + '/api/auth/logout')).status(), 200)
@@ -435,6 +439,28 @@ async function main() {
       await page.locator('#login:not(.hidden)').waitFor()
       assert.equal(await page.evaluate(() => webPlayer.queue.length), 0)
       assert.equal(await page.locator('#playerBar').isVisible(), false)
+    })
+
+    await check('网页首播解码失败会自动降档，恢复后实际播放且不改为代理', async page => {
+      assert.equal((await page.request.put(url + '/api/app/profile', { data: { quality: '320k' } })).status(), 200)
+      await page.reload()
+      await page.locator('#app:not(.hidden)').waitFor()
+      const streams = []
+      await page.route('**/api/app/stream?*', async route => {
+        const address = new URL(route.request().url())
+        streams.push(address)
+        if (address.searchParams.get('quality') === '320k') {
+          return route.fulfill({ status: 200, contentType: 'audio/mpeg', body: 'invalid-audio-content' })
+        }
+        return route.continue()
+      })
+      await search(page, '合成首播恢复')
+      await playSearch(page)
+      assert.equal(await page.evaluate(() => webPlayer.index), 0)
+      assert.equal(await page.evaluate(() => webPlayer.status), 'playing')
+      assert.ok(streams.some(address => address.searchParams.get('quality') === '128k'))
+      assert.ok(streams.every(address => !address.searchParams.has('proxy')))
+      await page.screenshot({ path: path.join(artifacts, 'audio-validation-recovery.png'), fullPage: true })
     })
 
     await check('聚合搜索逐步交付，慢平台追加且失败状态可见', async page => {
@@ -783,7 +809,7 @@ async function main() {
       await page.locator('#searchTable [data-song-action=play]').first().click()
       await page.waitForFunction(() => webPlayer.status === 'error')
       await settle(page)
-      assert.equal(streams.length, 1, '强制302直连失败不得自动重试或切换代理')
+      assert.equal(streams.length, 2, '首播降档必须有界，并继续遵守强制302禁止代理')
       assert.equal(streams[0].includes('proxy='), false)
     })
 

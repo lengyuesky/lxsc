@@ -267,9 +267,9 @@ func TestRedirectFailoverUnknownOpportunity(t *testing.T) {
 		location string
 	}{
 		{"不确定后验证成功", 0, 200, "b/1"},
-		{"全部网络不确定", 0, 0, "a/1"},
-		{"明确拒绝后网络不确定", 403, 0, "b/1"},
-		{"网络不确定后明确拒绝", 0, 403, "a/1"},
+		{"全部网络不确定", 0, 0, ""},
+		{"明确拒绝后网络不确定", 403, 0, ""},
+		{"网络不确定后明确拒绝", 0, 403, ""},
 		{"全部明确拒绝", 500, 503, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -434,11 +434,8 @@ func TestMediaRecoveryTotalBudget(t *testing.T) {
 			if time.Since(started) > time.Second || gets.Load() < 1 || gets.Load() > 2 || resp != nil {
 				t.Fatal("预算结束后不能继续尝试其他源", gets.Load())
 			}
-			if proxy && !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("代理应返回预算超时：%v", err)
-			}
-			if !proxy && (err != nil || (resolution.Result.URL != "https://media.invalid/a/1" && resolution.Result.URL != "https://media.invalid/b/1")) {
-				t.Fatal("仅网络不确定时可保留客户端直连机会")
+			if !errors.Is(err, context.DeadlineExceeded) || resolution.Validated {
+				t.Fatalf("未取得可验证音频应返回预算超时：%v", err)
 			}
 			for range gets.Load() {
 				select {
@@ -534,12 +531,8 @@ func TestRedirectUnknownCandidatesRespectLaterRejections(t *testing.T) {
 			})}
 			rec := httptest.NewRecorder()
 			s.stream(rec, mediaStabilityRequest(user, info, ""))
-			if firstUnknown {
-				if rec.Code != 302 || rec.Header().Get("Location") != "https://media.invalid/other/1" {
-					t.Fatal("首个不确定地址后来被拒绝，仍须保留其他未被拒绝的候选")
-				}
-			} else if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
-				t.Fatal("已明确拒绝的地址不能因后续网络错误重新进入不确定备选")
+			if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
+				t.Fatal("网络未知和明确拒绝都不能作为已验证音频返回")
 			}
 			if calls.Load() != 4 {
 				t.Fatalf("恢复次数错误：%d", calls.Load())

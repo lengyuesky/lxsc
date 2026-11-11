@@ -1,6 +1,7 @@
 package subsonic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"lxsc/internal/js"
 	"lxsc/internal/music"
 	"lxsc/internal/settings"
+	"lxsc/internal/testaudio"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -100,7 +102,7 @@ send(EVENT_NAMES.inited, { status: true, sources: { wy: { name: '测试', type: 
 	catalog.Cache([]*music.Info{info})
 	server := &Server{DB: database, Catalog: catalog, Settings: store, Log: log, HTTP: client}
 	server.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 206, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+		return &http.Response{StatusCode: 206, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(testaudio.MP3)), Request: req}, nil
 	})}
 
 	request := func(handler func(http.ResponseWriter, *http.Request)) {

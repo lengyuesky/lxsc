@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	// mediaRecoveryTimeout 是播放请求取得可用响应头的总预算。
+	// mediaRecoveryTimeout 是播放请求取得并验证可用音频片段的总预算。
 	// 实测"最高档失效、降到 flac 才成功"的极端链路需要 ~7s，总预算必须留出这条路径。
 	mediaRecoveryTimeout = 9 * time.Second
 	// mediaHeadTimeout 是客户端 HEAD 预检的独立预算：预检失败要尽快回 502，不能与 GET 一样跑满总预算。
@@ -64,11 +64,10 @@ type mediaOutcome struct {
 	err        error
 	status     int
 	refresh    *music.URLResolution
-	rejected   []string
 	headerMS   int64
 }
 
-// prepareMedia 并发竞速“取链 + 媒体响应头”，受总预算、并发音源数和调用数限制。
+// Prepare 并发竞速取链与音频片段验证，受总预算、并发音源数和调用数限制。
 // quality 策略按档位轮次并发，所有支持该档的源失败后才降档；
 // speed 策略一轮内所有源并发各自降档。正文只交付最终胜出的一个响应。
 func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
@@ -104,8 +103,6 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 		quality string
 	}
 	attempted := map[candidateKey]bool{}
-	rejected := map[string]bool{}
-	var uncertain []music.URLResolution
 	lastFailure := errMediaUnavailable
 	var calls atomic.Int32
 	var refreshed sync.Map
@@ -176,7 +173,7 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 		winner, failures, err := s.raceMediaCandidates(roundCtx, r, in, tasks, proxy, headMetadata, concurrency, &calls)
 		roundExpired := errors.Is(roundCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		stopRound()
-		// 并发下失败按完成先后到达；轮内按调度顺序处理，不确定候选与最终错误不受竞速时序影响。
+		// 并发下失败按完成先后到达；轮内按调度顺序处理，最终错误不受竞速时序影响。
 		slices.SortStableFunc(failures, func(a, b mediaOutcome) int {
 			return slices.Index(ids, a.task.id) - slices.Index(ids, b.task.id)
 		})
@@ -184,18 +181,8 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 			if failed.err != nil && !errors.Is(failed.err, context.Canceled) {
 				lastFailure = failed.err
 			}
-			for _, address := range failed.rejected {
-				rejected[address] = true
-			}
 			if failed.status == http.StatusRequestedRangeNotSatisfiable {
 				return result, nil, errMediaUnavailable
-			}
-			if failed.resolution.Result.URL != "" {
-				if failed.status != 0 || errors.Is(failed.err, errInvalidMediaURL) || errors.Is(failed.err, httpguard.ErrNonAudioResponse) {
-					rejected[failed.resolution.Result.URL] = true
-				} else if !proxy && !headMetadata && !errors.Is(failed.err, context.Canceled) {
-					uncertain = append(uncertain, failed.resolution)
-				}
 			}
 			if roundExpired {
 				// 本轮是这一档自己的时间用完了，不是源级故障：不让源被判死，留到后续档位继续尝试。
@@ -207,9 +194,11 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 			}
 		}
 		if winner != nil {
-			result = s.Catalog.PublishPlaybackURL(in, quality, winner.resolution)
-			result.Validated = true
-			if winner.status != http.StatusRequestedRangeNotSatisfiable {
+			result = winner.resolution
+			result.Validated = !headersOnly(ctx) && winner.status != http.StatusRequestedRangeNotSatisfiable
+			if result.Validated {
+				result = s.Catalog.PublishPlaybackURL(in, quality, result)
+				result.Validated = true
 				s.Catalog.ReportPlaybackOutcome(result, in.Source(), true, winner.headerMS)
 			}
 			return result, winner.response, nil
@@ -223,11 +212,6 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 	}
 	if r.Context().Err() != nil {
 		return result, nil, r.Context().Err()
-	}
-	for _, candidate := range uncertain {
-		if !rejected[candidate.Result.URL] {
-			return candidate, nil, nil
-		}
 	}
 	if ctx.Err() != nil {
 		return result, nil, ctx.Err()
@@ -282,7 +266,7 @@ func (s *Service) crossSourceRescue(ctx context.Context, r *http.Request, in *mu
 		return music.URLResolution{}, nil, err
 	}
 	// 兜底结果不写入原歌曲的直链缓存：它属于另一个平台的另一条曲目。
-	winner.resolution.Validated = true
+	winner.resolution.Validated = !headersOnly(ctx)
 	s.Diagnostics.Add(diagnostics.Event{Stage: "cross_source", TrackID: in.TrackID(), Platform: candidate.Source(), Quality: winner.resolution.Result.Quality, Status: winner.status, ElapsedMS: time.Since(started).Milliseconds()})
 	return winner.resolution, winner.response, nil
 }
@@ -370,6 +354,9 @@ func (s *Service) raceMediaCandidates(ctx context.Context, r *http.Request, in *
 					return &outcome, failures, nil
 				}
 			} else {
+				if errors.Is(outcome.err, httpguard.ErrDecoderUnavailable) {
+					return nil, failures, outcome.err
+				}
 				failures = append(failures, outcome)
 				busy = busy || errors.Is(outcome.err, admission.ErrBusy)
 				if outcome.status == http.StatusRequestedRangeNotSatisfiable {
@@ -404,7 +391,6 @@ func (s *Service) tryMediaCandidate(ctx context.Context, r *http.Request, in *mu
 	ctx, cancel := context.WithTimeout(ctx, mediaSpeedLaneTimeout)
 	defer cancel()
 	out := mediaOutcome{task: task, err: js.ErrNoQuality}
-	var rejected []string
 	for index, quality := range task.lane {
 		next := task
 		next.quality, next.exact = quality, true
@@ -413,8 +399,6 @@ func (s *Service) tryMediaCandidate(ctx context.Context, r *http.Request, in *mu
 		}
 		out = s.tryExactMediaCandidate(ctx, r, in, next, proxy, headMetadata, 1, calls)
 		out.task = task
-		rejected = append(rejected, out.rejected...)
-		out.rejected = rejected
 		if out.err == nil || ctx.Err() != nil || out.status == 416 || out.status == 429 || out.status >= 500 || errors.Is(out.err, admission.ErrBusy) || errors.Is(out.err, context.Canceled) || errors.Is(out.err, js.ErrSourceAuth) || errors.Is(out.err, js.ErrSourceUnavailable) || errors.Is(out.err, js.ErrSourceRateLimited) || errors.Is(out.err, js.ErrInvalidSourceResponse) || errors.Is(out.err, errInvalidMediaURL) || errors.Is(out.err, httpguard.ErrNonAudioResponse) || (out.status == 0 && out.resolution.Result.URL != "") {
 			return out
 		}
@@ -463,13 +447,11 @@ func (s *Service) tryExactMediaCandidate(ctx context.Context, r *http.Request, i
 			resp, err = s.openMedia(headCtx, r, in, resolution.Result.URL)
 			stop()
 			if resp != nil && err == nil {
-				err = httpguard.CheckMediaResponse(resp)
+				err = s.verifyProxyMedia(ctx, in, resolution, resp)
 			}
 			stage = "proxy_response"
 		} else {
-			resp, err = s.Catalog.CheckPlaybackURL(ctx, resolution, func(checkCtx context.Context) (*http.Response, error) {
-				return s.inspectMedia(checkCtx, in, resolution.Result.URL)
-			})
+			resp, err = s.checkMedia(ctx, resolution, in)
 			stage = "url_check"
 			if resolution.Cached {
 				stage = "cache_check"
@@ -492,11 +474,13 @@ func (s *Service) tryExactMediaCandidate(ctx context.Context, r *http.Request, i
 			resp.Body.Close()
 		}
 		out.err = err
+		if errors.Is(err, httpguard.ErrDecoderUnavailable) {
+			return out
+		}
 		if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
 			return out
 		}
-		if out.status != 0 || errors.Is(err, errInvalidMediaURL) || errors.Is(err, httpguard.ErrNonAudioResponse) {
-			out.rejected = append(out.rejected, resolution.Result.URL)
+		if !headersOnly(ctx) && (out.status != 0 || errors.Is(err, errInvalidMediaURL) || errors.Is(err, httpguard.ErrNonAudioResponse)) {
 			s.Catalog.InvalidatePlaybackURL(resolution)
 			if out.status != 416 {
 				s.Catalog.ReportPlaybackOutcome(resolution, in.Source(), false, out.headerMS)
@@ -559,8 +543,11 @@ func (s *Service) mediaAttemptEvent(ctx context.Context, r *http.Request, stage 
 	}
 	if stage == "url_check" || stage == "cache_check" || stage == "proxy_response" {
 		e.Validation = "failed"
-		if err == nil {
+		if err == nil && (status == http.StatusOK || status == http.StatusPartialContent) {
 			e.Validation = "validated"
+			if headersOnly(ctx) {
+				e.Validation = "headers_only"
+			}
 		} else if status == 0 && !errors.Is(err, errInvalidMediaURL) {
 			e.Validation = "unverified"
 		}

@@ -16,11 +16,12 @@ import (
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/js"
 	"lxsc/internal/mediastream"
+	"lxsc/internal/testaudio"
 )
 
 func attachMedia(t *testing.T, f *fixture) (*atomic.Int64, []byte) {
 	t.Helper()
-	body := []byte("synthetic-audio-for-range-test")
+	body := testaudio.WAV()
 	var sent atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/wav")
@@ -41,6 +42,7 @@ lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{name:'test',type:'music'
 		t.Fatal(err)
 	}
 	f.server.Catalog.Sources = sources
+	f.server.Catalog.AudioCheck = nil
 	f.server.Media = &mediastream.Service{Catalog: f.server.Catalog, Settings: f.server.Settings, Log: f.server.Catalog.Log, HTTP: client, Diagnostics: &diagnostics.Events{}}
 	return &sent, body
 }

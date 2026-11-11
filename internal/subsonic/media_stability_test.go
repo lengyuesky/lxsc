@@ -56,6 +56,9 @@ func newMediaStabilityServer(t *testing.T, script string) (*Server, *db.User, *m
 		t.Fatal(err)
 	}
 	catalog := music.NewCatalog(database, nil, sources, store, log)
+	// 既有协议测试只隔离头部/缓存/取消行为，不运行真实解码器。
+	// 音频内容回归会显式恢复默认验证器，并使用可解码的合成音频。
+	catalog.AudioCheck = func(context.Context, *http.Response) error { return nil }
 	info := music.FromMap(map[string]any{"source": "wy", "songmid": "temporary", "name": "临时歌曲", "types": []any{map[string]any{"type": "320k"}, map[string]any{"type": "flac"}}})
 	catalog.Cache([]*music.Info{info})
 	return &Server{DB: database, Catalog: catalog, Settings: store, Log: log, HTTP: client}, user, info

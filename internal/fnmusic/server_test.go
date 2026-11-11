@@ -69,6 +69,8 @@ func newFixture(t *testing.T) *fixture {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := music.NewCatalog(database, nil, nil, store, log)
+	// 协议夹具不以合成占位正文测试解码；真实内容由独立媒体回归验证。
+	catalog.AudioCheck = func(context.Context, *http.Response) error { return nil }
 	t.Cleanup(catalog.StopBoardWarm)
 	infos := []*music.Info{}
 	for _, key := range []string{"one", "two", "public"} {

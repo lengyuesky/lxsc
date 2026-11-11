@@ -187,7 +187,7 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 
 在线榜单的列表与详情共用持久化摘要，`changed` 仅随名称、简介、歌曲或顺序变化而更新，重启或快照过期不会把已知摘要退回一首。两个接口均返回 `Cache-Control: no-store`，但这不能主动清除播放器自己的离线缓存，旧客户端摘要仍需刷新一次。上游返回空榜单时优先继续使用有效完整旧快照；没有可用快照时，`getPlaylist` 返回 HTTP 503、`Retry-After: 2` 和协议失败，不再返回成功空歌单。用户自行创建的空歌单仍然正常返回。
 
-媒体接口支持带或不带 `.view` 的 `HEAD`，沿用普通播放器认证和音质。普通 302／代理模式在服务端用 `GET Range: bytes=0-0` 验证上游，响应头到达后立即关闭正文，并在本站返回 HTTP 200 媒体头；不会让客户端继续跳转后向只支持 GET 的音源发送 HEAD。206 探测响应的完整大小取自合法的 `Content-Range`，不把一字节探测长度当成文件大小；未知大小不编造。HEAD 不读取或转发正文、不占用整首音频传输额度，也不记为播放；仍受准备请求并发和期限限制。真实 GET/POST 继续遵循原播放方式，强制 302 模式的 HEAD 也保持重定向。
+媒体接口支持带或不带 `.view` 的 `HEAD`，沿用普通播放器认证和音质。普通 302／代理模式在服务端用有界 Range 请求读取最多 256 KiB 音频，并成功解码出 PCM 样本后关闭预检正文，并在本站返回 HTTP 200 媒体头；不会让客户端继续跳转后向只支持 GET 的音源发送 HEAD。206 探测响应的完整大小取自合法的 `Content-Range`，不把一字节探测长度当成文件大小；未知大小不编造。HEAD 不向客户端返回正文；服务端读取有界片段作实际解码验证，不占用整首音频传输额度，也不记为播放；仍受准备请求并发和期限限制。真实 GET/POST 继续遵循原播放方式，强制 302 模式的 HEAD 也保持重定向。
 
 HEAD 无法携带协议正文，失败时用 HTTP 400/401/403/404/429/502/503 表达参数、认证、权限、歌曲、限频或上游问题，协议码保留在 `client_response.protocolCode`。上游失败不能被包装成 HTTP 200 或未经验证的媒体头。其他 Subsonic 接口不新增 HEAD 操作。旧版仅注册 GET/POST，媒体 HEAD 会在进入诊断前返回 405；仅补上路由但继续向上游发 HEAD 或重定向，也可能出现“GET 能播放、HEAD 仍失败”，需要分别核对两条链路。
 
@@ -219,7 +219,8 @@ AI 应先比较真实 `client_response`：返回空或失败时，再对同一 I
 | `GET /inspect/logs` | inspect | 最近 300 条处理过的日志 |
 | `POST /inspect/logs` | inspect | 以 limit（1–1000）、level、contains 筛选日志 |
 | `POST /probe/protocol` | inspect + probe | 只读 Subsonic JSON/XML 协议、实际 HTTP/协议状态和最多 64 KiB 原始捕获预览；自由文本字段会进一步限长和处理 |
-| `POST /probe/playback` | inspect + probe | 真实播放准备流程、最终音源 ID/音质、缓存、媒体响应头和分阶段诊断 |
+| `POST /probe/playback` | inspect + probe | 只取响应头的播放路径预检；`validation=headers_only`，不表示音频可播放 |
+| `POST /probe/audio` | inspect + probe | 读取有界音频片段并实际解码；验证状态、最终音源/音质与媒体头，不返回音频正文 |
 | `POST /maintenance` | inspect + maintain | 缓存清理、已启用音源重载、运行设置更新 |
 
 以上路径均位于 `/api/debug`。GET 不接受 query，日志筛选使用 JSON POST，例如：
@@ -242,7 +243,9 @@ AI 应先比较真实 `client_response`：返回空或失败时，再对同一 I
 {"trackId":"tr-wy-123456","quality":"320k","method":"HEAD","userId":1}
 ```
 
-method 支持 HEAD/GET/POST，endpoint 默认为 stream，也可选择 download，proxy 为可选布尔值。它使用实际配置的网络路径、平台 UA/Referer 和已有刷新/换源逻辑；强制 302 仍禁止 proxy 覆盖。GET/POST 也只获取上游响应头后关闭，不转发整首音频、不持久化播放歌曲或收听统计。新探测只向全局事件写入 `protocol_probe` / `playback_probe` 汇总，详细阶段位于结果内部的独立缓冲，不混入真实 `client_response`。
+method 支持 HEAD/GET/POST，endpoint 默认为 stream，也可选择 download，proxy 为可选布尔值。它使用实际配置的网络路径、平台 UA/Referer 和已有刷新/换源逻辑；强制 302 仍禁止 proxy 覆盖。GET/POST 也只获取上游响应头后关闭，不转发整首音频、不持久化播放歌曲或收听统计。结果标记 `validation=headers_only`，不增加媒体成功评分，不能作为音频可播放的证据。新探测只向全局事件写入 `protocol_probe` / `playback_probe` 汇总，详细阶段位于结果内部的独立缓冲，不混入真实 `client_response`。
+
+实际内容验证使用独立的 `POST /api/debug/probe/audio`，要求 `probe + inspect`，请求字段与播放预检相同。它每个候选最多读取 256 KiB，并由 FFmpeg 成功解码后才标记 `validation=validated`。换源可能多次读取片段；接口更新验证缓存及音源评分，但不返回音频正文、不记录播放或收听统计。`invalid_audio` 表示片段为空、损坏或不能解码，`decoder_unavailable` 表示服务器缺少解码依赖。普通直链交付不因 QQ 或 HTTP 地址自动改为代理。细节见 [音频内容验证](audio-validation.md)。
 
 维护示例：
 

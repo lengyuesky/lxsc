@@ -48,8 +48,8 @@ func TestPlaybackDiagnosticsStatusZeroAndForceRedirect(t *testing.T) {
 			if !found || calls != 1 {
 				t.Fatal(found, calls)
 			}
-			if mode == "force_redirect" && w.Code != 302 {
-				t.Fatal("网络不确定不能阻止客户端直连", w.Code)
+			if w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), `"status":"failed"`) {
+				t.Fatal("未验证音频不能被包装为直连成功", w.Code)
 			}
 			raw, _ = json.Marshal(s.Diagnostics.List())
 			for _, secret := range []string{"SECRET", "PRIVATE", "https://", user.Name, info.Name()} {

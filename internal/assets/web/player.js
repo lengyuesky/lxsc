@@ -16,12 +16,16 @@
   }
 
   class PlayerController {
-    constructor({ audio, streamURL, onChange = () => {}, onFailure = () => {}, onLoad = () => {} }) {
+    constructor({ audio, streamURL, recoveryQualities = null, onChange = () => {}, onFailure = () => {}, onLoad = () => {} }) {
       this.audio = audio
       this.streamURL = streamURL
       this.onChange = onChange
       this.onFailure = onFailure
       this.onLoad = onLoad
+      this.recoveryQualities = recoveryQualities
+      this.recoveryQueue = []
+      this.recoveryQuality = ''
+      this.played = false
       this.queue = []
       this.repeat = 'off'
       this.shuffle = false
@@ -66,8 +70,13 @@
       this.listeners = []
     }
 
-    load({ autoplay = true, position = 0 } = {}) {
+    load({ autoplay = true, position = 0, recovering = false } = {}) {
       if (!this.track) return
+      if (!recovering) {
+        this.recoveryQueue = [...(this.recoveryQualities?.(this.track) || [])].slice(0, 2)
+        this.recoveryQuality = ''
+        this.played = position > 0
+      }
       delete this.track.nextRequested
       this.onLoad(this.track)
       const version = ++this.version
@@ -76,7 +85,7 @@
       this.status = autoplay ? 'loading' : 'paused'
       this.message = ''
       this.wantsPlay = autoplay
-      this.audio.src = this.streamURL(this.track)
+      this.audio.src = this.streamURL(this.track, { quality: this.recoveryQuality })
       const source = this.audio.src
       const current = () => version === this.version && this.audio.src === source && (!this.audio.currentSrc || this.audio.currentSrc === source)
       const bind = (event, action) => {
@@ -93,7 +102,7 @@
         this.wantsPlay = false; this.status = 'paused'; this.notify()
       })
       bind('waiting', () => { if (this.wantsPlay) { this.status = 'loading'; this.notify() } })
-      bind('timeupdate', () => this.notify())
+      bind('timeupdate', () => { if (this.audio.currentTime > 0) this.played = true; this.notify() })
       bind('loadedmetadata', () => { if (position > 0) { this.seek(position); position = 0 }; this.notify() })
       bind('durationchange', () => this.notify())
       bind('ended', () => {
@@ -137,6 +146,12 @@
 
     failed(version, message) {
       if (version !== this.version || this.status === 'error') return
+      // 只恢复尚未开始出声的首播；已经播放或主动暂停时不重新播放整首音频。
+      if (this.wantsPlay && !this.played && this.audio.currentTime === 0 && this.recoveryQueue.length) {
+        this.recoveryQuality = this.recoveryQueue.shift()
+        this.load({ autoplay: true, recovering: true })
+        return
+      }
       this.wantsPlay = false
       this.status = 'error'
       this.message = message
@@ -226,6 +241,9 @@
       this.shuffle = false
       this.index = -1
       this.status = 'idle'
+      this.recoveryQueue = []
+      this.recoveryQuality = ''
+      this.played = false
       this.message = ''
       this.notify()
     }

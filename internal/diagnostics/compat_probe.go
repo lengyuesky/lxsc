@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"lxsc/internal/httpguard"
 	"lxsc/internal/music"
 )
 
@@ -44,11 +45,13 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 			{"method": "POST", "path": "/api/debug/probe/lyrics", "body": map[string]string{"trackId": "tr-wy-123456"}},
 			{"method": "POST", "path": "/api/debug/probe/protocol", "requiredScopes": []string{"probe", "inspect"}, "body": map[string]any{"endpoint": "getPlaylists", "method": "GET", "format": "json", "params": map[string]string{}}},
 			{"method": "POST", "path": "/api/debug/probe/playback", "requiredScopes": []string{"probe", "inspect"}, "body": map[string]string{"trackId": "tr-wy-123456", "method": "HEAD", "quality": "320k"}},
+			{"method": "POST", "path": "/api/debug/probe/audio", "requiredScopes": []string{"probe", "inspect"}, "body": map[string]string{"trackId": "tr-wy-123456", "quality": "320k"}},
 		},
 		"inspect":           map[string]any{"requiredScope": "inspect", "endpoints": []string{"GET /api/debug/inspect/runtime", "GET /api/debug/inspect/performance", "GET /api/debug/inspect/settings", "GET /api/debug/inspect/sources", "GET /api/debug/inspect/logs", "POST /api/debug/inspect/logs"}, "logFilter": map[string]any{"limit": 300, "level": "WARN", "contains": ""}},
 		"maintenance":       map[string]any{"method": "POST", "path": "/api/debug/maintenance", "requiredScope": "maintain", "examples": []map[string]any{{"operation": "cache_clear", "target": "urls"}, {"operation": "source_reload", "sourceId": 1}, {"operation": "settings_update", "settings": map[string]string{"streamMode": "redirect"}}}},
 		"protocolEndpoints": s.ProtocolEndpoints,
-		"protocolProbe":     map[string]any{"methods": []string{"GET", "POST", "HEAD"}, "formats": []string{"json", "xml"}, "userId": "可选，管理员可模拟指定现有用户；省略时使用创建者", "credentials": "禁止传入 u/p/t/s/apiKey/Cookie/Authorization，禁止任何协议写入", "media": "HEAD/GET/POST 均只检查媒体响应头，不读取音频正文或记录播放"},
+		"protocolProbe":     map[string]any{"methods": []string{"GET", "POST", "HEAD"}, "formats": []string{"json", "xml"}, "userId": "可选，管理员可模拟指定现有用户；省略时使用创建者", "credentials": "禁止传入 u/p/t/s/apiKey/Cookie/Authorization，禁止任何协议写入", "media": "HEAD/GET/POST 均只检查媒体响应头，不读取音频正文或记录播放；validation=headers_only，不表示音频可播放，也不增加媒体成功评分"},
+		"audioValidation":   map[string]any{"path": "/api/debug/probe/audio", "requiredScopes": []string{"probe", "inspect"}, "sampleBytes": httpguard.AudioSampleLimit, "success": "validation=validated 表示服务器实际读取有界音频片段并成功解码出PCM；不是完整歌曲下载或客户端播放确认", "effects": "会读取少量音频并更新验证缓存及媒体评分；不转发音频正文、不记录播放", "decoder": "ffmpeg"},
 		"workflow":          []string{"确认 status.version 为预期部署版本", "请用户在箭头音乐中打开问题榜单、重试播放并打开歌曲歌词", "读取 events，对比 client、endpoint、method、format、result、count、lines 和 protocolCode；stream/download 的 HEAD 是客户端预检，不是播放，普通302/代理模式成功时应返回200媒体头，强制302除外", "HTTP 200/206 仍需检查 error；non_audio 表示上游返回了非音频类型，缺少媒体头不能证明音频有效", "仅在具备 probe 权限时，用用户指定或事件内的 boardId/trackId 进行针对性探测", "客户端请求记录和主动探测有不同 stage；主动探测成功不证明客户端显示或播放成功"},
 		"limits":            map[string]any{"events": eventLimit, "requestsPerMinute": scopeRate(requestScopes(r)), "concurrentProbes": 2, "requestTimeoutSeconds": int(scopeTimeout(requestScopes(r)).Seconds()), "logEntries": 1000, "protocolPreviewBytes": 65536},
 		"perspective":       "server_only", "clientLogin": false,

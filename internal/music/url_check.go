@@ -18,6 +18,7 @@ const (
 
 type urlCheckKey struct {
 	token cacheToken
+	audio bool
 }
 
 // 只保存媒体头，不保留上游请求、正文、Cookie 或重定向地址。
@@ -50,7 +51,16 @@ func urlCheckCacheTTL(urlTTL int) time.Duration {
 // HEAD 与随后播放共用媒体头；失败短暂保存为失败，新解析版本必须重新校验。
 // check 必须自行关闭响应体；返回值始终是独立副本，不能修改共享缓存。
 func (c *Catalog) CheckPlaybackURL(ctx context.Context, resolution URLResolution, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
-	result, err := c.urlChecks.load(ctx, urlCheckKey{resolution.token}, nil, URLCheckTimeout, func(ctx context.Context) (mediaHeaders, bool, error) {
+	return c.checkPlaybackURL(ctx, resolution, false, check)
+}
+
+// CheckPlaybackAudio 不把只取头诊断的缓存当作解码证据，即使解析版本相同。
+func (c *Catalog) CheckPlaybackAudio(ctx context.Context, resolution URLResolution, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
+	return c.checkPlaybackURL(ctx, resolution, true, check)
+}
+
+func (c *Catalog) checkPlaybackURL(ctx context.Context, resolution URLResolution, audio bool, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
+	result, err := c.urlChecks.load(ctx, urlCheckKey{token: resolution.token, audio: audio}, nil, URLCheckTimeout, func(ctx context.Context) (mediaHeaders, bool, error) {
 		checkCtx, cancel := context.WithTimeout(ctx, URLCheckTimeout-250*time.Millisecond)
 		response, err := check(checkCtx)
 		cancel()
@@ -85,6 +95,9 @@ func (c *Catalog) CheckPlaybackURL(ctx context.Context, resolution URLResolution
 		err = result.value.failure
 	}
 	if result.value.status == 0 {
+		if err == nil {
+			err = errMediaHeaderUnavailable
+		}
 		return nil, err
 	}
 	return &http.Response{StatusCode: result.value.status, Header: result.value.header.Clone(), Body: http.NoBody}, err

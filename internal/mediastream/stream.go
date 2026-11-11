@@ -3,9 +3,11 @@ package mediastream
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"lxsc/internal/admission"
@@ -93,7 +95,7 @@ func (s *Service) Serve(w http.ResponseWriter, r *http.Request, persistPlayback 
 	}
 	res, resp, err := s.Prepare(ctx, r, in, quality, proxy, headMetadata)
 	release()
-	// 预算只覆盖取得可用响应头之前的工作，不能截断已经开始的整首音频传输。
+	// 预算只覆盖音频准备与片段验证，不能截断已经开始的整首音频传输。
 	cancel()
 	if err != nil {
 		if event, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); event != nil {
@@ -118,6 +120,9 @@ func (s *Service) Serve(w http.ResponseWriter, r *http.Request, persistPlayback 
 	if headMetadata {
 		s.WriteHead(w, r, res, resp)
 		return
+	}
+	if event, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); event != nil && proxy {
+		event.Mode = "proxy"
 	}
 	persist := func() {
 		if !persistPlayback {
@@ -154,6 +159,9 @@ func (s *Service) MediaEvent(stage, id, platform, quality string, cached bool, s
 
 func (s *Service) mediaRequestEvent(r *http.Request, stage, id, platform, quality string, cached bool, status int, started time.Time, err error) {
 	e := diagnostics.Event{Stage: stage, TrackID: id, Platform: platform, Quality: quality, Mode: s.Settings.Get().StreamMode, Cached: cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds()}
+	if strings.HasPrefix(stage, "proxy_") {
+		e.Mode = "proxy"
+	}
 	if parent, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); parent != nil {
 		e.RequestID = parent.RequestID
 	}
@@ -182,7 +190,8 @@ func expiredMediaStatus(status int) bool {
 	return status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusGone
 }
 
-// inspectMedia 在响应头到达后立即关闭正文，保留真实媒体头供 HEAD 预检使用。
+// inspectMedia 验证有界音频片段后关闭正文，保留真实媒体头供 HEAD/直连使用。
+// 授权的只取头调试沿用最小 Range，并明确不作可播放验证。
 func (s *Service) inspectMedia(ctx context.Context, in *music.Info, address string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
@@ -193,7 +202,11 @@ func (s *Service) inspectMedia(ctx context.Context, in *music.Info, address stri
 	if ref != "" {
 		req.Header.Set("Referer", ref)
 	}
-	req.Header.Set("Range", "bytes=0-0")
+	if headersOnly(ctx) || s.Catalog.AudioCheck != nil {
+		req.Header.Set("Range", "bytes=0-0")
+	} else {
+		req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", httpguard.AudioSampleLimit-1))
+	}
 	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
@@ -202,9 +215,56 @@ func (s *Service) inspectMedia(ctx context.Context, in *music.Info, address stri
 		}
 		return nil, err
 	}
+	err = s.verifyMedia(ctx, resp)
 	_ = resp.Body.Close()
 	resp.Body = http.NoBody
-	return resp, httpguard.CheckMediaResponse(resp)
+	return resp, err
+}
+
+func (s *Service) verifyMedia(ctx context.Context, response *http.Response) error {
+	if err := httpguard.CheckMediaResponse(response); err != nil {
+		return err
+	}
+	if headersOnly(ctx) {
+		return nil
+	}
+	if s.Catalog.AudioCheck != nil {
+		return s.Catalog.AudioCheck(ctx, response)
+	}
+	return httpguard.VerifyAudio(ctx, response)
+}
+
+func (s *Service) checkMedia(ctx context.Context, resolution music.URLResolution, in *music.Info) (*http.Response, error) {
+	headerOnly := headersOnly(ctx)
+	check := func(checkCtx context.Context) (*http.Response, error) {
+		// 共享缓存工作有独立取消上下文，显式保留本次验证契约。
+		if headerOnly {
+			checkCtx = HeaderProbe(checkCtx)
+		}
+		return s.inspectMedia(checkCtx, in, resolution.Result.URL)
+	}
+	if headerOnly {
+		return s.Catalog.CheckPlaybackURL(ctx, resolution, check)
+	}
+	return s.Catalog.CheckPlaybackAudio(ctx, resolution, check)
+}
+
+func (s *Service) verifyProxyMedia(ctx context.Context, in *music.Info, resolution music.URLResolution, response *http.Response) error {
+	if headersOnly(ctx) || s.Catalog.AudioCheck != nil || httpguard.MediaStartsAtZero(response) || (response.StatusCode != 200 && response.StatusCode != 206) {
+		return s.verifyMedia(ctx, response)
+	}
+	// 拖动得到的片段不含文件头，先校验同版本音频起始片段，不能把中间字节误判成坏文件。
+	checked, err := s.checkMedia(ctx, resolution, in)
+	if err != nil {
+		return err
+	}
+	if checked == nil {
+		return httpguard.ErrInvalidAudio
+	}
+	if contentType := checked.Header.Get("Content-Type"); contentType != "" {
+		response.Header.Set("Content-Type", contentType)
+	}
+	return httpguard.VerifyMediaReadable(ctx, response)
 }
 
 // openMedia 取得响应头后解除恢复预算，但始终保留父请求取消和正文关闭的生命周期。
@@ -279,7 +339,8 @@ func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, in *music.
 		return false
 	}
 	copyStarted := time.Now()
-	_, err := httpguard.CopyIdle(w, resp.Body, 30*time.Second)
+	upstream := &mediaReadStatus{ReadCloser: resp.Body}
+	_, err := httpguard.CopyIdle(w, upstream, 30*time.Second)
 	s.mediaRequestEvent(r, "proxy_copy", in.TrackID(), in.Source(), resolution.Result.Quality, resolution.Cached, resp.StatusCode, copyStarted, err)
 	if err != nil || r.Context().Err() != nil {
 		if event, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); event != nil {
@@ -289,6 +350,10 @@ func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, in *music.
 			}
 			event.Error = diagnostics.ErrorCode(err)
 		}
+		if err != nil && upstream.failed.Load() && r.Context().Err() == nil && s.Catalog != nil {
+			s.Catalog.InvalidatePlaybackURL(resolution)
+			s.Catalog.ReportPlaybackOutcome(resolution, in.Source(), false, time.Since(copyStarted).Milliseconds())
+		}
 		s.Log.Info("代理传输中断", "id", in.TrackID())
 		return false
 	}
@@ -297,4 +362,18 @@ func (s *Service) ProxyStream(w http.ResponseWriter, r *http.Request, in *music.
 	}
 	s.Log.Info("播放", "user", currentUser(r).Name, "song", in.Name(), "singer", in.Singer(), "source", in.Source(), "quality", resolution.Result.Quality, "via", resolution.Result.Source)
 	return true
+}
+
+// 下游写出失败不应降低音源评分；只记录上游音频读取的明确错误。
+type mediaReadStatus struct {
+	io.ReadCloser
+	failed atomic.Bool
+}
+
+func (r *mediaReadStatus) Read(data []byte) (int, error) {
+	n, err := r.ReadCloser.Read(data)
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.failed.Store(true)
+	}
+	return n, err
 }

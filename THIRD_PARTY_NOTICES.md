@@ -66,11 +66,11 @@ CGO_ENABLED=0 go build -trimpath -o lxsc ./cmd/lxsc
 
 ## Alpine 基础镜像
 
-Docker 运行层使用 `alpine:3.24`，另安装 `ca-certificates` 和 `tzdata`。根据 [Alpine 官方支持周期](https://alpinelinux.org/releases/)（2026-09-06 核对），原 3.20 已于 2026-04-01 结束常规支持，3.24 的 main 软件源支持至 2028-06-01；本次只更新待发布镜像，不自动改变已有部署。这些系统组件不是 lxsc 原创代码，也不统一适用本项目 Apache 授权。每个实际镜像将 `/lib/apk/db/installed` 的原始包记录完整复制到 `/usr/share/licenses/lxsc/ALPINE_PACKAGES.txt`；其中 `P:` / `V:` / `L:` / `o:` / `c:` 分别是包名、版本、许可证、源码包名与 aports 配方提交。
+Docker 运行层使用 `alpine:3.24`，另安装 `ca-certificates`、`tzdata` 和用于音频验证的 `ffmpeg`。根据 [Alpine 官方支持周期](https://alpinelinux.org/releases/)（2026-09-06 核对），原 3.20 已于 2026-04-01 结束常规支持，3.24 的 main 软件源支持至 2028-06-01；本次只更新待发布镜像，不自动改变已有部署。这些系统组件不是 lxsc 原创代码，也不统一适用本项目 Apache 授权。每个实际镜像将 `/lib/apk/db/installed` 的原始包记录完整复制到 `/usr/share/licenses/lxsc/ALPINE_PACKAGES.txt`；其中 `P:` / `V:` / `L:` / `o:` / `c:` 分别是包名、版本、许可证、源码包名与 aports 配方提交。
 
 [alpine/](licenses/alpine/) 补充保存 GPL-2.0 全文，以及首次核对的 OpenSSL 3.5.7、musl 1.2.6、zlib 1.3.2 的许可/版权原文；MPL-2.0 全文另见 [golang-lru 的许可副本](licenses/go/github.com/hashicorp/golang-lru/v2@v2.0.7/LICENSE)。这些副本不改变系统组件各自的许可，基础包升级后应依据实际包记录重新检查。
 
-Alpine 的源码、包配方及各包许可须按实际版本另行查阅：[Alpine 包数据库](https://pkgs.alpinelinux.org/packages?branch=v3.24)、[v3.24 软件源](https://dl-cdn.alpinelinux.org/alpine/v3.24/)、[源码镜像](https://distfiles.alpinelinux.org/distfiles/)、[aports](https://gitlab.alpinelinux.org/alpine/aports)。使用包记录中的 `c:` 提交及 `o:` 源码包名，可在 `https://github.com/alpinelinux/aports/tree/<提交>/main/<源码包名>` 定位对应配方、补丁及源码下载与校验信息。本目录的应用许可归档不声称替代对 BusyBox、musl、证书、时区数据等基础系统组件的独立义务；再次分发完整镜像时也须保留和满足这些组件的许可及源码提供要求。
+Alpine 的源码、包配方及各包许可须按实际版本另行查阅：[Alpine 包数据库](https://pkgs.alpinelinux.org/packages?branch=v3.24)、[v3.24 软件源](https://dl-cdn.alpinelinux.org/alpine/v3.24/)、[源码镜像](https://distfiles.alpinelinux.org/distfiles/)、[aports](https://gitlab.alpinelinux.org/alpine/aports)。使用包记录中的 `c:` 提交及 `o:` 源码包名，可在 `https://github.com/alpinelinux/aports/tree/<提交>/main/<源码包名>` 或 `community/<源码包名>` 定位对应配方、补丁及源码下载与校验信息。FFmpeg 与其系统依赖按实际构建配置和 APK 记录适用各自的许可；不能由本项目 Apache 授权覆盖。本目录的应用许可归档不声称替代对 BusyBox、musl、证书、时区数据等基础系统组件的独立义务；再次分发完整镜像时也须保留和满足这些组件的许可及源码提供要求。
 
 ## 更新与检查
 

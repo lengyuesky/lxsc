@@ -43,6 +43,18 @@ const (
 
 type userKey struct{}
 type clientEventKey struct{}
+type headerProbeKey struct{}
+
+// HeaderProbe 仅供经过授权的调试入口使用；不会读取音频、发布验证缓存或增加媒体成功评分。
+// 普通播放器不能用查询参数选择这个模式。
+func HeaderProbe(ctx context.Context) context.Context {
+	return context.WithValue(ctx, headerProbeKey{}, true)
+}
+
+func headersOnly(ctx context.Context) bool {
+	value, _ := ctx.Value(headerProbeKey{}).(bool)
+	return value
+}
 
 // Bind 只供已认证的协议入口使用，共享原请求取消及诊断生命周期。
 func Bind(r *http.Request, user *db.User, event *diagnostics.Event) *http.Request {
