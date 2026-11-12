@@ -17,12 +17,14 @@ import (
 
 type userKey struct{}
 type sessionKey struct{}
+type playbackSessionKey struct{}
 
 type session struct {
-	userID   int64
-	password [32]byte
-	expires  time.Time
-	created  time.Time
+	userID     int64
+	password   [32]byte
+	expires    time.Time
+	created    time.Time
+	playbackID string
 }
 
 type sessionStore struct {
@@ -70,7 +72,7 @@ func (s *sessionStore) start(u *db.User, now time.Time) (string, error) {
 		}
 	}
 	s.entries[sha256.Sum256([]byte(token))] = session{
-		userID: u.ID, password: sha256.Sum256([]byte(u.PasswordEnc)), created: now, expires: now.Add(7 * 24 * time.Hour),
+		userID: u.ID, password: sha256.Sum256([]byte(u.PasswordEnc)), created: now, expires: now.Add(7 * 24 * time.Hour), playbackID: rand.Text(),
 	}
 	return token, nil
 }
@@ -164,17 +166,26 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		token, ok := requestToken(r)
 		entry, valid := s.sessions.get(token, time.Now())
 		if !ok || !valid {
+			if binaryDownload(r) {
+				downloadFailure(w, r, http.StatusUnauthorized)
+				return
+			}
 			failure(w, http.StatusUnauthorized, "INVALID TOKEN")
 			return
 		}
 		u, err := s.DB.GetUserByID(r.Context(), entry.userID)
 		if err != nil || entry.password != sha256.Sum256([]byte(u.PasswordEnc)) {
 			s.sessions.end(token)
+			if binaryDownload(r) {
+				downloadFailure(w, r, http.StatusUnauthorized)
+				return
+			}
 			failure(w, http.StatusUnauthorized, "INVALID TOKEN")
 			return
 		}
 		ctx := context.WithValue(r.Context(), userKey{}, u)
 		ctx = context.WithValue(ctx, sessionKey{}, sha256.Sum256([]byte(token)))
+		ctx = context.WithValue(ctx, playbackSessionKey{}, entry.playbackID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

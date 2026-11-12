@@ -24,7 +24,7 @@ function formatSongTime(seconds) {
 
 const webPlayer = new LXSCMusic.PlayerController({
   audio: $('#webAudio'),
-  streamURL: (track, recovery) => '/api/app/stream?' + new URLSearchParams({ id: track.id, quality: recovery?.quality || sessionState.me?.quality || '320k' }),
+  streamURL: (track, recovery) => '/api/app/stream?' + new URLSearchParams({ id: track.id, quality: recovery?.quality || sessionState.me?.quality || '320k', playbackId: recovery.playbackId }),
   recoveryQualities: () => {
     const quality = sessionState.me?.quality || '320k'
     return quality === '128k' ? [] : quality === '320k' ? ['128k'] : ['320k', '128k']

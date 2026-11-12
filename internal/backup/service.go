@@ -82,6 +82,8 @@ type Service struct {
 	Version string
 	HTTP    *http.Client
 	Log     *slog.Logger
+	// BeforeSnapshot 在调度器启动前设置，将尚待合并的派生状态写入同一数据库。
+	BeforeSnapshot func(context.Context) error
 
 	mu        sync.Mutex
 	busy      bool

@@ -33,6 +33,20 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
+test('自动降质保留播放关联标识，手动重播与单曲循环创建新标识', () => {
+  let sequence = 0
+  const calls = []
+  const f = fixture({ createPlaybackID: () => 'playback-' + (++sequence), recoveryQualities: () => ['128k'], streamURL: (track, options) => { calls.push(options); return '/stream?quality=' + options.quality + '&playbackId=' + options.playbackId } })
+  f.player.playList(songs(), 0)
+  f.audio.fail()
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].playbackId, calls[1].playbackId)
+  f.player.playAt(0)
+  assert.notEqual(calls[2].playbackId, calls[1].playbackId)
+  f.player.setRepeat('one'); f.audio.end()
+  assert.notEqual(calls[3].playbackId, calls[2].playbackId)
+})
+
 test('列表快照保留重复项并跳过不可用条目，不受后续搜索或编辑影响', () => {
   const { player, audio } = fixture()
   const list = songs()

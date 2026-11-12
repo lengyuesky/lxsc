@@ -52,7 +52,7 @@ func TestBodyLimitAndMediaBudget(t *testing.T) {
 			t.Error("正文大小未限制", err)
 		}
 	}), w, r, ioBudget{read: time.Second, write: time.Second, total: time.Second, body: 2})
-	for _, path := range []string{"/rest/stream.view", "/rest/download", "/api/app/stream", "/music/api/v1/track/stream?guid=track", "/music/api/v1/track/stream/track"} {
+	for _, path := range []string{"/rest/stream.view", "/rest/download", "/api/app/stream", "/music/api/v1/track/stream?guid=track", "/music/api/v1/track/stream/track", "/music/api/v1/download/track?guid=track"} {
 		if requestBudget(httptest.NewRequest("GET", path, nil)).total != 0 {
 			t.Fatal("正常音频不能受普通请求总期限截断")
 		}
@@ -60,7 +60,7 @@ func TestBodyLimitAndMediaBudget(t *testing.T) {
 }
 
 func TestMusicStreamHasNoOrdinaryTotalDeadline(t *testing.T) {
-	for _, path := range []string{"/music/api/v1/track/stream", "/music/api/v1/track/stream/track"} {
+	for _, path := range []string{"/music/api/v1/track/stream", "/music/api/v1/track/stream/track", "/music/api/v1/download/track"} {
 		t.Run(path, func(t *testing.T) {
 			for _, method := range []string{http.MethodGet, http.MethodHead} {
 				request := httptest.NewRequest(method, path, nil)

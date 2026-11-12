@@ -68,7 +68,7 @@ type scheduleSample struct {
 	ms     int64 // <0 表示没有延迟样本（如媒体反馈），不进延迟平均
 }
 
-// sourceScheduleState 每个音源×平台×动作的调度状态；内存态，重启重置。
+// sourceScheduleState 每个音源×平台×动作的调度状态，持久化时保留原始样本时间。
 type sourceScheduleState struct {
 	samples  [scheduleSampleWindow]scheduleSample
 	next     int
@@ -80,11 +80,14 @@ type sourceScheduleState struct {
 // sourceScheduler 按运行表现为音源排序：滑动窗口评分 + 指数退避冷却。
 // 冷却中的音源排最后但不删除，全部源冷却时仍可兜底；到期后回到正常排序层自然获得探测机会。
 type sourceScheduler struct {
-	mu         sync.Mutex
-	states     map[scheduleKey]*sourceScheduleState
-	now        func() time.Time
-	probes     map[scheduleKey]*scheduleProbe
-	retryUntil map[scheduleKey]time.Time
+	mu           sync.Mutex
+	states       map[scheduleKey]*sourceScheduleState
+	now          func() time.Time
+	probes       map[scheduleKey]*scheduleProbe
+	retryUntil   map[scheduleKey]time.Time
+	fingerprints map[int64]string
+	dirty        map[int64]bool
+	persistence  *schedulePersistence
 }
 
 type scheduleProbe struct {
@@ -93,7 +96,7 @@ type scheduleProbe struct {
 }
 
 func newSourceScheduler() *sourceScheduler {
-	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, probes: map[scheduleKey]*scheduleProbe{}, retryUntil: map[scheduleKey]time.Time{}, now: time.Now}
+	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, probes: map[scheduleKey]*scheduleProbe{}, retryUntil: map[scheduleKey]time.Time{}, fingerprints: map[int64]string{}, dirty: map[int64]bool{}, now: time.Now}
 }
 
 func (g *sourceScheduler) canCall(id int64, platform string) bool {
@@ -103,14 +106,18 @@ func (g *sourceScheduler) canCall(id int64, platform string) bool {
 }
 
 // BackoffMusicURL 尊重受控的 Retry-After；不通过错误字符串猜测限流。
-func (m *SourceManager) BackoffMusicURL(id int64, platform string, delay time.Duration) {
+func (m *SourceManager) BackoffMusicURL(id int64, platform string, delay time.Duration, fingerprint ...string) {
 	g := m.schedule
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if len(fingerprint) != 0 && fingerprint[0] != "" && fingerprint[0] != g.fingerprints[id] {
+		return
+	}
 	key := scheduleKey{id, platform, "musicUrl"}
 	until := g.now().Add(min(5*time.Minute, max(time.Second, delay)))
 	if until.After(g.retryUntil[key]) {
 		g.retryUntil[key] = until
+		g.changed(id)
 	}
 }
 
@@ -157,14 +164,18 @@ func (g *sourceScheduler) stateOf(key scheduleKey) *sourceScheduleState {
 }
 
 // record 记录一次调用结果；ignore 完全无痕。
-func (g *sourceScheduler) record(id int64, platform, action string, outcome scheduleOutcome, downgrade bool, ms int64) {
+func (g *sourceScheduler) record(id int64, platform, action string, outcome scheduleOutcome, downgrade bool, ms int64, fingerprint ...string) {
 	if outcome == scheduleIgnore {
 		return
 	}
 	now := g.now()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if len(fingerprint) != 0 && fingerprint[0] != "" && fingerprint[0] != g.fingerprints[id] {
+		return
+	}
 	s := g.stateOf(scheduleKey{id, platform, action})
+	g.prune(scheduleKey{id, platform, action}, s, now)
 	sample := scheduleSample{at: now, ms: ms}
 	switch outcome {
 	case scheduleSuccess:
@@ -192,6 +203,7 @@ func (g *sourceScheduler) record(id int64, platform, action string, outcome sche
 	}
 	s.samples[s.next] = sample
 	s.next = (s.next + 1) % len(s.samples)
+	g.changed(id)
 }
 
 // rank 返回评分与冷却状态：score = 窗口内平均权重 - 成功延迟惩罚（平均每慢 1 秒扣 0.1，封顶 0.25）。
@@ -204,6 +216,7 @@ func (g *sourceScheduler) rank(id int64, platform, action string) (float64, bool
 	if s == nil {
 		return 0, false
 	}
+	g.prune(scheduleKey{id, platform, action}, s, now)
 	var sum, succSum float64
 	var succCount int
 	count := 0
@@ -232,6 +245,12 @@ func (g *sourceScheduler) rank(id int64, platform, action string) (float64, bool
 func (g *sourceScheduler) forget(id int64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.forgetLocked(id)
+	delete(g.fingerprints, id)
+	g.changed(id)
+}
+
+func (g *sourceScheduler) forgetLocked(id int64) {
 	for key := range g.states {
 		if key.sourceID == id {
 			delete(g.states, key)
@@ -259,6 +278,10 @@ func (m *SourceManager) ForgetSchedule(id int64) {
 // ReportMediaOutcome 媒体校验结果反馈，只携带身份与结论，不携带地址或错误原文。
 // 播放层在响应头校验成功或明确拒绝时调用；网络不确定不反馈。
 func (m *SourceManager) ReportMediaOutcome(sourceID int64, platform string, ok bool, latencyMS ...int64) {
+	m.ReportMediaForScript(sourceID, platform, "", ok, latencyMS...)
+}
+
+func (m *SourceManager) ReportMediaForScript(sourceID int64, platform, fingerprint string, ok bool, latencyMS ...int64) {
 	if m == nil || m.schedule == nil || sourceID <= 0 || platform == "" {
 		return
 	}
@@ -270,7 +293,7 @@ func (m *SourceManager) ReportMediaOutcome(sourceID int64, platform string, ok b
 	if len(latencyMS) > 0 {
 		ms = latencyMS[0]
 	}
-	m.schedule.record(sourceID, platform, "media", outcome, false, ms)
+	m.schedule.record(sourceID, platform, "media", outcome, false, ms, fingerprint)
 }
 
 // ScheduleStatus 仅用于完整诊断，取链和有效媒体样本分开列出。
@@ -299,6 +322,7 @@ func (m *SourceManager) ScheduleSnapshot(id int64) []ScheduleStatus {
 		if key.sourceID != id {
 			continue
 		}
+		g.prune(key, state, now)
 		item := ScheduleStatus{Platform: key.platform, Action: key.action, ConsecutiveFailures: state.consec, CoolingUntil: state.cooldown, RetryUntil: g.retryUntil[scheduleKey{id, key.platform, "musicUrl"}]}
 		var times []int64
 		var sum float64

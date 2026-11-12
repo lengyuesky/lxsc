@@ -19,6 +19,7 @@ import (
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/metrics"
+	"lxsc/internal/playback"
 	"lxsc/internal/settings"
 )
 
@@ -32,6 +33,7 @@ type Catalog struct {
 	Sources       *js.SourceManager
 	Settings      *settings.Store
 	Log           *slog.Logger
+	Playback      *playback.Recorder
 	// AudioCheck 仅供隔离协议夹具注入；生产使用 httpguard.VerifyAudio。
 	// 客户端请求与运行设置不能关闭内容验证。
 	AudioCheck func(context.Context, *http.Response) error
@@ -90,7 +92,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		RequestLimits: admission.New(16, 32, 4, 4),
 		MediaLimits:   admission.New(32, 0, 4, 0),
 		workLimits:    admission.New(32, 64, 0, 0),
-		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log,
+		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log, Playback: playback.New(d, log),
 		tracks:            lru.NewLRU[string, *Info](5000, nil, time.Hour),
 		albums:            lru.NewLRU[string, []*Info](2000, nil, time.Hour),
 		artists:           lru.NewLRU[string, string](2000, nil, time.Hour),
@@ -349,8 +351,11 @@ type URLResolution struct {
 	Result    js.MusicURLResult
 	Cached    bool
 	Validated bool
-	key       urlKey
-	token     cacheToken
+	// Platform/TrackID 是服务端最终选择的取链平台与曲目，不能推断脚本内部的上游。
+	Platform string
+	TrackID  string
+	key      urlKey
+	token    cacheToken
 }
 
 // ResolveURL 保留已有取链接口。
@@ -448,13 +453,16 @@ func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, quality stri
 		}
 		return *value, true, nil
 	})
-	return URLResolution{Result: r.value, Cached: r.cached, key: key, token: r.token}, err
+	return URLResolution{Result: r.value, Cached: r.cached, Platform: in.Source(), TrackID: in.TrackID(), key: key, token: r.token}, err
 }
 
 // ReportPlaybackOutcome 每个解析版本只反馈一次；迟到的成功不能覆盖该版本的明确失败。
 func (c *Catalog) ReportPlaybackOutcome(resolution URLResolution, platform string, ok bool, latencyMS ...int64) {
 	if c.Sources == nil || resolution.Result.SourceID <= 0 {
 		return
+	}
+	if resolution.Platform != "" {
+		platform = resolution.Platform
 	}
 	key := urlCheckKey{token: resolution.token}
 	c.mediaFeedbackMu.Lock()
@@ -468,7 +476,7 @@ func (c *Catalog) ReportPlaybackOutcome(resolution URLResolution, platform strin
 		c.mediaFeedbackNext = (c.mediaFeedbackNext + 1) % len(c.mediaFeedbackOrder)
 	}
 	c.mediaFeedback[key] = ok
-	c.Sources.ReportMediaOutcome(resolution.Result.SourceID, platform, ok, latencyMS...)
+	c.Sources.ReportMediaForScript(resolution.Result.SourceID, platform, resolution.Result.ScriptFingerprint, ok, latencyMS...)
 }
 
 // CachedPlaybackURL 保持已缓存链接优先条件刷新的行为。
@@ -480,7 +488,7 @@ func (c *Catalog) CachedPlaybackURL(in *Info, quality string) (URLResolution, bo
 	if !ok || c.urls.ttl == 0 || (!entry.expires.IsZero() && !c.urls.now().Before(entry.expires)) {
 		return URLResolution{}, false
 	}
-	return URLResolution{Result: entry.result.value, Cached: true, key: key, token: entry.result.token}, true
+	return URLResolution{Result: entry.result.value, Cached: true, Platform: in.Source(), TrackID: in.TrackID(), key: key, token: entry.result.token}, true
 }
 
 // PublishPlaybackURL 在竞争结束后发布胜出的有效媒体；旧配置代次只交付当前请求。

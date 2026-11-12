@@ -46,7 +46,7 @@ func (s *Server) listeningProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-func (s *Server) listeningStats(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listeningScope(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	user := currentUser(r)
 	userID := user.ID
 	scope := r.URL.Query().Get("scope")
@@ -54,28 +54,36 @@ func (s *Server) listeningStats(w http.ResponseWriter, r *http.Request) {
 	case "", "me":
 		if r.URL.Query().Get("userId") != "" {
 			fail(w, 400, "个人统计不能指定其他用户")
-			return
+			return 0, false
 		}
 	case "all", "user":
 		if !user.IsAdmin {
 			fail(w, 403, "仅管理员可查看其他用户或全站统计")
-			return
+			return 0, false
 		}
 		userID = 0
 		if scope == "user" {
 			id, err := strconv.ParseInt(r.URL.Query().Get("userId"), 10, 64)
 			if err != nil || id <= 0 {
 				fail(w, 400, "用户编号无效")
-				return
+				return 0, false
 			}
 			if _, err = s.DB.GetUserByID(r.Context(), id); err != nil {
 				fail(w, 404, "用户不存在")
-				return
+				return 0, false
 			}
 			userID = id
 		}
 	default:
 		fail(w, 400, "统计范围无效")
+		return 0, false
+	}
+	return userID, true
+}
+
+func (s *Server) listeningStats(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.listeningScope(w, r)
+	if !ok {
 		return
 	}
 	days := 30

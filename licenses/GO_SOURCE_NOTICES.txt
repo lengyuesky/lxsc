@@ -282,6 +282,8 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/hash/hash.go
 - go-stdlib/src/image/draw/draw.go
 - go-stdlib/src/image/image.go
+- go-stdlib/src/image/jpeg/huffman.go
+- go-stdlib/src/image/jpeg/reader.go
 - go-stdlib/src/image/png/reader.go
 - go-stdlib/src/image/png/writer.go
 - go-stdlib/src/internal/poll/fd_posix.go
@@ -541,6 +543,7 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/crypto/x509/root.go
 - go-stdlib/src/crypto/x509/sec1.go
 - go-stdlib/src/go/ast/commentmap.go
+- go-stdlib/src/image/jpeg/scan.go
 - go-stdlib/src/image/png/paeth.go
 - go-stdlib/src/math/floor_amd64.s
 - go-stdlib/src/mime/quotedprintable/reader.go
@@ -1150,6 +1153,7 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/hash/crc32/crc32_generic.go
 - go-stdlib/src/image/color/color.go
 - go-stdlib/src/image/color/ycbcr.go
+- go-stdlib/src/image/jpeg/writer.go
 - go-stdlib/src/image/ycbcr.go
 - go-stdlib/src/internal/poll/sockopt_linux.go
 - go-stdlib/src/internal/poll/sockoptip.go
@@ -1397,6 +1401,7 @@ See LICENSE_V8 for the original copyright message and disclaimer.
 - go-stdlib/src/go/ast/directive.go
 - go-stdlib/src/go/token/tree.go
 - go-stdlib/src/hash/maphash/hasher.go
+- go-stdlib/src/image/jpeg/dct.go
 - go-stdlib/src/internal/abi/bounds.go
 - go-stdlib/src/internal/cpu/cpu_x86_other.go
 - go-stdlib/src/internal/cpu/datacache_unsupported.go

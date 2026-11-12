@@ -79,7 +79,7 @@ func (b *Events) Add(e Event) {
 	if b == nil {
 		return
 	}
-	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe", "audio_probe")
+	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "cross_source", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe", "audio_probe")
 	if e.Stage == "" {
 		return
 	}
@@ -89,7 +89,7 @@ func (b *Events) Add(e Event) {
 	if !requestPattern.MatchString(e.RequestID) {
 		e.RequestID = ""
 	}
-	e.Endpoint = oneOf(e.Endpoint, "ping", "getLicense", "getOpenSubsonicExtensions", "getUser", "getUsers", "getScanStatus", "getMusicFolders", "getIndexes", "getArtists", "getMusicDirectory", "getGenres", "getArtist", "getArtistInfo", "getArtistInfo2", "getAlbum", "getAlbumInfo", "getAlbumInfo2", "getSong", "getTopSongs", "getSimilarSongs", "getSimilarSongs2", "getAlbumList", "getAlbumList2", "getRandomSongs", "getSongsByGenre", "getNowPlaying", "getStarred", "getStarred2", "search", "search2", "search3", "getPlaylists", "getPlaylist", "getLyrics", "getLyricsBySongId", "getPlayQueue", "getBookmarks", "getInternetRadioStations", "getPodcasts", "getNewestPodcasts", "getShares", "getVideos", "getCoverArt", "getSongLists", "stream", "download")
+	e.Endpoint = oneOf(e.Endpoint, "ping", "getLicense", "getOpenSubsonicExtensions", "getUser", "getUsers", "getScanStatus", "getMusicFolders", "getIndexes", "getArtists", "getMusicDirectory", "getGenres", "getArtist", "getArtistInfo", "getArtistInfo2", "getAlbum", "getAlbumInfo", "getAlbumInfo2", "getSong", "getTopSongs", "getSimilarSongs", "getSimilarSongs2", "getAlbumList", "getAlbumList2", "getRandomSongs", "getSongsByGenre", "getNowPlaying", "getStarred", "getStarred2", "search", "search2", "search3", "getPlaylists", "getPlaylist", "getLyrics", "getLyricsBySongId", "getPlayQueue", "getBookmarks", "getInternetRadioStations", "getPodcasts", "getNewestPodcasts", "getShares", "getVideos", "getCoverArt", "getSongLists", "stream", "download", "createPlaylist", "updatePlaylist", "deletePlaylist", "star", "unstar")
 	e.Method = oneOf(e.Method, "GET", "POST", "HEAD")
 	e.Client = oneOf(e.Client, "amcfy", "stream_music", "fnmusic", "other", "unknown")
 	e.Format = oneOf(e.Format, "json", "xml", "jsonp", "binary")

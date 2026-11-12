@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"lxsc/internal/diagnostics"
+	"lxsc/internal/playback"
 )
 
 // APIVersion 声明的协议版本
@@ -86,6 +87,7 @@ func writeErr(w http.ResponseWriter, r *http.Request, code int, msg string) {
 	if retry != "" {
 		w.Header().Set("Retry-After", retry)
 	}
+	playback.FromContext(r.Context()).Response(status)
 	if r.Method == http.MethodHead {
 		w.Header().Set("Cache-Control", "no-store")
 	}

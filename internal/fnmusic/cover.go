@@ -54,6 +54,9 @@ func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
 	defer finish()
 	w, finishResponse := diagnostics.CaptureResponse(w, r, event)
 	defer finishResponse()
+	if s.uploadedCover(w, r, event) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), coverart.RequestTimeout)
 	defer cancel()
 	r = r.WithContext(ctx)

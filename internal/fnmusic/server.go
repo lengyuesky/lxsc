@@ -23,6 +23,7 @@ import (
 	"lxsc/internal/httpguard"
 	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
+	"lxsc/internal/playback"
 	"lxsc/internal/settings"
 	"lxsc/internal/webauth"
 )
@@ -39,10 +40,12 @@ type Server struct {
 	Media       *mediastream.Service
 	Covers      *coverart.Service
 	Diagnostics *diagnostics.Events
+	Playback    *playback.Recorder
 
-	sessions sessionStore
-	searches searchStore
-	limits   authlimit.Limiter
+	sessions  sessionStore
+	searches  searchStore
+	downloads downloadResumeStore
+	limits    authlimit.Limiter
 }
 
 const compatibilityVersion = "0.1.0"
@@ -60,7 +63,11 @@ func New(ctx context.Context, database *db.DB, catalog *music.Catalog, settings 
 			return nil, err
 		}
 	}
-	return &Server{DB: database, Catalog: catalog, Settings: settings, Auth: auth, Version: version, GUID: guid, Covers: &coverart.Service{}}, nil
+	recorder := playback.New(database, nil)
+	if catalog != nil {
+		recorder = catalog.Playback
+	}
+	return &Server{DB: database, Catalog: catalog, Settings: settings, Auth: auth, Version: version, GUID: guid, Covers: &coverart.Service{}, Playback: recorder}, nil
 }
 
 // Probe 是直连连通性探测，不冒充云中继或真实 NAS 系统身份。
@@ -90,11 +97,18 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/api/v1/playlist/list", s.playlists)
 		r.Get("/api/v1/playlist/detail", s.playlistDetail)
 		r.Get("/api/v1/playlist/batch-detail", s.playlistBatch)
+		r.Post("/api/v1/playlist/create", s.writeRoute("createPlaylist", s.createPlaylist))
+		r.Post("/api/v1/playlist/edit", s.writeRoute("updatePlaylist", s.editPlaylist))
+		r.Post("/api/v1/playlist/delete", s.writeRoute("deletePlaylist", s.deletePlaylist))
+		r.Post("/api/v1/playlist/add-track", s.writeRoute("updatePlaylist", s.addPlaylistTracks))
+		r.Post("/api/v1/playlist/remove-track", s.writeRoute("updatePlaylist", s.removePlaylistTracks))
 		r.Get("/api/v1/track/playlist-detail/list", s.playlistTracks)
 		r.Get("/api/v1/track/list", s.tracks)
 		r.Get("/api/v1/track/metadata", s.metadata)
 		r.Get("/api/v1/track/audio-info", s.metadata)
 		r.Get("/api/v1/favorite-track/list", s.favorites)
+		r.Post("/api/v1/favorite-track/create", s.writeRoute("star", s.favoriteTrack))
+		r.Post("/api/v1/favorite-track/delete", s.writeRoute("unstar", s.unfavoriteTrack))
 		r.Get("/api/v1/play-history/list", s.history)
 		r.Get("/api/v1/album/list", s.albums)
 		r.Get("/api/v1/artist/list", s.artists)
@@ -114,10 +128,18 @@ func (s *Server) Routes() http.Handler {
 		r.Head("/api/v1/track/stream", s.stream)
 		r.Get("/api/v1/track/stream/{guid}", s.stream)
 		r.Head("/api/v1/track/stream/{guid}", s.stream)
+		r.Get("/api/v1/download/track", s.download)
+		r.Head("/api/v1/download/track", s.download)
+		r.Get("/api/v1/download/track/detail", s.downloadDetail)
 		r.Get("/static/cover", s.cover)
 		r.Get("/api/v1/static/cover", s.cover)
+		r.Post("/api/v1/static/cover/playlist", s.writeRoute("createPlaylist", s.uploadPlaylistCover))
 		r.Get("/api/v1/track/transcode", unsupported)
 		r.Post("/api/v1/track/transcode", unsupported)
+		r.Post("/api/v1/download/track/transcode/prepare", unsupported)
+		r.Get("/api/v1/download/track/transcode/status", unsupported)
+		r.Get("/api/v1/download/track/transcode/file", unsupported)
+		r.Post("/api/v1/download/track/transcode/delete", s.deleteDownloadTask)
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		failure(w, http.StatusNotFound, "未实现的飞牛音乐接口")
@@ -165,21 +187,19 @@ func unsupported(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, target any) bool {
+	return decodeBodyLimit(w, r, target, 64<<10)
+}
+
+func decodeBodyLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) bool {
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || contentType != "application/json" {
 		failure(w, http.StatusUnsupportedMediaType, "只接收 JSON 请求")
 		return false
 	}
-	origin := "http://" + r.Host
-	if httpguard.Secure(r) {
-		origin = "https://" + r.Host
-	}
-	origins := r.Header.Values("Origin")
-	if len(origins) > 1 || (len(origins) == 1 && !strings.EqualFold(origins[0], origin)) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-		failure(w, http.StatusForbidden, "拒绝跨站音乐请求")
+	if !allowMusicWrite(w, r) {
 		return false
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	if err := decoder.Decode(target); err != nil {
 		failure(w, http.StatusBadRequest, "请求体必须是 JSON")
 		return false
@@ -187,6 +207,19 @@ func decodeBody(w http.ResponseWriter, r *http.Request, target any) bool {
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		failure(w, http.StatusBadRequest, "请求体只能包含一个 JSON 对象")
+		return false
+	}
+	return true
+}
+
+func allowMusicWrite(w http.ResponseWriter, r *http.Request) bool {
+	origin := "http://" + r.Host
+	if httpguard.Secure(r) {
+		origin = "https://" + r.Host
+	}
+	origins := r.Header.Values("Origin")
+	if len(origins) > 1 || (len(origins) == 1 && !strings.EqualFold(origins[0], origin)) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		failure(w, http.StatusForbidden, "拒绝跨站音乐请求")
 		return false
 	}
 	return true

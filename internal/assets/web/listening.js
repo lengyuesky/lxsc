@@ -9,6 +9,7 @@ const listeningTime = ms => {
   return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`
 }
 function resetListeningSession() {
+  globalThis.LXSCRecent?.reset()
   listeningGate.cancel()
   Object.assign(listeningState, { data: null, usersLoaded: false, selected: '', loading: false })
   $('#listeningContent').innerHTML = ''
@@ -95,6 +96,8 @@ function listeningCalendar(stats) {
   }).join('')}</div></div>`
 }
 function renderListening(stats) {
+  const recentPanel = globalThis.LXSCRecent?.panel
+  const recentFocus = recentPanel?.contains(document.activeElement) ? document.activeElement : null
   const focused = document.activeElement?.dataset.listeningDay
   const focusedControl = document.activeElement?.id
   const calendarScroll = $('.listening-calendar-scroll')?.scrollLeft || 0
@@ -106,11 +109,14 @@ function renderListening(stats) {
   $('#listeningContent').innerHTML = `
     <div class="listening-hero card"><div class="listening-hero-copy"><span class="listening-eyebrow"><i></i>${esc(name)}</span><h3>把时间，交给喜欢的旋律。</h3><div class="listening-total" aria-label="总收听时长 ${listeningTime(stats.totalMs)}"><b>${hours.toLocaleString('zh-CN')}</b><span>小时</span><b>${minutes}</b><span>分钟</span></div><p>${stats.plays ? `${stats.from.replaceAll('-', '/')} — ${stats.to.replaceAll('-', '/')} · ${stats.plays.toLocaleString('zh-CN')} 次收听` : '统计已就绪，从今天的第一首歌开始。'}</p><div class="listening-source"><span><i class="web"></i>网页实听 <b>${listeningTime(stats.webMs)}</b></span><span><i class="client"></i>客户端估算 <b>${listeningTime(stats.clientMs)}</b></span></div><div class="listening-source-meter"><i style="width:${share}%"></i></div></div><div class="listening-record" aria-hidden="true"><div class="listening-record-label"><svg><use href="#i-music"/></svg><span>此刻 · 有声</span></div><i></i></div></div>
     <div class="listening-metrics"><div class="card"><span class="listening-metric-icon"><svg class="icon"><use href="#i-dash"/></svg></span><div><span>日均听歌</span><strong>${listeningTime(stats.averageMs)}</strong><small>按启用后的 ${stats.countedDays} 个自然日计算</small></div></div><div class="card"><span class="listening-metric-icon mint"><svg class="icon"><use href="#i-music"/></svg></span><div><span>听过的歌曲</span><strong>${stats.tracks.toLocaleString('zh-CN')} <em>首</em></strong><small>每首歌，都是一段心情</small></div></div><div class="card"><span class="listening-metric-icon amber"><svg class="icon"><use href="#i-zap"/></svg></span><div><span>活跃天数</span><strong>${stats.activeDays} <em>天</em></strong><small>有音乐陪伴的日子</small></div></div></div>
+    <div id="recentPlaybackMount"></div>
     ${!stats.plays ? '<div class="listening-empty card"><div><strong>音乐时光，等你点亮</strong><p>在网页播放一首歌，或使用支持播放上报的客户端开始收听。</p></div><a class="btn" href="#search">去听一首歌 →</a></div>' : ''}
     <div class="listening-main-grid"><section class="card listening-trend"><div class="section-title"><div><h3>收听趋势</h3><p>每一天，都有自己的节奏</p></div><div class="listening-legend"><span><i class="web"></i>实听</span><span><i class="client"></i>估算</span></div></div>${listeningChart(stats)}<div id="listeningDayDetail" class="listening-day-detail" role="status"></div></section><section class="card listening-top"><div class="section-title"><div><h3>最常听的旋律</h3><p>按收听时长排序</p></div><span class="listening-top-label">TOP 10</span></div>${listeningRank(stats.topTracks)}</section>
     <section class="card listening-calendar-card"><div class="section-title"><div><h3>听歌日历</h3><p>点亮的日子，是音乐留下的足迹</p></div><span class="muted hint">${stats.activeDays} 天有音乐相伴</span></div>${listeningCalendar(stats)}<div class="listening-calendar-footer"><span>${stats.from} — ${stats.to}</span><span class="listening-intensity">少 ${[0, 1, 2, 3, 4].map(i => `<i class="level-${i}"></i>`).join('')} 多</span></div></section></div>
     ${scope === 'all' ? `<section class="card listening-users"><div class="section-title"><div><h3>一起听歌的人</h3><p>点击用户，查看他的音乐时光</p></div><span class="listening-top-label">用户 TOP 10</span></div>${listeningRank(stats.topUsers, true)}</section>` : ''}
-    <footer class="listening-footnote"><span>统计始于 ${enabled} · 北京时间 · 每 30 秒自动更新</span><p>网页按实际播放计时；客户端根据正式播放上报及歌曲时长估算。总时长包含两者，多设备分别累计，旧播放历史不回填。${stats.unknownDuration ? `当前有 ${stats.unknownDuration} 条客户端记录缺少歌曲时长，仅计收听次数。` : ''}</p></footer>`
+    <footer class="listening-footnote"><span>统计始于 ${enabled} · 北京时间 · 每 30 秒自动更新</span><p>网页按实际播放计时；Subsonic 根据正式播放上报、飞牛根据开始事件和歌曲时长估算。飞牛快速切歌或立即暂停可能高估，同会话同曲目 5 秒内重复开始事件合并，秒内真实重播也可能被合并。总时长包含实听和估算，多设备分别累计，旧播放历史不回填。${stats.unknownDuration ? `当前有 ${stats.unknownDuration} 条客户端记录缺少歌曲时长，仅计收听次数。` : ''}</p></footer>`
+  globalThis.LXSCRecent?.mount($('#recentPlaybackMount'))
+  if (recentFocus?.isConnected) recentFocus.focus({ preventScroll: true })
   const daily = stats.daily
   if (!daily.some(day => day.day === listeningState.selected)) listeningState.selected = stats.to
   selectListeningDay(listeningState.selected)
@@ -186,6 +192,6 @@ function selectListeningDay(day) {
 }
 $('#listeningScope').onchange = () => { listeningState.selected = ''; loadListening() }
 $('#listeningRange').onchange = () => { listeningState.selected = ''; loadListening() }
-$('#listeningRefresh').onclick = () => loadListening(true)
+$('#listeningRefresh').onclick = () => { loadListening(true); globalThis.LXSCRecent?.refresh() }
 setInterval(() => { if (!document.hidden && sessionState.me && location.hash === '#listening' && !listeningState.loading) loadListening(true) }, 30000)
 document.addEventListener('visibilitychange', () => { if (!document.hidden && sessionState.me && location.hash === '#listening') loadListening(true) })

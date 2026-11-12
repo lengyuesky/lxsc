@@ -94,7 +94,7 @@ func (c *Catalog) EnableURLCache(dataDir, proxy string) error {
 		c.urls.serial++
 		entry := timedEntry[js.MusicURLResult]{
 			result: cachedResult[js.MusicURLResult]{
-				value: js.MusicURLResult{URL: record.URL, Quality: record.ResolvedQuality, Source: record.Source, SourceID: record.SourceID},
+				value: js.MusicURLResult{URL: record.URL, Quality: record.ResolvedQuality, Source: record.Source, SourceID: record.SourceID, ScriptFingerprint: c.Sources.ScriptIdentity(record.SourceID)},
 				token: cacheToken{generation: c.urls.generation, serial: c.urls.serial},
 			},
 			created: time.UnixMilli(record.CreatedAt),

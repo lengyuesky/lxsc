@@ -61,6 +61,11 @@ func (s *Service) CreateArchive(ctx context.Context, password string) (*Archive,
 	if err := os.MkdirAll(filesDir, 0o700); err != nil {
 		return nil, err
 	}
+	if s.BeforeSnapshot != nil {
+		if err := s.BeforeSnapshot(ctx); err != nil {
+			return nil, fmt.Errorf("保存备份前的调度状态失败: %w", err)
+		}
+	}
 	if err := s.DB.Snapshot(ctx, filepath.Join(filesDir, "database.sqlite")); err != nil {
 		return nil, fmt.Errorf("创建数据库快照失败: %w", err)
 	}

@@ -25,6 +25,7 @@ func attachMedia(t *testing.T, f *fixture) (*atomic.Int64, []byte) {
 	var sent atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/wav")
+		w.Header().Set("ETag", `"fnmusic-test-audio-v1"`)
 		count := &byteCounter{ResponseWriter: w, total: &sent}
 		http.ServeContent(count, r, "tone.wav", time.Unix(0, 0), bytes.NewReader(body))
 	}))

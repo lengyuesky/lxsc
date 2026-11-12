@@ -8,6 +8,7 @@ import (
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
+	"lxsc/internal/playback"
 )
 
 const (
@@ -28,6 +29,11 @@ func (s *Server) mediaService() *mediastream.Service {
 
 func mediaRequest(r *http.Request) *http.Request {
 	event, _ := r.Context().Value(clientDiagnosticKey{}).(*diagnostics.Event)
+	client := playback.Text(param(r, "c"), 64)
+	if client == "" {
+		client = "未知客户端"
+	}
+	r = playback.BindDefault(r, playback.Client{Protocol: "subsonic", Name: client})
 	return mediastream.Bind(r, currentUser(r), event)
 }
 

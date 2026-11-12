@@ -74,6 +74,7 @@ func (p *PreparedSource) Apply(ctx context.Context, save func() error) (*SourceS
 		return nil, err
 	}
 	// 保存已完成后即使调用者取消，也必须安装对应实例，保持内存与数据库一致。
+	m.schedule.register(p.source.id, p.source.fingerprint)
 	m.attachSourceCalls(p.source)
 	m.loaded[p.source.id] = p.source
 	p.consumed = true

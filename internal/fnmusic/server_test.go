@@ -340,11 +340,11 @@ func TestTrackShapePaginationAndPublicRevocation(t *testing.T) {
 	}
 }
 
-func TestUnsupportedWritesAndLogout(t *testing.T) {
+func TestInvalidPlaylistWriteUnsupportedTranscodeAndLogout(t *testing.T) {
 	f := newFixture(t)
 	token := login(t, f, "alice")
 	if request(f, http.MethodPost, "/music/api/v1/playlist/delete", token, map[string]string{"guid": "anything"}).Code < 400 {
-		t.Fatal("未实现的歌单写入返回假成功")
+		t.Fatal("无效歌单写入返回假成功")
 	}
 	if request(f, http.MethodPost, "/music/api/v1/track/transcode", token, map[string]string{}).Code != http.StatusNotImplemented {
 		t.Fatal("未实现的转码没有明确拒绝")

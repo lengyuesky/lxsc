@@ -238,6 +238,7 @@ async function main() {
     await require('./optimization-browser.cjs')({ check, url, login, holdResponse })
     await require('./debug-browser.cjs')({ check, url, artifacts, login })
     await require('./listening-browser.cjs')({ check, url, artifacts, login, search, playSearch, holdResponse })
+    await require('./recent-playback-browser.cjs')({ check, url, artifacts, login, search, playSearch, holdResponse, admin })
     await require('./playlist-import-browser.cjs')({ check, url, holdResponse, createPlaylist, selectPlaylistUI })
 
     await check('普通用户搜歌、真实播放、队列和导航', async page => {

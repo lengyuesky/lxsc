@@ -21,7 +21,7 @@ func migrate(s *sql.DB) error {
 	if err = tx.QueryRow(`SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 		return err
 	}
-	if version > 7 {
+	if version > 9 {
 		return fmt.Errorf("数据库版本 %d 高于当前程序支持版本", version)
 	}
 	if version < 1 {
@@ -160,6 +160,41 @@ func migrate(s *sql.DB) error {
 			}
 		}
 		if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES(7)`); err != nil {
+			return err
+		}
+	}
+	if version < 8 {
+		for _, statement := range []string{
+			`CREATE TABLE IF NOT EXISTS playlist_covers(id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, content_type TEXT NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL)`,
+			`CREATE INDEX IF NOT EXISTS idx_playlist_covers_owner ON playlist_covers(user_id,created_at)`,
+		} {
+			if _, err = tx.Exec(statement); err != nil {
+				return err
+			}
+		}
+		var hasCover bool
+		if err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('playlists') WHERE name='cover_id')`).Scan(&hasCover); err != nil {
+			return err
+		}
+		if !hasCover {
+			if _, err = tx.Exec(`ALTER TABLE playlists ADD COLUMN cover_id TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version) VALUES(8)`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`CREATE TRIGGER IF NOT EXISTS playlist_cover_deleted AFTER DELETE ON playlist_covers BEGIN UPDATE playlists SET cover_id='' WHERE cover_id=OLD.id; END`); err != nil {
+			return err
+		}
+	}
+	if version < 9 {
+		for _, statement := range playbackSchema {
+			if _, err = tx.Exec(statement); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.Exec(`INSERT INTO schema_migrations(version) VALUES(9)`); err != nil {
 			return err
 		}
 	}

@@ -1,5 +1,6 @@
 // 独立的网页音乐状态模块，无框架、无构建依赖；音频对象可注入测试。
 ;(function (root) {
+  const playbackID = () => root.crypto?.randomUUID ? root.crypto.randomUUID() : root.crypto?.getRandomValues ? Array.from(root.crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('') : Date.now().toString(36) + '_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
   class RequestGate {
     constructor() { this.version = 0; this.controller = null }
     cancel() { this.version++; this.controller?.abort(); this.controller = null }
@@ -16,12 +17,14 @@
   }
 
   class PlayerController {
-    constructor({ audio, streamURL, recoveryQualities = null, onChange = () => {}, onFailure = () => {}, onLoad = () => {} }) {
+    constructor({ audio, streamURL, recoveryQualities = null, onChange = () => {}, onFailure = () => {}, onLoad = () => {}, createPlaybackID = playbackID }) {
       this.audio = audio
       this.streamURL = streamURL
       this.onChange = onChange
       this.onFailure = onFailure
       this.onLoad = onLoad
+      this.createPlaybackID = createPlaybackID
+      this.playbackId = ''
       this.recoveryQualities = recoveryQualities
       this.recoveryQueue = []
       this.recoveryQuality = ''
@@ -73,6 +76,7 @@
     load({ autoplay = true, position = 0, recovering = false } = {}) {
       if (!this.track) return
       if (!recovering) {
+        this.playbackId = this.createPlaybackID()
         this.recoveryQueue = [...(this.recoveryQualities?.(this.track) || [])].slice(0, 2)
         this.recoveryQuality = ''
         this.played = position > 0
@@ -85,7 +89,7 @@
       this.status = autoplay ? 'loading' : 'paused'
       this.message = ''
       this.wantsPlay = autoplay
-      this.audio.src = this.streamURL(this.track, { quality: this.recoveryQuality })
+      this.audio.src = this.streamURL(this.track, { quality: this.recoveryQuality, playbackId: this.playbackId })
       const source = this.audio.src
       const current = () => version === this.version && this.audio.src === source && (!this.audio.currentSrc || this.audio.currentSrc === source)
       const bind = (event, action) => {
@@ -229,6 +233,7 @@
     }
     toggleMuted() { this.audio.muted = !this.audio.muted; this.notify() }
     clear() {
+      this.playbackId = ''
       this.version++
       this.unbind()
       this.wantsPlay = false

@@ -684,17 +684,18 @@ type Playlist struct {
 	UpdatedAt int64
 	Count     int
 	TrackIDs  []string
+	CoverID   string
 }
 
 const playlistListCols = `p.id, p.user_id, u.name, p.name, p.comment, p.public, p.created_at, p.updated_at,
-	(SELECT COUNT(*) FROM playlist_tracks t WHERE t.playlist_id = p.id)`
+	(SELECT COUNT(*) FROM playlist_tracks t WHERE t.playlist_id = p.id), p.cover_id`
 
 func scanPlaylists(rows *sql.Rows) ([]*Playlist, error) {
 	var out []*Playlist
 	for rows.Next() {
 		var p Playlist
 		var pub int
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Owner, &p.Name, &p.Comment, &pub, &p.CreatedAt, &p.UpdatedAt, &p.Count); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Owner, &p.Name, &p.Comment, &pub, &p.CreatedAt, &p.UpdatedAt, &p.Count, &p.CoverID); err != nil {
 			return nil, err
 		}
 		p.Public = pub == 1
@@ -737,8 +738,8 @@ func (d *DB) ListAllPlaylists(ctx context.Context, ownerID int64) ([]*Playlist, 
 func (d *DB) GetPlaylist(ctx context.Context, id string) (*Playlist, error) {
 	var p Playlist
 	var pub int
-	err := d.sql.QueryRowContext(ctx, `SELECT p.id, p.user_id, u.name, p.name, p.comment, p.public, p.created_at, p.updated_at FROM playlists p JOIN users u ON u.id = p.user_id WHERE p.id = ?`, id).
-		Scan(&p.ID, &p.UserID, &p.Owner, &p.Name, &p.Comment, &pub, &p.CreatedAt, &p.UpdatedAt)
+	err := d.sql.QueryRowContext(ctx, `SELECT p.id, p.user_id, u.name, p.name, p.comment, p.public, p.created_at, p.updated_at, p.cover_id FROM playlists p JOIN users u ON u.id = p.user_id WHERE p.id = ?`, id).
+		Scan(&p.ID, &p.UserID, &p.Owner, &p.Name, &p.Comment, &pub, &p.CreatedAt, &p.UpdatedAt, &p.CoverID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -772,21 +773,34 @@ func (d *DB) CreatePlaylistFull(ctx context.Context, id string, userID int64, na
 	return d.CreatePlaylistWithMetadata(ctx, id, userID, name, comment, public, trackIDs, nil)
 }
 
-// CreatePlaylistWithMetadata 在同一事务内创建歌单并保存歌曲元数据。
-func (d *DB) CreatePlaylistWithMetadata(ctx context.Context, id string, userID int64, name, comment string, public bool, trackIDs []string, tracks []Track) error {
+// CreatePlaylistWithMetadata 在同一事务内创建歌单、歌曲元数据和可选的协议标识。
+func (d *DB) CreatePlaylistWithMetadata(ctx context.Context, id string, userID int64, name, comment string, public bool, trackIDs []string, tracks []Track, clientIDs ...ClientID) error {
+	return d.CreatePlaylistWithAssets(ctx, id, userID, name, comment, public, trackIDs, tracks, "", clientIDs...)
+}
+
+// CreatePlaylistWithAssets 同时保存歌单及已上传的封面引用。
+func (d *DB) CreatePlaylistWithAssets(ctx context.Context, id string, userID int64, name, comment string, public bool, trackIDs []string, tracks []Track, coverID string, clientIDs ...ClientID) error {
 	tx, err := d.sql.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if coverID != "" {
+		if err := ownedCoverTx(ctx, tx, userID, coverID); err != nil {
+			return err
+		}
+	}
 	t := now()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO playlists(id, user_id, name, comment, public, created_at, updated_at) VALUES(?,?,?,?,?,?,?)`, id, userID, name, comment, boolInt(public), t, t); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO playlists(id, user_id, name, comment, public, created_at, updated_at, cover_id) VALUES(?,?,?,?,?,?,?,?)`, id, userID, name, comment, boolInt(public), t, t, coverID); err != nil {
 		return err
 	}
 	if err := upsertTracksTx(ctx, tx, tracks); err != nil {
 		return err
 	}
 	if err := insertPlaylistTracksTx(ctx, tx, id, trackIDs); err != nil {
+		return err
+	}
+	if err := ensureClientIDsTx(ctx, tx, clientIDs); err != nil {
 		return err
 	}
 	return tx.Commit()

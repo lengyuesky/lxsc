@@ -164,8 +164,6 @@ func run(cfgPath string) error {
 	backupSrv := backup.New(database, box, cfg.DataDir, version, httpSecure, log)
 	backupCtx, stopBackups := context.WithCancel(context.Background())
 	defer stopBackups()
-	backupSrv.StartScheduler(backupCtx)
-	defer backupSrv.StopScheduler()
 	debugSrv := diagnostics.New(database, authManager, catalog, sources, st, version, time.Now())
 	debugSrv.Logs = logBuf
 	debugSrv.RuntimeInfo = map[string]any{"listen": cfg.Listen, "trustProxy": cfg.TrustProxy, "trustedProxies": cfg.TrustedProxies, "sdkWorkers": cfg.SDKWorkers, "outboundProxy": diagnostics.AddressSummary(cfg.Proxy)}
@@ -173,6 +171,34 @@ func run(cfgPath string) error {
 	authSrv.PasswordChanged = debugSrv.Tokens.RevokeOwner
 	adminSrv := &admin.Server{DB: database, Sources: sources, Catalog: catalog, Settings: st, Secret: box, Logs: logBuf, Log: log, HTTP: httpSecure, Version: version, StartAt: time.Now(), Auth: authManager, Backup: backupSrv, Debug: debugSrv}
 	importDir(ctx, adminSrv, srcs, filepath.Join(cfg.DataDir, "sources"), log)
+	currentSources, err := database.ListSources(ctx)
+	if err != nil {
+		return err
+	}
+	fingerprints := make(map[int64]string, len(currentSources))
+	for _, source := range currentSources {
+		fingerprints[source.ID] = js.ScriptFingerprint(source.Script)
+	}
+	if err := sources.EnableSchedulePersistence(ctx, database, fingerprints); err != nil {
+		return fmt.Errorf("恢复音源调度状态失败: %w", err)
+	}
+	defer func() {
+		// 收回旧脚本调用后再保存，避免退出时在最后一次保存之后追加样本。
+		sources.UnloadAll()
+		if err := sources.CloseSchedulePersistence(); err != nil {
+			log.Warn("退出时保存音源调度状态失败", "err", err)
+		}
+	}()
+	backupSrv.BeforeSnapshot = sources.FlushSchedulePersistence
+	backupSrv.StartScheduler(backupCtx)
+	defer backupSrv.StopScheduler()
+	if err := database.RecoverPlayback(ctx, time.Now()); err != nil {
+		return fmt.Errorf("恢复未结束的播放日志失败: %w", err)
+	}
+	playbackCtx, stopPlayback := context.WithCancel(ctx)
+	playbackDone := make(chan struct{})
+	go func() { defer close(playbackDone); catalog.Playback.Maintain(playbackCtx) }()
+	defer func() { stopPlayback(); <-playbackDone }()
 	if err := catalog.EnableURLCache(cfg.DataDir, cfg.Proxy); err != nil {
 		log.Warn("直链持久缓存初始化失败，改用内存缓存", "err", err)
 	}

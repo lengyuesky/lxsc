@@ -79,6 +79,9 @@ func TestPrependPlaylistTrackOrderingAndPermissions(t *testing.T) {
 	}
 	admin := *bob
 	admin.IsAdmin = true
+	if _, err := d.sql.ExecContext(ctx, `UPDATE users SET is_admin=1 WHERE id=?`, admin.ID); err != nil {
+		t.Fatal(err)
+	}
 	if added, err := d.PrependPlaylistTrack(ctx, "pl-test", &admin, testPlaylistTrack("tr-tx-new")); err != nil || !added {
 		t.Fatalf("管理员可收藏到他人歌单，跨平台同名保留: %v", err)
 	}

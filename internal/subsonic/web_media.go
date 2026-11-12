@@ -6,7 +6,9 @@ import (
 	"net/url"
 
 	"lxsc/internal/db"
+	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
+	"lxsc/internal/playback"
 )
 
 // ServeWebStream 仅供已完成 Cookie 认证的网页入口调用，不改变 /rest 的认证契约。
@@ -28,8 +30,14 @@ func (s *Server) ServeWebStream(w http.ResponseWriter, r *http.Request, user *db
 		writeWebMediaError(w, r, ErrMissingParam, "不支持的播放音质")
 		return
 	}
+	key := r.URL.Query().Get("playbackId")
+	if key != "" && !playback.ValidKey(key) {
+		writeWebMediaError(w, r, ErrMissingParam, "播放标识无效")
+		return
+	}
 	// 只传递网页契约中的参数，不接受 proxy 或其他 Subsonic 参数覆盖服务器设置。
 	request := r.Clone(withUser(r.Context(), user))
+	request = playback.Bind(request, playback.Client{Protocol: "web", Name: "网页播放器", Key: key})
 	query := url.Values{"id": {id}}
 	if quality != "" {
 		query.Set("quality", quality)
@@ -38,7 +46,7 @@ func (s *Server) ServeWebStream(w http.ResponseWriter, r *http.Request, user *db
 	s.serveMediaWithError(w, request, true, writeWebMediaError)
 }
 
-func writeWebMediaError(w http.ResponseWriter, _ *http.Request, code int, message string) {
+func writeWebMediaError(w http.ResponseWriter, r *http.Request, code int, message string) {
 	status := http.StatusBadGateway
 	switch code {
 	case ErrBusy:
@@ -52,6 +60,7 @@ func writeWebMediaError(w http.ResponseWriter, _ *http.Request, code int, messag
 		status = http.StatusNotFound
 		message = "找不到歌曲，请重新搜索后再试"
 	}
+	mediastream.RecordResponse(r, status)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)

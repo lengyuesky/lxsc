@@ -117,8 +117,12 @@ func (s *Server) playlistView(ctx context.Context, playlist *db.Playlist) (map[s
 	if len(tracks) > 0 {
 		coverTrack = tracks[0]
 	}
+	coverID := playlist.CoverID
+	if coverID == "" {
+		coverID = s.coverID("playlist", guid, coverTrack)
+	}
 	return map[string]any{
-		"guid": guid, "name": playlist.Name, "coverId": s.coverID("playlist", guid, coverTrack),
+		"guid": guid, "name": playlist.Name, "coverId": coverID,
 		"trackCount": len(tracks), "createdAt": playlist.CreatedAt, "updatedAt": playlist.UpdatedAt,
 	}, nil
 }
@@ -199,13 +203,7 @@ func (s *Server) playlistTracks(w http.ResponseWriter, r *http.Request) {
 	if resourceError(w, err) {
 		return
 	}
-	tracks := s.Catalog.Tracks(r.Context(), playlist.TrackIDs)
-	// 原版客户端的无分页歌单请求需要一次返回整个歌单。
-	start, end := 0, len(tracks)
-	if hasPagination(r) {
-		start, end = pageBounds(r, len(tracks))
-	}
-	s.writeTrackPage(w, r, tracks, start, end, event)
+	s.writeTrackIDs(w, r, playlist.TrackIDs, true, event)
 }
 
 func (s *Server) tracks(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +236,7 @@ func (s *Server) favorites(w http.ResponseWriter, r *http.Request) {
 	for _, item := range items {
 		ids = append(ids, item.ItemID)
 	}
-	s.writeTracks(w, r, s.Catalog.Tracks(r.Context(), ids))
+	s.writeTrackIDs(w, r, ids, false, nil)
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +244,60 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	if resourceError(w, err) {
 		return
 	}
-	s.writeTracks(w, r, s.Catalog.Tracks(r.Context(), ids))
+	s.writeTrackIDs(w, r, ids, false, nil)
+}
+
+// writeTrackIDs 保留旧歌单中的实际成员键，不能用上游规范 ID 替换别名。
+func (s *Server) writeTrackIDs(w http.ResponseWriter, r *http.Request, ids []string, wholePlaylist bool, event *diagnostics.Event) {
+	s.Catalog.Tracks(r.Context(), ids) // 先批量暖缓存，避免逐首读取数据库。
+	type reference struct {
+		id    string
+		track *music.Info
+	}
+	refs := make([]reference, 0, len(ids))
+	for _, id := range ids {
+		track, err := s.Catalog.LocalTrack(r.Context(), id)
+		if errors.Is(err, db.ErrNotFound) {
+			continue
+		}
+		if resourceError(w, err) {
+			return
+		}
+		refs = append(refs, reference{id, track})
+	}
+	appliedSort := ""
+	field, direction, _ := strings.Cut(r.URL.Query().Get("sort"), ",")
+	if (field == "name" || field == "title" || field == "duration") && (direction == "" || direction == "asc" || direction == "desc") {
+		appliedSort = r.URL.Query().Get("sort")
+		sort.SliceStable(refs, func(i, j int) bool {
+			order := strings.Compare(refs[i].track.Name(), refs[j].track.Name())
+			if field == "duration" {
+				order = refs[i].track.Duration() - refs[j].track.Duration()
+			}
+			if direction == "desc" {
+				return order > 0
+			}
+			return order < 0
+		})
+	}
+	stars, err := s.DB.StarredSet(r.Context(), currentUser(r).ID)
+	if resourceError(w, err) {
+		return
+	}
+	start, end := 0, len(refs)
+	if !wholePlaylist || hasPagination(r) {
+		start, end = pageBounds(r, len(refs))
+	}
+	items := make([]any, 0, end-start)
+	for _, ref := range refs[start:end] {
+		view, err := s.trackViewForID(r.Context(), ref.track, ref.id, stars[ref.id] != 0)
+		if resourceError(w, err) {
+			return
+		}
+		items = append(items, view)
+	}
+	recordCollectionDiagnostic(event, r, len(refs), len(items))
+	success(w, map[string]any{"list": items, "total": len(refs), "sort": appliedSort})
 }
 
 func (s *Server) writeTracks(w http.ResponseWriter, r *http.Request, tracks []*music.Info) {
@@ -292,7 +343,11 @@ func sortTracks(r *http.Request, tracks []*music.Info) string {
 }
 
 func (s *Server) trackView(ctx context.Context, track *music.Info, favorite bool) (map[string]any, error) {
-	guid, err := s.identify(ctx, "track", track.TrackID())
+	return s.trackViewForID(ctx, track, track.TrackID(), favorite)
+}
+
+func (s *Server) trackViewForID(ctx context.Context, track *music.Info, id string, favorite bool) (map[string]any, error) {
+	guid, err := s.identify(ctx, "track", id)
 	if err != nil {
 		return nil, err
 	}
@@ -354,10 +409,17 @@ func (s *Server) metadata(w http.ResponseWriter, r *http.Request) {
 	if transient {
 		view = s.trackViewWithIDs(track, identifier("track", track.TrackID()), identifier("album", track.AlbumSubID()), identifier("artist", track.ArtistSubID()), stars[track.TrackID()] != 0)
 	} else {
-		view, err = s.trackView(r.Context(), track, stars[track.TrackID()] != 0)
+		id, resolveErr := s.resolve(r.Context(), "track", r.URL.Query().Get("guid"))
+		if resourceError(w, resolveErr) {
+			return
+		}
+		view, err = s.trackViewForID(r.Context(), track, id, stars[id] != 0)
 		if resourceError(w, err) {
 			return
 		}
+	}
+	if r.URL.Path == "/music/api/v1/download/track/detail" {
+		s.downloadAudioSpec(r.Context(), r.URL.Query().Get("guid"), view)
 	}
 	success(w, map[string]any{"track": view, "audioSpec": view["audioSpec"]})
 }

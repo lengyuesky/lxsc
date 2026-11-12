@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"lxsc/internal/admission"
+	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
 	"lxsc/internal/music"
+	"lxsc/internal/playback"
 	"lxsc/internal/settings"
 )
 
@@ -238,7 +240,7 @@ func (s *Service) crossSourceRescue(ctx context.Context, r *http.Request, in *mu
 	defer cancel()
 	started := time.Now()
 	candidate := s.Catalog.FindCrossSourceCandidate(rescueCtx, in)
-	s.Diagnostics.Add(diagnostics.Event{Stage: "cross_source", TrackID: in.TrackID(), Platform: in.Source(), Quality: quality, ElapsedMS: time.Since(started).Milliseconds()})
+	s.mediaRequestEvent(r, "cross_source", in.TrackID(), in.Source(), quality, false, 0, started, nil)
 	if candidate == nil {
 		return music.URLResolution{}, nil, nil
 	}
@@ -267,7 +269,11 @@ func (s *Service) crossSourceRescue(ctx context.Context, r *http.Request, in *mu
 	}
 	// 兜底结果不写入原歌曲的直链缓存：它属于另一个平台的另一条曲目。
 	winner.resolution.Validated = !headersOnly(ctx)
-	s.Diagnostics.Add(diagnostics.Event{Stage: "cross_source", TrackID: in.TrackID(), Platform: candidate.Source(), Quality: winner.resolution.Result.Quality, Status: winner.status, ElapsedMS: time.Since(started).Milliseconds()})
+	winner.resolution.Platform, winner.resolution.TrackID = candidate.Source(), candidate.TrackID()
+	if winner.resolution.Validated {
+		s.Catalog.ReportPlaybackOutcome(winner.resolution, candidate.Source(), true, winner.headerMS)
+	}
+	s.mediaRequestEvent(r, "cross_source", in.TrackID(), candidate.Source(), winner.resolution.Result.Quality, false, winner.status, started, nil)
 	return winner.resolution, winner.response, nil
 }
 
@@ -434,7 +440,7 @@ func (s *Service) tryExactMediaCandidate(ctx context.Context, r *http.Request, i
 		} else {
 			resolution, err = s.Catalog.ResolvePlaybackURLForSources(ctx, in, task.quality, []int64{task.id}, failed)
 		}
-		s.mediaAttemptEvent(ctx, r, stage, in, task.quality, resolution, 0, started, err, int(attempt))
+		s.mediaAttemptEvent(ctx, r, stage, in, task.quality, resolution, 0, started, err, int(attempt), task.id)
 		if err != nil {
 			out.err = err
 			return out
@@ -464,7 +470,7 @@ func (s *Service) tryExactMediaCandidate(ctx context.Context, r *http.Request, i
 			err = mediaHTTPError(out.status)
 		}
 		out.headerMS = time.Since(started).Milliseconds()
-		s.mediaAttemptEvent(ctx, r, stage, in, resolution.Result.Quality, resolution, out.status, started, err, int(attempt))
+		s.mediaAttemptEvent(ctx, r, stage, in, resolution.Result.Quality, resolution, out.status, started, err, int(attempt), task.id)
 		if err == nil {
 			out.err = nil
 			out.response = resp
@@ -486,7 +492,7 @@ func (s *Service) tryExactMediaCandidate(ctx context.Context, r *http.Request, i
 				s.Catalog.ReportPlaybackOutcome(resolution, in.Source(), false, out.headerMS)
 			}
 			if out.status == 429 {
-				s.Catalog.Sources.BackoffMusicURL(task.id, in.Source(), mediaRetryAfter(resp))
+				s.Catalog.Sources.BackoffMusicURL(task.id, in.Source(), mediaRetryAfter(resp), resolution.Result.ScriptFingerprint)
 			}
 		}
 		if expiredMediaStatus(out.status) && round == 0 && failed == nil {
@@ -533,7 +539,7 @@ func (e mediaHTTPError) DiagnosticCode() string {
 	return "upstream_status"
 }
 
-func (s *Service) mediaAttemptEvent(ctx context.Context, r *http.Request, stage string, in *music.Info, quality string, resolution music.URLResolution, status int, started time.Time, err error, attempt int) {
+func (s *Service) mediaAttemptEvent(ctx context.Context, r *http.Request, stage string, in *music.Info, quality string, resolution music.URLResolution, status int, started time.Time, err error, attempt int, sourceID int64) {
 	e := diagnostics.Event{Stage: stage, TrackID: in.TrackID(), Platform: in.Source(), Quality: quality, RequestedQuality: param(r, "quality"), Cached: resolution.Cached, Status: status, Error: diagnostics.ErrorCode(err), ElapsedMS: time.Since(started).Milliseconds(), Attempt: attempt}
 	if parent, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); parent != nil {
 		e.RequestID = parent.RequestID
@@ -553,4 +559,12 @@ func (s *Service) mediaAttemptEvent(ctx context.Context, r *http.Request, stage 
 		}
 	}
 	s.Diagnostics.Add(e)
+	sourceName := resolution.Result.Source
+	if sourceName == "" && s.Catalog.Sources != nil {
+		if source := s.Catalog.Sources.StatusOf(sourceID); source != nil {
+			sourceName = source.Name
+		}
+	}
+	trace := playback.FromContext(r.Context())
+	trace.Add(db.PlaybackEvent{At: time.Now().UnixMilli(), Stage: stage, SourceID: sourceID, SourceName: trace.SourceName(sourceID, sourceName), Platform: in.Source(), Quality: quality, Cached: resolution.Cached, Status: status, Error: e.Error, ElapsedMS: e.ElapsedMS})
 }

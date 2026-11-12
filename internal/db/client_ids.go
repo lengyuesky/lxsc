@@ -6,6 +6,31 @@ import (
 	"errors"
 )
 
+// ClientID 是协议标识与业务资源的映射；它本身不授予资源访问权限。
+type ClientID struct {
+	Protocol string
+	Kind     string
+	ID       string
+	GUID     string
+}
+
+// ensureClientIDsTx 让标识与产生持久引用的业务写入一同提交或回滚。
+func ensureClientIDsTx(ctx context.Context, tx *sql.Tx, ids []ClientID) error {
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO client_ids(protocol,kind,internal_id,guid) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`, id.Protocol, id.Kind, id.ID, id.GUID); err != nil {
+			return err
+		}
+		var kind, internalID string
+		if err := tx.QueryRowContext(ctx, `SELECT kind,internal_id FROM client_ids WHERE protocol=? AND guid=?`, id.Protocol, id.GUID).Scan(&kind, &internalID); err != nil {
+			return err
+		}
+		if kind != id.Kind || internalID != id.ID {
+			return errors.New("客户端标识冲突")
+		}
+	}
+	return nil
+}
+
 // EnsureClientID 保存可再生的协议标识，冲突时不改写另一项的映射。
 func (d *DB) EnsureClientID(ctx context.Context, protocol, kind, id, guid string) error {
 	gotKind, gotID, err := d.ResolveClientID(ctx, protocol, guid)

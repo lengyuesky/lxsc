@@ -107,6 +107,8 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/smart", s.smartTracks)
 	r.Post("/listening/progress", s.listeningProgress)
 	r.Get("/listening/stats", s.listeningStats)
+	r.Get("/listening/recent", s.recentPlayback)
+	r.Get("/listening/recent/{id}", s.recentPlaybackDetail)
 	return r
 }
 

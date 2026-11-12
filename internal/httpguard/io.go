@@ -16,9 +16,11 @@ func requestBudget(r *http.Request) ioBudget {
 	budget := ioBudget{30 * time.Second, 60 * time.Second, 60 * time.Second, 2 << 20}
 	path := strings.TrimSuffix(r.URL.Path, ".view")
 	switch {
-	case path == "/api/app/stream", path == "/rest/stream", path == "/rest/download", path == "/music/api/v1/track/stream", strings.HasPrefix(path, "/music/api/v1/track/stream/"):
+	case path == "/api/app/stream", path == "/rest/stream", path == "/rest/download", path == "/music/api/v1/track/stream", strings.HasPrefix(path, "/music/api/v1/track/stream/"), path == "/music/api/v1/download/track":
 		// 仅限制准备阶段写入，音频正文由逐次刷新的空闲截止保护，不设总时长。
 		budget.total = 0
+	case path == "/music/api/v1/static/cover/playlist":
+		budget.body = (5 << 20) + (64 << 10)
 	case strings.HasPrefix(path, "/api/admin/backups/"):
 		budget.read, budget.write, budget.total = 10*time.Minute, 30*time.Minute, 30*time.Minute
 		if path == "/api/admin/backups/inspect" || path == "/api/admin/backups/import" {

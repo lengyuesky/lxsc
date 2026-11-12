@@ -95,17 +95,18 @@ type SourceStatus struct {
 
 // loadedSource 已加载的脚本实例
 type loadedSource struct {
-	health    sourceHealth
-	calls     *sourceCalls
-	id        int64
-	meta      ScriptMeta
-	worker    *Worker
-	platforms map[string]PlatformCap
-	state     string
-	err       string
-	alert     string
-	loadedAt  time.Time
-	logs      *ringLog
+	health      sourceHealth
+	calls       *sourceCalls
+	id          int64
+	meta        ScriptMeta
+	worker      *Worker
+	platforms   map[string]PlatformCap
+	state       string
+	err         string
+	alert       string
+	loadedAt    time.Time
+	logs        *ringLog
+	fingerprint string
 }
 
 // SourceManager 管理所有音源脚本
@@ -137,6 +138,7 @@ func (m *SourceManager) Load(ctx context.Context, id int64, script string) (*Sou
 	operation.Lock()
 	defer operation.Unlock()
 	m.unload(id)
+	m.schedule.register(id, ScriptFingerprint(script))
 	ls, inited, err := m.newLoadedSource(id, script)
 	if err != nil {
 		return nil, err
@@ -171,7 +173,7 @@ func (m *SourceManager) newLoadedSource(id int64, script string) (*loadedSource,
 	if meta.Name == "" {
 		meta.Name = fmt.Sprintf("音源#%d", id)
 	}
-	ls := &loadedSource{id: id, meta: meta, platforms: map[string]PlatformCap{}, state: "loading", loadedAt: time.Now(), logs: newRingLog(200)}
+	ls := &loadedSource{id: id, meta: meta, platforms: map[string]PlatformCap{}, state: "loading", loadedAt: time.Now(), logs: newRingLog(200), fingerprint: ScriptFingerprint(script)}
 	inited := make(chan string, 1)
 	w, err := New(Options{
 		Name:         fmt.Sprintf("source-%d", id),
@@ -449,10 +451,11 @@ func (m *SourceManager) SupportedPlatforms() []string {
 
 // MusicURLResult 取直链结果
 type MusicURLResult struct {
-	URL      string `json:"url"`
-	Quality  string `json:"type"`
-	Source   string `json:"source"` // 使用的脚本名
-	SourceID int64  `json:"-"`      // 由管理器赋值，脚本输出和对外 JSON 均不能携带该身份
+	URL               string `json:"url"`
+	Quality           string `json:"type"`
+	Source            string `json:"source"` // 使用的脚本名
+	SourceID          int64  `json:"-"`      // 由管理器赋值，脚本输出和对外 JSON 均不能携带该身份
+	ScriptFingerprint string `json:"-"`
 }
 
 // MusicURLSourceIDs 按当前调度顺序返回支持取链的真实脚本 ID，不使用平台代号或脚本名代替。
@@ -527,6 +530,7 @@ func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource
 			return nil, attempts, lastErr
 		}
 		result.Quality, result.Source, result.SourceID = CanonicalQuality(q), ls.meta.Name, ls.id
+		result.ScriptFingerprint = ls.fingerprint
 		return &result, attempts, nil
 	}
 	return nil, attempts, lastErr
@@ -560,7 +564,7 @@ func (m *SourceManager) Lyric(ctx context.Context, platform string, musicInfo an
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "lyric", Attempts: 1}, musicInfo, err)
-		m.schedule.record(ls.id, platform, "lyric", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds())
+		m.schedule.record(ls.id, platform, "lyric", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds(), ls.fingerprint)
 		cancel()
 		if err != nil {
 			lastErr = err
@@ -591,7 +595,7 @@ func (m *SourceManager) Pic(ctx context.Context, platform string, musicInfo any)
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "pic", Attempts: 1}, musicInfo, err)
-		m.schedule.record(ls.id, platform, "pic", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds())
+		m.schedule.record(ls.id, platform, "pic", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds(), ls.fingerprint)
 		cancel()
 		if err != nil {
 			lastErr = err

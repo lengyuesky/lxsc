@@ -201,10 +201,10 @@ func (m *SourceManager) callMusicURLSource(ctx, parent context.Context, source *
 	}
 	source.calls.finish(started, call, musicInfo, err)
 	source.health.record(started, err, result != nil && result.Quality != quality)
-	m.schedule.record(source.id, platform, "musicUrl", classifyOutcome(parent, ctx, err), result != nil && result.Quality != quality, time.Since(started).Milliseconds())
+	m.schedule.record(source.id, platform, "musicUrl", classifyOutcome(parent, ctx, err), result != nil && result.Quality != quality, time.Since(started).Milliseconds(), source.fingerprint)
 	var sourceErr *SourceRequestError
 	if errors.As(err, &sourceErr) && errors.Is(err, ErrSourceRateLimited) {
-		m.BackoffMusicURL(source.id, platform, sourceErr.RetryAfter())
+		m.BackoffMusicURL(source.id, platform, sourceErr.RetryAfter(), source.fingerprint)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", source.meta.Name, err)

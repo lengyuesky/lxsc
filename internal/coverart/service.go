@@ -66,6 +66,18 @@ func (s *Service) init() {
 	})
 }
 
+// AcquireDelivery 供已鉴权的本地图片交付复用大图并发限制；必须在读取图片前调用。
+func (s *Service) AcquireDelivery(ctx context.Context) (func(), error) {
+	s.init()
+	return s.Delivery.Acquire(ctx, 0)
+}
+
+// AcquireWork 供上传图片的有界解析复用全站与用户并发限制。
+func (s *Service) AcquireWork(ctx context.Context, userID int64) (func(), error) {
+	s.init()
+	return s.Limits.Acquire(ctx, userID)
+}
+
 // Serve reads and validates images; it never forwards client headers or redirects to an upstream.
 func (s *Service) Serve(w http.ResponseWriter, r *http.Request, resource Resource, event *diagnostics.Event) {
 	ctx, cancel := context.WithTimeout(r.Context(), coverRequestTimeout)
