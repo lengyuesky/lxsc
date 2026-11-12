@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -157,11 +157,12 @@ func TestMediaRejectsNonAudioSuccessResponses(t *testing.T) {
 				})}
 				rec := httptest.NewRecorder()
 				s.stream(rec, mediaStabilityRequest(user, info, ""))
-				if !reflect.DeepEqual(paths, []string{"/a/1", "/b/1"}) || badReads.Load() != 0 {
+				// 缓存的 A 地址先被验证；失效后 A 重新取链与 B 并发，全部失败时两个音源都已尝试。
+				if paths[0] != "/a/1" || !slices.Contains(paths, "/b/1") || (allRejected && !slices.Contains(paths, "/a/2")) || badReads.Load() != 0 {
 					t.Fatalf("错误页必须关闭并切源，不能读取正文或判为网络不确定: %v reads=%d", paths, badReads.Load())
 				}
 				if allRejected {
-					if badClosed.Load() != 2 || rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
+					if badClosed.Load() != 3 || rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
 						t.Fatal("所有响应都是错误页时必须明确失败")
 					}
 					if _, err := s.DB.GetTrack(context.Background(), info.TrackID()); err == nil {

@@ -137,9 +137,9 @@ func splitSingers(s string) map[string]bool {
 	return out
 }
 
-// FindCrossSourceCandidate 在其它平台按歌名搜索并挑选同一首歌。
-// 只返回匹配成功的候选，按"时长最接近、平台优先级靠前"排序后的第一个。
-func (c *Catalog) FindCrossSourceCandidate(ctx context.Context, in *Info) *Info {
+// FindCrossSourceCandidates 在其它平台按歌名搜索同一首歌，每个平台最多返回一首，
+// 按"时长最接近、搜索排名靠前"排序。
+func (c *Catalog) FindCrossSourceCandidates(ctx context.Context, in *Info) []*Info {
 	if in == nil || strings.TrimSpace(in.Name()) == "" {
 		return nil
 	}
@@ -173,14 +173,19 @@ func (c *Catalog) FindCrossSourceCandidate(ctx context.Context, in *Info) *Info 
 		}
 		matches = append(matches, match{candidate, gap, index})
 	}
-	if len(matches) == 0 {
-		return nil
-	}
 	sort.SliceStable(matches, func(i, j int) bool {
 		if matches[i].gap != matches[j].gap {
 			return matches[i].gap < matches[j].gap
 		}
 		return matches[i].pos < matches[j].pos
 	})
-	return matches[0].info
+	var out []*Info
+	seen := map[string]bool{}
+	for _, m := range matches {
+		if !seen[m.info.Source()] {
+			seen[m.info.Source()] = true
+			out = append(out, m.info)
+		}
+	}
+	return out
 }

@@ -45,7 +45,8 @@ func TestPlaybackDiagnosticsStatusZeroAndForceRedirect(t *testing.T) {
 					t.Fatal("强制302出现代理事件", e)
 				}
 			}
-			if !found || calls != 1 {
+			// 缓存地址连不上时丢弃并向音源重新取链一次，新地址同样连不上才报告失败。
+			if !found || calls != 2 {
 				t.Fatal(found, calls)
 			}
 			if w.Header().Get("Location") != "" || !strings.Contains(w.Body.String(), `"status":"failed"`) {

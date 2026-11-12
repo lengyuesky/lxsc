@@ -49,6 +49,7 @@ type Catalog struct {
 	albumMetadata      *lru.LRU[string, AlbumMeta]
 	boardNames         *lru.LRU[string, string]
 	failures           *lru.LRU[string, string]
+	exhausted          *lru.LRU[exhaustedKey, int] // 曲目与验证条件 → 已确认全部失败的最高音质档
 	flight             requestGroup
 	observeMu          sync.RWMutex
 	observer           func(RemoteRequest)
@@ -104,6 +105,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		albumMetadata:     lru.NewLRU[string, AlbumMeta](4000, nil, time.Hour),
 		boardNames:        lru.NewLRU[string, string](2000, nil, 30*time.Minute),
 		failures:          lru.NewLRU[string, string](500, nil, 30*time.Second),
+		exhausted:         lru.NewLRU[exhaustedKey, int](2000, nil, exhaustedTTL),
 		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
 		urlChecks:         newRequestCache[urlCheckKey, mediaHeaders](2000, urlCheckCacheTTL(v.URLCacheTTL)),
 		mediaFeedback:     map[urlCheckKey]bool{},
@@ -419,9 +421,6 @@ func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, quality stri
 		selection = fmt.Sprint(sourceIDs)
 		accept = func(value js.MusicURLResult) bool { return slices.Contains(sourceIDs, value.SourceID) }
 	}
-	current := c.Settings.Get()
-	strategy, concurrency := current.SourceSelection, current.SourceConcurrency
-	selection += "/" + strategy
 	if exact {
 		selection += "/exact:" + requestedQuality
 		previousAccept := accept
@@ -440,7 +439,9 @@ func (c *Catalog) resolvePlaybackURL(ctx context.Context, in *Info, quality stri
 		}
 	}
 	r, err := c.urls.loadSelected(ctx, key, failedToken, selection, accept, 12*time.Second, func(remoteCtx context.Context) (js.MusicURLResult, bool, error) {
-		remoteCtx = js.WithMusicURLConcurrency(js.WithMusicURLPolicy(remoteCtx, strategy, exact), concurrency)
+		if exact {
+			remoteCtx = js.WithExactMusicURL(remoteCtx)
+		}
 		value, err := c.urlCall(remoteCtx, in.Source(), c.ScriptInfo(in), requestedQuality, resolveIDs)
 		if remoteCtx.Err() != nil {
 			err = remoteCtx.Err()
@@ -543,12 +544,35 @@ func (c *Catalog) InvalidatePlaybackURL(failed URLResolution) {
 	c.urls.mu.Unlock()
 	c.urlChecks.forget(urlCheckKey{token: failed.token})
 	c.urlChecks.forget(urlCheckKey{token: failed.token, audio: true})
+	c.urlChecks.forget(urlCheckKey{token: failed.token, audio: true, direct: true})
+}
+
+// exhaustedTTL 内同一曲目不再重复整轮选源：客户端的 HEAD、重试和降档请求立即得到同一结论。
+const exhaustedTTL = 30 * time.Second
+
+// MarkPlaybackExhausted 记录"这首曲目在该音质及以下，所有音源都已确认失败"。
+// 只能在完整跑完全部候选后调用；被取消、超时或繁忙打断的选源不算确认。
+// direct 区分验证条件：客户端直连与本站代理的结论互不通用。
+func (c *Catalog) MarkPlaybackExhausted(in *Info, quality string, direct bool) {
+	c.exhausted.Add(exhaustedKey{in.TrackID(), direct}, QualityRank(SelectQuality(quality, in.Qualities())))
+}
+
+// PlaybackExhausted 报告该曲目是否刚被确认在此音质及以下全部失败。
+func (c *Catalog) PlaybackExhausted(in *Info, quality string, direct bool) bool {
+	rank, ok := c.exhausted.Get(exhaustedKey{in.TrackID(), direct})
+	return ok && QualityRank(SelectQuality(quality, in.Qualities())) <= rank
+}
+
+type exhaustedKey struct {
+	trackID string
+	direct  bool
 }
 
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
 func (c *Catalog) InvalidateURLs() {
 	c.urls.purge()
 	c.urlChecks.purge()
+	c.exhausted.Purge()
 }
 
 // scriptInfo 传给音源脚本的 musicInfo：扁平字段 + meta 结构（兼容两种脚本写法）

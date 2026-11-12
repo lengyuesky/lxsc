@@ -12,13 +12,8 @@ import (
 )
 
 const (
-	mediaRecoveryTimeout     = mediastream.RecoveryTimeout
-	mediaHeadTimeout         = mediastream.HeadTimeout
-	mediaFirstQualityTimeout = mediastream.FirstQualityTimeout
-	mediaNextQualityTimeout  = mediastream.NextQualityTimeout
-	mediaSpeedLaneTimeout    = mediastream.SpeedLaneTimeout
-	mediaQualityWait         = mediastream.QualityWait
-	maxMediaAttempts         = mediastream.MaxAttempts
+	mediaPrepareLimit = mediastream.PrepareLimit
+	mediaQualityGrace = mediastream.QualityGrace
 )
 
 type mediaErrorWriter = mediastream.ErrorWriter

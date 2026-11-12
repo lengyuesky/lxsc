@@ -61,7 +61,7 @@ unset DEBUG_TOKEN DEBUG_BASE
 
 每条事件仅含 `time`、`stage`、受限 `trackId`、平台代号、音质、模式、是否命中缓存、HTTP `status`、安全 `error` 分类和 `elapsedMs`。阶段包括：
 
-- `metadata`：元数据查询；`resolve` / `refresh`：首次取链或过期刷新；`source_fallback`：排除失败脚本后的备选取链。
+- `metadata`：元数据查询；`resolve`：调度顺序第一位音源的取链；`source_fallback`：其余音源的取链；`refresh`：缓存地址失效后的重新取链，或全部候选失败后对被 403/404/410 拒绝的候选再取一次；`cross_source`：到其它平台搜索同一首歌。
 - `url_check`：新解析、刷新或备选直链的最小 Range 校验；`cache_check`：缓存直链 Range 校验；`redirect`：交付 302 给客户端。
 - `proxy_response`：代理取得上游响应；`proxy_copy`：代理传输结束/中断。
 - `probe`：独立主动探测 HTTP 响应头。
@@ -83,7 +83,7 @@ unset DEBUG_TOKEN DEBUG_BASE
 | `write_error` | 协议正文写出失败、短写或网络缓冲刷新失败；刷新失败时 `bytesWritten` 与 `responseBytes` 也可能相等 |
 | `upstream_error` | 无法安全细分的上游错误，不输出原始错误字符串 |
 
-例如 `cache_check status=0 error=dns` 后出现 `redirect status=302`，表示服务器可能在尝试备选后仍无法验证音频，但保留了未被明确拒绝的客户端直连机会，并不表示服务端成功请求了音频。`403/404/410` 会触发每源至多一次刷新，仍失败则尝试其他脚本；普通播放新增的 `source_fallback` 只表示备选取链阶段，不暴露脚本 ID 或名称。平台 `tx` 等代号也不是音源脚本身份。`200/206` 只证明服务端拿到了这些响应头，可能仍是错误内容、编解码不支持、客户端网络/CORS/混合内容或签名绑定问题。
+例如 `cache_check status=0 error=dns` 表示缓存地址连不上，服务端会丢弃它并重新选源；只有通过验证的候选才会出现 `redirect status=302`。播放失败时，事件列表里能看到每个音源、每档音质（以及其它平台）的取链和验证结果；被 `403/404/410` 拒绝的新地址在全部候选失败后各再取一次。`source_fallback` 只表示其余音源的取链阶段，不暴露脚本 ID 或名称。平台 `tx` 等代号也不是音源脚本身份。`200/206` 只证明服务端拿到了这些响应头，可能仍是错误内容、编解码不支持、客户端网络/CORS/混合内容或签名绑定问题。
 
 建议排查顺序：读取 capabilities/status → 用户在客户端复现 → 对比实际请求 → 按 grantedScopes 选择定向探测或完整诊断。服务端探测无法观察客户端实际网络，不需要索取播放器密码或永久凭据。`force_redirect` 继续禁止客户端 `proxy=1` 覆盖；基础 `/probe` 只读取安全传输的响应头，不自动刷新或执行播放切源；完整 `/probe/playback` 可检查实际配置路径及既有换源流程，但也不转发音频正文。
 
@@ -243,9 +243,9 @@ AI 应先比较真实 `client_response`：返回空或失败时，再对同一 I
 {"trackId":"tr-wy-123456","quality":"320k","method":"HEAD","userId":1}
 ```
 
-method 支持 HEAD/GET/POST，endpoint 默认为 stream，也可选择 download，proxy 为可选布尔值。它使用实际配置的网络路径、平台 UA/Referer 和已有刷新/换源逻辑；强制 302 仍禁止 proxy 覆盖。GET/POST 也只获取上游响应头后关闭，不转发整首音频、不持久化播放歌曲或收听统计。结果标记 `validation=headers_only`，不增加媒体成功评分，不能作为音频可播放的证据。新探测只向全局事件写入 `protocol_probe` / `playback_probe` 汇总，详细阶段位于结果内部的独立缓冲，不混入真实 `client_response`。
+method 支持 HEAD/GET/POST，endpoint 默认为 stream，也可选择 download，proxy 为可选布尔值。它使用实际配置的网络路径和与播放相同的选源逻辑，验证条件与交付方式一致（代理带平台 Referer，302 直连不带）；强制 302 仍禁止 proxy 覆盖。GET/POST 也只获取上游响应头后关闭，不转发整首音频、不持久化播放歌曲或收听统计。结果标记 `validation=headers_only`，不增加媒体成功评分，不能作为音频可播放的证据。新探测只向全局事件写入 `protocol_probe` / `playback_probe` 汇总，详细阶段位于结果内部的独立缓冲，不混入真实 `client_response`。
 
-实际内容验证使用独立的 `POST /api/debug/probe/audio`，要求 `probe + inspect`，请求字段与播放预检相同。它每个候选最多读取 256 KiB，并由 FFmpeg 成功解码后才标记 `validation=validated`。换源可能多次读取片段；接口更新验证缓存及音源评分，但不返回音频正文、不记录播放或收听统计。`invalid_audio` 表示片段为空、损坏或不能解码，`decoder_unavailable` 表示服务器缺少解码依赖。普通直链交付不因 QQ 或 HTTP 地址自动改为代理。细节见 [音频内容验证](audio-validation.md)。
+实际内容验证使用独立的 `POST /api/debug/probe/audio`，要求 `probe + inspect`，请求字段与播放预检相同。它每个候选最多读取 256 KiB，并由 FFmpeg 成功解码后才标记 `validation=validated`。换源可能多次读取片段；接口更新验证缓存及音源评分，但不返回音频正文、不记录播放或收听统计。`invalid_audio` 表示片段为空、损坏或不能解码，`incomplete_audio` 表示能解码但只是试听片段、提示音或被截断的文件，`decoder_unavailable` 表示服务器缺少解码依赖。普通直链交付不因 QQ 或 HTTP 地址自动改为代理。细节见 [音频内容验证](audio-validation.md)。
 
 维护示例：
 

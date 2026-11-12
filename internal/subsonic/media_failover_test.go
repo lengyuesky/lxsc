@@ -66,8 +66,13 @@ func TestMediaFailoverDifferentScriptIDs(t *testing.T) {
 					t.Error("尝试下一链接之前必须关闭前一个失败响应")
 				}
 				paths = append(paths, req.URL.Path)
-				if req.Header.Get("Cookie") != "" || req.Header.Get("Authorization") != "" || req.Header.Get("User-Agent") == "" || req.Header.Get("Referer") != "https://music.163.com/" {
-					t.Error("媒体请求必须使用播放UA/Referer且不继承用户凭据")
+				// 验证条件与交付方式一致：代理带平台 Referer；302 由客户端自行访问，验证也不带 Referer。
+				referer := ""
+				if tc.mode == "proxy" {
+					referer = "https://music.163.com/"
+				}
+				if req.Header.Get("Cookie") != "" || req.Header.Get("Authorization") != "" || req.Header.Get("User-Agent") == "" || req.Header.Get("Referer") != referer {
+					t.Error("媒体请求必须使用播放UA、与交付方式一致的Referer，且不继承用户凭据")
 				}
 				if tc.mode == "proxy" {
 					if req.Header.Get("Range") != "bytes=10-19" || req.Header.Get("If-Range") != `"版本"` {
@@ -244,11 +249,11 @@ func TestMediaFailoverAllRejectedIsBounded(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			s.stream(rec, mediaStabilityRequest(user, info, extra))
-			// 并发下到达顺序不确定，只断言每源恰好一次取链加一次刷新。
+			// 并发下到达顺序不确定，只断言每源恰好一次取链加一次重取。
 			slices.Sort(paths)
 			want := []string{"/a/1", "/a/2", "/b/1", "/b/2", "/c/1", "/c/2", "/d/1", "/d/2"}
 			if !reflect.DeepEqual(paths, want) || reads.Load() != 0 || closed.Load() != 8 {
-				t.Fatalf("完整四源且每源最多刷新一次，不读取失败正文：%v 读取=%d 关闭=%d", paths, reads.Load(), closed.Load())
+				t.Fatalf("完整四源且每源最多重取一次，不读取失败正文：%v 读取=%d 关闭=%d", paths, reads.Load(), closed.Load())
 			}
 			if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) {
 				t.Fatal("全部明确失败必须返回协议错误")
@@ -352,8 +357,12 @@ func TestMediaFailoverTerminalBoundaries(t *testing.T) {
 			rec := httptest.NewRecorder()
 			s.stream(rec, req)
 			wantGets := int32(1)
-			if scenario == "预先取消" {
+			switch scenario {
+			case "预先取消":
 				wantGets = 0
+			case "302的416":
+				// 直连验证只取文件开头，416 说明这个地址是空文件：属于普通失败，继续确认其它音源。
+				wantGets = 2
 			}
 			if gets.Load() != wantGets || rec.Header().Get("Location") != "" {
 				t.Fatalf("终止状态不能访问B或继续直连：%d %v", gets.Load(), rec.Header())
@@ -364,7 +373,7 @@ func TestMediaFailoverTerminalBoundaries(t *testing.T) {
 			if scenario == "copy中断" && (rec.Code != 206 || rec.Body.String() != "已提交音频") {
 				t.Fatal("copy开始后不能重播或追加协议错误")
 			}
-			if !strings.HasSuffix(scenario, "取消") && closed.Load() != 1 {
+			if !strings.HasSuffix(scenario, "取消") && closed.Load() != wantGets {
 				t.Fatal("终止响应也必须关闭正文")
 			}
 			if _, err := s.DB.GetTrack(context.Background(), info.TrackID()); err == nil {
@@ -410,9 +419,6 @@ func TestMediaHeaderTimeoutTriesDifferentSource(t *testing.T) {
 }
 
 func TestMediaRecoveryTotalBudget(t *testing.T) {
-	if mediaRecoveryTimeout != 9*time.Second || mediaHeadTimeout != 4*time.Second || mediaFirstQualityTimeout != 2500*time.Millisecond || mediaNextQualityTimeout != 1500*time.Millisecond || maxMediaAttempts != 24 || mediaSpeedLaneTimeout != 4*time.Second {
-		t.Fatal("恢复上限必须固定且与文档一致")
-	}
 	for _, proxy := range []bool{false, true} {
 		t.Run(fmt.Sprint(proxy), func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaFailoverScript("a"))
@@ -575,13 +581,16 @@ func TestMediaFailoverRefreshParsingAndFinalQuality(t *testing.T) {
 			}
 			s, user, info := newMediaStabilityServer(t, script)
 			addMediaFallback(t, s, 22, "b")
-			// 缓存过期仍优先原源刷新，覆盖刷新解析失败与最终降级音质。
+			// 缓存过期后 A 重新取链与 B 并发，覆盖重新取链解析失败与最终降级音质。
 			if _, err := s.Catalog.ResolvePlaybackURL(context.Background(), info, "flac"); err != nil {
 				t.Fatal(err)
 			}
 			var paths []string
+			var pathsMu sync.Mutex
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				pathsMu.Lock()
 				paths = append(paths, req.URL.Path)
+				pathsMu.Unlock()
 				status := 403
 				if strings.HasPrefix(req.URL.Path, "/b/") {
 					status = 200
@@ -594,7 +603,7 @@ func TestMediaFailoverRefreshParsingAndFinalQuality(t *testing.T) {
 			if parseFailure {
 				wantGets = 2
 			}
-			if len(paths) != wantGets || paths[len(paths)-1] != "/b/1" || rec.Body.String() != "音频" || rec.Header().Get("Content-Type") != "audio/mpeg" {
+			if len(paths) != wantGets || paths[0] != "/a/1" || !slices.Contains(paths, "/b/1") || rec.Body.String() != "音频" || rec.Header().Get("Content-Type") != "audio/mpeg" {
 				t.Fatalf("刷新解析失败也应切源，最终Content-Type必须使用B降级后的音质：%v %v", paths, rec.Header())
 			}
 		})

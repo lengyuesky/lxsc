@@ -66,7 +66,7 @@ func (s *Service) Serve(w http.ResponseWriter, r *http.Request, persistPlayback 
 		trace.Outcome("failed", 0)
 		originalFail(w, r, code, message)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), mediaRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), prepareLimit)
 	defer cancel()
 	release, err := s.Catalog.AcquireRequest(ctx, u.ID)
 	if err != nil {
@@ -299,14 +299,15 @@ func expiredMediaStatus(status int) bool {
 
 // inspectMedia 验证有界音频片段后关闭正文，保留真实媒体头供 HEAD/直连使用。
 // 授权的只取头调试沿用最小 Range，并明确不作可播放验证。
-func (s *Service) inspectMedia(ctx context.Context, in *music.Info, address string) (*http.Response, error) {
+// direct 为真时客户端将自行访问该地址：验证也不带平台 Referer，只在本站带 Referer 才能访问的地址不算可播放。
+func (s *Service) inspectMedia(ctx context.Context, in *music.Info, address string, direct bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil || req.URL.Host == "" || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
 		return nil, errInvalidMediaURL
 	}
 	ref, ua := refererFor(in.Source())
 	req.Header.Set("User-Agent", ua)
-	if ref != "" {
+	if ref != "" && !direct {
 		req.Header.Set("Referer", ref)
 	}
 	if headersOnly(ctx) || s.Catalog.AudioCheck != nil {
@@ -322,13 +323,13 @@ func (s *Service) inspectMedia(ctx context.Context, in *music.Info, address stri
 		}
 		return nil, err
 	}
-	err = s.verifyMedia(ctx, resp)
+	err = s.verifyMedia(ctx, in, resp)
 	_ = resp.Body.Close()
 	resp.Body = http.NoBody
 	return resp, err
 }
 
-func (s *Service) verifyMedia(ctx context.Context, response *http.Response) error {
+func (s *Service) verifyMedia(ctx context.Context, in *music.Info, response *http.Response) error {
 	if err := httpguard.CheckMediaResponse(response); err != nil {
 		return err
 	}
@@ -338,30 +339,30 @@ func (s *Service) verifyMedia(ctx context.Context, response *http.Response) erro
 	if s.Catalog.AudioCheck != nil {
 		return s.Catalog.AudioCheck(ctx, response)
 	}
-	return httpguard.VerifyAudio(ctx, response)
+	return httpguard.VerifyAudio(ctx, response, time.Duration(in.Duration())*time.Second)
 }
 
-func (s *Service) checkMedia(ctx context.Context, resolution music.URLResolution, in *music.Info) (*http.Response, error) {
+func (s *Service) checkMedia(ctx context.Context, resolution music.URLResolution, in *music.Info, direct bool) (*http.Response, error) {
 	headerOnly := headersOnly(ctx)
 	check := func(checkCtx context.Context) (*http.Response, error) {
 		// 共享缓存工作有独立取消上下文，显式保留本次验证契约。
 		if headerOnly {
 			checkCtx = HeaderProbe(checkCtx)
 		}
-		return s.inspectMedia(checkCtx, in, resolution.Result.URL)
+		return s.inspectMedia(checkCtx, in, resolution.Result.URL, direct)
 	}
 	if headerOnly {
 		return s.Catalog.CheckPlaybackURL(ctx, resolution, check)
 	}
-	return s.Catalog.CheckPlaybackAudio(ctx, resolution, check)
+	return s.Catalog.CheckPlaybackAudio(ctx, resolution, direct, check)
 }
 
 func (s *Service) verifyProxyMedia(ctx context.Context, in *music.Info, resolution music.URLResolution, response *http.Response) error {
 	if headersOnly(ctx) || s.Catalog.AudioCheck != nil || httpguard.MediaStartsAtZero(response) || (response.StatusCode != 200 && response.StatusCode != 206) {
-		return s.verifyMedia(ctx, response)
+		return s.verifyMedia(ctx, in, response)
 	}
 	// 拖动得到的片段不含文件头，先校验同版本音频起始片段，不能把中间字节误判成坏文件。
-	checked, err := s.checkMedia(ctx, resolution, in)
+	checked, err := s.checkMedia(ctx, resolution, in, false)
 	if err != nil {
 		return err
 	}

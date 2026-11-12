@@ -2,6 +2,7 @@ package js
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,11 +66,6 @@ func TestSchedulePersistenceRestoresRankingAndAbsoluteDeadlines(t *testing.T) {
 	if err != nil || result.SourceID != b.ID {
 		t.Fatalf("真实调用应返回健康音源：%+v %v", result, err)
 	}
-	release, allowed := m.AcquirePlaybackProbe(a.ID, "wy")
-	if !allowed {
-		t.Fatal("冷却音源应保留一次探测机会")
-	}
-	defer release()
 	m.BackoffMusicURL(a.ID, "wy", time.Minute)
 	cooldown, retry := m.ScheduleSnapshot(a.ID)[0].CoolingUntil, m.ScheduleSnapshot(a.ID)[0].RetryUntil
 	if err := m.CloseSchedulePersistence(); err != nil {
@@ -85,15 +81,10 @@ func TestSchedulePersistenceRestoresRankingAndAbsoluteDeadlines(t *testing.T) {
 	if state.Samples != 2 || state.ConsecutiveFailures != 2 || !state.CoolingUntil.Equal(cooldown) || !state.RetryUntil.Equal(retry) {
 		t.Fatalf("不能重启续期或丢失失败计数：%+v", state)
 	}
-	if _, ok := restarted.AcquirePlaybackProbe(a.ID, "wy"); ok {
-		t.Fatal("尚未到期的限流等待必须恢复")
+	if _, err := restarted.MusicURLForSources(ctx, "wy", nil, "320k", []int64{a.ID}); !errors.Is(err, ErrNoSource) {
+		t.Fatal("尚未到期的限流等待必须恢复", err)
 	}
 	clock.Add(60000)
-	probe, ok := restarted.AcquirePlaybackProbe(a.ID, "wy")
-	if !ok {
-		t.Fatal("重启不能恢复旧探测的进行中锁")
-	}
-	probe()
 	clock.Add((scheduleSampleTTL + time.Second).Milliseconds())
 	state = restarted.ScheduleSnapshot(a.ID)[0]
 	if state.Samples != 0 || state.ConsecutiveFailures != 0 {

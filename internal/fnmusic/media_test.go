@@ -21,7 +21,8 @@ import (
 
 func attachMedia(t *testing.T, f *fixture) (*atomic.Int64, []byte) {
 	t.Helper()
-	body := testaudio.WAV()
+	// 时长与夹具歌曲的 45 秒元数据相符；过短的音频会被当作试听片段拒绝。
+	body := testaudio.Tone(45)
 	var sent atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/wav")

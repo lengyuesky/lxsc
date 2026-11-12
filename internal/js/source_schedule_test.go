@@ -22,38 +22,28 @@ func newTestClock() (*sourceScheduler, *time.Time) {
 }
 
 func TestClassifyOutcome(t *testing.T) {
-	scriptErr := errors.New("脚本失败")
-	newParent := func() func() (context.Context, context.CancelFunc) {
-		return func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) }
-	}
 	for _, tc := range []struct {
-		name   string
-		parent func() (context.Context, context.CancelFunc)
-		budget func(context.Context) (context.Context, context.CancelFunc)
-		err    error
-		want   scheduleOutcome
+		name      string
+		cancelled bool // 发起调用的请求已终止：用户取消，或其它候选先胜出
+		err       error
+		want      scheduleOutcome
 	}{
-		{"成功", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(p) }, nil, scheduleSuccess},
-		{"用户取消", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(p) }, context.Canceled, scheduleIgnore},
-		{"繁忙", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(p) }, admission.ErrBusy, scheduleIgnore},
-		{"赢家出现", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(p) }, context.Canceled, scheduleSlow},
-		{"本源超时", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithTimeout(p, 0) }, context.DeadlineExceeded, scheduleStrongFail},
-		{"返回无效", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(p) }, errInvalidSourceResponse, scheduleStrongFail},
-		{"脚本错误", newParent(), func(p context.Context) (context.Context, context.CancelFunc) { return context.WithCancel(p) }, scriptErr, scheduleStrongFail},
+		{"成功", false, nil, scheduleSuccess},
+		{"请求已终止", true, context.Canceled, scheduleIgnore},
+		{"繁忙", false, admission.ErrBusy, scheduleIgnore},
+		{"音质不支持", false, ErrNoQuality, scheduleIgnore},
+		{"本源超时", false, context.DeadlineExceeded, scheduleStrongFail},
+		{"返回无效", false, errInvalidSourceResponse, scheduleStrongFail},
+		{"脚本错误", false, errors.New("脚本失败"), scheduleStrongFail},
 	} {
-		parent, parentCancel := tc.parent()
-		budget, budgetCancel := tc.budget(parent)
-		switch tc.name {
-		case "用户取消":
-			parentCancel()
-		case "赢家出现":
-			budgetCancel()
+		parent, cancel := context.WithCancel(context.Background())
+		if tc.cancelled {
+			cancel()
 		}
-		if got := classifyOutcome(parent, budget, tc.err); got != tc.want {
+		if got := classifyOutcome(parent, tc.err); got != tc.want {
 			t.Errorf("%s 分类错误: got=%v want=%v", tc.name, got, tc.want)
 		}
-		parentCancel()
-		budgetCancel()
+		cancel()
 	}
 }
 
@@ -189,29 +179,6 @@ func TestSchedulerFailGraceMergesConcurrentFailures(t *testing.T) {
 	}
 }
 
-func TestSchedulerSlowIsWeakSignalOnly(t *testing.T) {
-	g, now := newTestClock()
-	g.record(1, "wy", "musicUrl", scheduleStrongFail, false, -1)
-	state := g.states[scheduleKey{1, "wy", "musicUrl"}]
-	consecBefore := state.consec
-	g.record(1, "wy", "musicUrl", scheduleSlow, false, 800)
-	if state.consec != consecBefore {
-		t.Fatal("较慢信号不得改变连续失败计数")
-	}
-	sample := state.samples[(state.next+len(state.samples)-1)%len(state.samples)]
-	if sample.weight != scheduleSlowWeight {
-		t.Fatalf("较慢信号必须使用固定弱权重: %+v", sample)
-	}
-	// 冷却中的音源收到慢信号不改变冷却截止。
-	*now = now.Add(scheduleFailGrace + time.Second)
-	g.record(1, "wy", "musicUrl", scheduleStrongFail, false, -1)
-	cooldownBefore := state.cooldown
-	g.record(1, "wy", "musicUrl", scheduleSlow, false, 800)
-	if !state.cooldown.Equal(cooldownBefore) {
-		t.Fatal("弱信号不得延长冷却")
-	}
-}
-
 func TestSchedulerConcurrentRecordAndRank(t *testing.T) {
 	g, _ := newTestClock()
 	var wg sync.WaitGroup
@@ -265,9 +232,8 @@ func TestManagerDynamicReorderAfterFailures(t *testing.T) {
 	if got, want := m.MusicURLSourceIDs("wy"), []int64{1, 2}; !slicesEqual(got, want) {
 		t.Fatalf("冷启动必须按加载顺序: %v", got)
 	}
-	// 只允许一个并行源，明确验证启动顺序：首次坏源失败后尝试好源，
-	// 后续调用按更新后的评分直接命中好源，不依赖并发竞速的调度时机。
-	ctx := WithMusicURLConcurrency(context.Background(), 1)
+	// 逐个音源取链：首次坏源失败后尝试好源，后续调用按更新后的评分直接命中好源。
+	ctx := context.Background()
 	for range 3 {
 		result, err := m.MusicURL(ctx, "wy", nil, "320k")
 		if err != nil || result.SourceID != 2 {
@@ -360,40 +326,6 @@ func TestManagerUserCancellationLeavesNoTrace(t *testing.T) {
 	}
 	if len(m.schedule.states) != 0 {
 		t.Fatalf("用户取消不得留下调度样本: %d", len(m.schedule.states))
-	}
-}
-
-func TestManagerSlowPrimaryRecordsWeakSignal(t *testing.T) {
-	m := startupSources(t,
-		`globalThis.__lx_request=()=>new Promise((resolve,reject)=>setTimeout(()=>reject(new Error('太慢')),30000));`,
-		`globalThis.__lx_request=()=>({url:'https://media.invalid/backup'});`,
-	)
-	result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
-	if err != nil || result.SourceID != 2 {
-		t.Fatalf("备用源应先成功: %+v %v", result, err)
-	}
-	// 慢源在 1.5s 后被启动，随后被赢家取消：应记为弱信号而非强失败。
-	state := m.schedule.states[scheduleKey{1, "wy", "musicUrl"}]
-	if state == nil {
-		t.Fatal("慢源被取消后应有调度样本")
-	}
-	if state.consec != 0 {
-		t.Fatalf("弱信号不得计入连续失败: %d", state.consec)
-	}
-	found := false
-	for _, sample := range state.samples {
-		if sample.at.IsZero() {
-			continue
-		}
-		if sample.weight == scheduleSlowWeight {
-			found = true
-		}
-		if sample.weight == -1 {
-			t.Fatal("被赢家取消的慢源不得记为强失败")
-		}
-	}
-	if !found {
-		t.Fatal("慢源应记录较慢弱信号")
 	}
 }
 

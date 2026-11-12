@@ -45,7 +45,7 @@ func TestMediaDowngradeAndCachedValidationForBothPolicies(t *testing.T) {
 				if response != nil {
 					response.Body.Close()
 				}
-				if err != nil || !resolution.Validated || resolution.Result.Quality != "320k" || checks.Load() != 3 {
+				if err != nil || !resolution.Validated || resolution.Result.Quality != "320k" || checks.Load() != 2 {
 					t.Fatalf("第 %d 次请求未复用降级版本: %+v checks=%d err=%v", round, resolution, checks.Load(), err)
 				}
 			}
@@ -95,7 +95,7 @@ func TestRejectedHighQualityTriesSameSourceLowerQuality(t *testing.T) {
 	if resp != nil {
 		defer resp.Body.Close()
 	}
-	if err != nil || r.Result.Quality != "320k" || strings.Join(paths, ",") != "/flac,/flac,/320k" {
+	if err != nil || r.Result.Quality != "320k" || strings.Join(paths, ",") != "/flac,/320k" {
 		t.Fatalf("%+v %v %v", r, err, paths)
 	}
 }
@@ -221,12 +221,12 @@ func setSourceSelection(t *testing.T, s *Server, strategy string) {
 	}
 }
 
-func TestMediaQualityRacesAllSourcesPerTier(t *testing.T) {
+// 各音源并发、各自从高到低逐档尝试：三个音源的 flac 同时在途，全部失败后由 320k 胜出。
+func TestMediaSourcesRaceConcurrentlyAndDowngradeIndependently(t *testing.T) {
 	s, user, info := newMediaStabilityServer(t, mediaQualityScript("a", "flac", "320k"))
 	addMediaSource(t, s, 2, mediaQualityScript("b", "flac", "320k"))
 	addMediaSource(t, s, 3, mediaQualityScript("c", "flac", "320k"))
-	var active, maximum, flacArrived, flacDone atomic.Int32
-	var early atomic.Bool
+	var active, maximum, flacArrived atomic.Int32
 	allFlac := make(chan struct{})
 	var allFlacOnce sync.Once
 	s.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -243,11 +243,7 @@ func TestMediaQualityRacesAllSourcesPerTier(t *testing.T) {
 			case <-allFlac:
 			case <-time.After(time.Second):
 			}
-			defer flacDone.Add(1)
 			return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"audio/flac"}}, Body: http.NoBody}, nil
-		}
-		if flacDone.Load() != 3 {
-			early.Store(true)
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/mpeg"}}, Body: http.NoBody}, nil
 	})}
@@ -258,8 +254,8 @@ func TestMediaQualityRacesAllSourcesPerTier(t *testing.T) {
 	if err != nil || !r.Validated || r.Result.Quality != "320k" {
 		t.Fatalf("flac 全部失败后应降到 320k: %+v %v", r.Result, err)
 	}
-	if flacArrived.Load() != 3 || maximum.Load() != 3 || early.Load() {
-		t.Fatalf("同档三个源必须同时在途，且全部失败后才降档: flac=%d max=%d early=%v", flacArrived.Load(), maximum.Load(), early.Load())
+	if flacArrived.Load() != 3 || maximum.Load() != 3 {
+		t.Fatalf("三个音源必须同时在途: flac=%d max=%d", flacArrived.Load(), maximum.Load())
 	}
 }
 
@@ -313,20 +309,22 @@ func TestMediaConcurrencyLimitRefillsAfterFailure(t *testing.T) {
 	}
 }
 
-func TestMediaSpeedWaitsBrieflyForHigherQuality(t *testing.T) {
+// 音质优先：已有可播放的低档后，最多为在途的更高音质再等 mediaQualityGrace；速度优先完全不等。
+func TestMediaQualityGraceBoundsWaitForHigherQuality(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		delay   time.Duration
-		source  int64
-		quality string
+		name, strategy string
+		delay          time.Duration
+		source         int64
+		quality        string
 	}{
-		{"等待窗口内的更高档胜出", 20 * time.Millisecond, 2, "flac"},
-		{"超过等待窗口采用已就绪的低档", mediaQualityWait + 400*time.Millisecond, 1, "320k"},
+		{"音质优先：等待窗口内的更高档胜出", "quality", 20 * time.Millisecond, 2, "flac"},
+		{"音质优先：超过等待窗口采用已就绪的低档", "quality", mediaQualityGrace + 400*time.Millisecond, 1, "320k"},
+		{"速度优先：第一个可播放的候选直接胜出", "speed", 20 * time.Millisecond, 1, "320k"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, user, info := newMediaStabilityServer(t, mediaQualityScript("a", "320k"))
 			addMediaSource(t, s, 2, mediaQualityScript("b", "flac", "320k"))
-			setSourceSelection(t, s, "speed")
+			setSourceSelection(t, s, tc.strategy)
 			aReady := make(chan struct{})
 			var aOnce sync.Once
 			s.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -348,12 +346,16 @@ func TestMediaSpeedWaitsBrieflyForHigherQuality(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/mpeg"}}, Body: http.NoBody}, nil
 			})}
+			started := time.Now()
 			res, resp, err := s.prepareMedia(context.Background(), mediaStabilityRequest(user, info, "&quality=flac"), info, "flac", false, false)
 			if resp != nil {
 				resp.Body.Close()
 			}
 			if err != nil || res.Result.SourceID != tc.source || res.Result.Quality != tc.quality {
-				t.Fatalf("speed 只为更高档额外等待 %v: %+v %v", mediaQualityWait, res.Result, err)
+				t.Fatalf("%+v %v", res.Result, err)
+			}
+			if tc.strategy == "speed" && time.Since(started) > 500*time.Millisecond {
+				t.Fatal("速度优先不能为更高音质等待", time.Since(started))
 			}
 		})
 	}

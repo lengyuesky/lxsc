@@ -33,13 +33,8 @@ const (
 	ErrNotFound     = 70
 	ErrBusy         = -1
 
-	RecoveryTimeout     = mediaRecoveryTimeout
-	HeadTimeout         = mediaHeadTimeout
-	FirstQualityTimeout = mediaFirstQualityTimeout
-	NextQualityTimeout  = mediaNextQualityTimeout
-	SpeedLaneTimeout    = mediaSpeedLaneTimeout
-	QualityWait         = mediaQualityWait
-	MaxAttempts         = maxMediaAttempts
+	PrepareLimit = prepareLimit
+	QualityGrace = qualityGrace
 )
 
 type userKey struct{}

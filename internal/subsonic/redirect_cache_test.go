@@ -40,8 +40,8 @@ func TestRedirectCachedURLStatusMatrix(t *testing.T) {
 						if req.Method != http.MethodGet || req.URL.Path != fmt.Sprintf("/%d", n) || req.Header.Get("Range") != "bytes=0-0" || req.Header.Get("If-Range") != "" || req.Header.Get("Accept-Encoding") != "identity" {
 							t.Errorf("缓存及刷新直链都只校验最小 Range: %s %v", req.URL.Path, req.Header)
 						}
-						if req.Header.Get("Referer") != "https://music.163.com/" || req.Header.Get("User-Agent") == "" || req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
-							t.Error("校验应带平台请求头，但不能继承客户端凭据")
+						if req.Header.Get("Referer") != "" || req.Header.Get("User-Agent") == "" || req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" {
+							t.Error("302 由客户端自行访问：校验不带平台 Referer，也不能继承客户端凭据")
 						}
 						deadline, ok := req.Context().Deadline()
 						if !ok || time.Until(deadline) > 3*time.Second {
@@ -63,9 +63,13 @@ func TestRedirectCachedURLStatusMatrix(t *testing.T) {
 						s.download(rec, req)
 					}
 					success := status == 200 || status == 206
-					wantChecks := int32(1)
-					if status == 403 || status == 404 || status == 410 {
-						wantChecks = 2
+					// 缓存地址失败后向音源重新取链；新地址被过期类状态拒绝时再取一次；限流期间不再请求。
+					wantChecks := int32(2)
+					switch status {
+					case 200, 206, 429:
+						wantChecks = 1
+					case 403, 404, 410:
+						wantChecks = 3
 					}
 					if success {
 						if rec.Code != 302 || rec.Header().Get("Location") != "https://cdn.example/1" || rec.Header().Get("Cache-Control") != "no-store" {
@@ -75,7 +79,7 @@ func TestRedirectCachedURLStatusMatrix(t *testing.T) {
 						t.Fatalf("唯一音源明确失败，不能302到未复验或已拒绝的地址: %d %v %s", rec.Code, rec.Header(), rec.Body.String())
 					}
 					if checks.Load() != wantChecks || body.closed.Load() != wantChecks || body.reads.Load() != 0 {
-						t.Fatalf("每源最多两次校验并立即关闭响应，不能读取正文: %d/%d/%d", checks.Load(), body.closed.Load(), body.reads.Load())
+						t.Fatalf("校验次数错误，或没有立即关闭响应、读取了正文: %d/%d/%d", checks.Load(), body.closed.Load(), body.reads.Load())
 					}
 					_, storedErr := s.DB.GetTrack(context.Background(), info.TrackID())
 					if (storedErr == nil) != (endpoint == "stream" && success) {
@@ -114,8 +118,13 @@ func TestRedirectProbeUnknownAndRefreshFailure(t *testing.T) {
 			rec := httptest.NewRecorder()
 			started := time.Now()
 			s.stream(rec, mediaStabilityRequest(user, info, ""))
-			if time.Since(started) > 5*time.Second || checks.Load() != 1 {
-				t.Fatal("校验应及时结束且不重复请求")
+			// 缓存地址不确定时重新取链一次；重新取链失败则只有缓存地址的那一次校验。
+			wantChecks := int32(2)
+			if failure == "取链失败" {
+				wantChecks = 1
+			}
+			if time.Since(started) > 7*time.Second || checks.Load() != wantChecks {
+				t.Fatal("校验应及时结束且每个地址只校验一次", checks.Load())
 			}
 			if failure == "取链失败" {
 				if rec.Header().Get("Location") != "" || !strings.Contains(rec.Body.String(), `"status":"failed"`) || body.closed.Load() != 1 {

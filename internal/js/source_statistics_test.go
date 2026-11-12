@@ -96,7 +96,7 @@ func newCallStatisticsManager(t *testing.T) *SourceManager {
 
 func TestSourceCallTracksFallbackDowngradesAndAllActions(t *testing.T) {
 	m := newCallStatisticsManager(t)
-	ctx := WithMusicURLPolicy(context.Background(), "speed", false)
+	ctx := context.Background()
 	for i, body := range []string{
 		`globalThis.__lx_request=()=>{throw new Error('https://private.invalid/?token=secret')}`,
 		`globalThis.__lx_request=({action,info})=>{if(action==='lyric')return {lyric:'[00:00]歌词正文'};if(action==='pic')return '';if(info.type==='320k')throw new Error('当前音质不可用');return {url:'https://media.invalid/?token=secret'}}`,

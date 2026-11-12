@@ -140,7 +140,7 @@ func (b *Events) Add(e Event) {
 	e.BudgetMS = min(12000, max(0, e.BudgetMS))
 	e.Validation = oneOf(e.Validation, "validated", "headers_only", "unverified", "failed")
 	e.Mode = Mode(e.Mode)
-	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "invalid_audio", "decoder_unavailable", "upstream_error", "encode_error", "write_error", "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error")
+	e.Error = oneOf(e.Error, "none", "busy", "cancelled", "timeout", "dns", "tls", "connect", "blocked_target", "redirect_limit", "non_audio", "invalid_audio", "incomplete_audio", "decoder_unavailable", "upstream_error", "encode_error", "write_error", "expired", "rate_limited", "upstream_status", "unsupported_quality", "source_auth", "invalid_response", "source_error")
 	if e.Error == "" {
 		e.Error = "upstream_error"
 	}

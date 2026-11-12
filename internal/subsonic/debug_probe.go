@@ -157,7 +157,7 @@ func (s *Server) probePlayback(w http.ResponseWriter, r *http.Request, result *d
 		r = r.WithContext(mediastream.HeaderProbe(r.Context()))
 		result.Validation = "headers_only"
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), mediaRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), mediaPrepareLimit)
 	defer cancel()
 	user := currentUser(r)
 	release, err := s.Catalog.AcquireRequest(ctx, user.ID)

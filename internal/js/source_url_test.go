@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -33,142 +32,70 @@ if(err || %t) reject(new Error('合成取链失败')); else resolve({url:'https:
 }));`, address, fail)
 }
 
-func TestMusicURLConcurrentSourcesFirstSuccessWins(t *testing.T) {
-	started := make(chan struct{})
-	var arrivals atomic.Int32
+// 多音源取链逐个进行：前一个失败才请求下一个，返回第一个取得的地址。
+func TestMusicURLTriesSourcesInOrderAndReturnsFirstURL(t *testing.T) {
+	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if arrivals.Add(1) == 2 {
-			close(started)
-		}
-		// 两个源的实际 HTTP 都已开始后才返回成功，不能假设快源不会抢先取消另一源。
-		select {
-		case <-started:
-			_, _ = io.WriteString(w, "ready")
-		case <-r.Context().Done():
-		}
-	}))
-	t.Cleanup(server.Close)
-	m := startupSources(t,
-		startupRequestScript(server.URL+"/primary", false),
-		startupRequestScript(server.URL+"/backup", false),
-	)
-	result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
-	if err != nil || (result.SourceID != 1 && result.SourceID != 2) {
-		t.Fatalf("并发取链应返回任一成功源: %+v %v", result, err)
-	}
-	for _, id := range []int64{1, 2} {
-		if got := m.CallStatisticsOf(id, time.Now(), time.Hour); got.Total.Calls != 1 || got.InFlight != 0 {
-			t.Fatalf("两个源应同时各请求一次且全部收回: id=%d %+v", id, got)
-		}
-	}
-}
-
-func TestMusicURLSlowPrimaryUsesBackupAndCancelsHTTP(t *testing.T) {
-	started, cancelled := make(chan struct{}), make(chan struct{}, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/slow" {
-			close(started)
-			<-r.Context().Done()
-			cancelled <- struct{}{}
-			return
-		}
-		// 先确认慢源实际发出了 HTTP，再让快源胜出，稳定验证在途取消。
-		select {
-		case <-started:
-			_, _ = io.WriteString(w, "ready")
-		case <-r.Context().Done():
-		}
-	}))
-	t.Cleanup(server.Close)
-	m := startupSources(t, startupRequestScript(server.URL+"/slow", false), startupRequestScript(server.URL+"/fast", false))
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	begin := time.Now()
-	go func() {
-		result, err := m.MusicURL(ctx, "wy", nil, "320k")
-		if err == nil && result.SourceID != 2 {
-			err = errors.New("未采用快速备用源")
-		}
-		done <- err
-	}()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("首选源未开始")
-	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("备用源不应等待首选源耗尽预算")
-	}
-	select {
-	case <-cancelled:
-	case <-time.After(time.Second):
-		t.Fatal("成功取链后必须取消慢源 HTTP")
-	}
-	if primary := m.CallStatisticsOf(1, time.Now(), time.Hour); primary.InFlight != 0 || primary.Total.Cancelled != 1 {
-		t.Fatalf("慢源必须释放并记录为取消: %+v", primary.Total)
-	}
-	t.Logf("慢源未响应、备用源正常：取链用时 %s", time.Since(begin).Round(time.Millisecond))
-}
-
-func TestMusicURLBackupFailureKeepsPrimaryAlive(t *testing.T) {
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/primary" {
-			select {
-			case <-release:
-			case <-r.Context().Done():
-				return
-			}
-		} else {
-			close(release)
-		}
+		paths = append(paths, r.URL.Path)
 		_, _ = io.WriteString(w, "ready")
 	}))
 	t.Cleanup(server.Close)
-	m := startupSources(t, startupRequestScript(server.URL+"/primary", false), startupRequestScript(server.URL+"/backup", true))
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	result, err := m.MusicURL(ctx, "wy", nil, "320k")
-	if err != nil || result.SourceID != 1 {
-		t.Fatalf("备用失败时不能放弃仍可能成功的首选源: %+v %v", result, err)
+	m := startupSources(t,
+		startupRequestScript(server.URL+"/a", true),
+		startupRequestScript(server.URL+"/b", false),
+		startupRequestScript(server.URL+"/c", false),
+	)
+	result, err := m.MusicURL(context.Background(), "wy", nil, "320k")
+	if err != nil || result.SourceID != 2 || fmt.Sprint(paths) != "[/a /b]" {
+		t.Fatalf("应按顺序逐个请求并在第一个成功处停止: %+v %v %v", result, err, paths)
+	}
+	if calls := m.CallStatisticsOf(3, time.Now(), time.Hour).Total.Calls; calls != 0 {
+		t.Fatal("已取得地址后不应再请求后面的音源", calls)
 	}
 }
 
-func TestMusicURLLimitsParallelSourcesAndCancelsAll(t *testing.T) {
-	started, cancelled := make(chan string, 3), make(chan string, 3)
-	var active, maximum atomic.Int32
+// 播放选源逐档取链并自行验证音频，因此可以关闭音源内的降档。
+func TestExactMusicURLDisablesInSourceDowngrade(t *testing.T) {
+	m := NewSourceManager(loadAsset(t, "prelude.js"), &http.Client{}, &http.Client{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(m.UnloadAll)
+	script := `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['flac','320k']}}});
+globalThis.__lx_request=({info})=>{if(info.type==='flac')throw new Error('当前音质不可用');return {url:'https://media.invalid/'+info.type}};`
+	if _, err := m.Load(context.Background(), 1, script); err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.MusicURL(context.Background(), "wy", nil, "flac")
+	if err != nil || result.Quality != "320k" {
+		t.Fatalf("默认在音源内向下降档: %+v %v", result, err)
+	}
+	before := m.CallStatisticsOf(1, time.Now(), time.Hour).Total.Attempts
+	if _, err := m.MusicURL(WithExactMusicURL(context.Background()), "wy", nil, "flac"); err == nil {
+		t.Fatal("指定音质取不到时不能悄悄换成更低音质")
+	}
+	if attempts := m.CallStatisticsOf(1, time.Now(), time.Hour).Total.Attempts - before; attempts != 1 {
+		t.Fatalf("指定音质只调用脚本一次: %d", attempts)
+	}
+	if result, err := m.MusicURL(WithExactMusicURL(context.Background()), "wy", nil, "320k"); err != nil || result.Quality != "320k" {
+		t.Fatalf("%+v %v", result, err)
+	}
+}
+
+func TestMusicURLCancellationStopsHTTPAndLaterSources(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		count := active.Add(1)
-		defer active.Add(-1)
-		for old := maximum.Load(); count > old && !maximum.CompareAndSwap(old, count); old = maximum.Load() {
-		}
-		started <- r.URL.Path
+		close(started)
 		<-r.Context().Done()
-		cancelled <- r.URL.Path
+		cancelled <- struct{}{}
 	}))
 	t.Cleanup(server.Close)
-	m := startupSources(t, startupRequestScript(server.URL+"/a", false), startupRequestScript(server.URL+"/b", false), startupRequestScript(server.URL+"/c", false))
+	m := startupSources(t, startupRequestScript(server.URL+"/a", false), startupRequestScript(server.URL+"/b", false))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { _, err := m.MusicURL(WithMusicURLConcurrency(ctx, 2), "wy", nil, "320k"); done <- err }()
-	for range 2 {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("应立即同时启动两个源")
-		}
-	}
+	go func() { _, err := m.MusicURL(ctx, "wy", nil, "320k"); done <- err }()
 	select {
-	case path := <-started:
-		t.Fatal("达到并发上限时不能启动第三个", path)
-	case <-time.After(500 * time.Millisecond):
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("首个音源未开始")
 	}
 	cancel()
 	select {
@@ -179,14 +106,12 @@ func TestMusicURLLimitsParallelSourcesAndCancelsAll(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("取消后取链未结束")
 	}
-	for range 2 {
-		select {
-		case <-cancelled:
-		case <-time.After(time.Second):
-			t.Fatal("所有在途 HTTP 都必须取消")
-		}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("在途 HTTP 必须取消")
 	}
-	if maximum.Load() != 2 || m.CallStatisticsOf(3, time.Now(), time.Hour).Total.Calls != 0 {
-		t.Fatal("并行音源数不能超过两个，取消后不得继续尝试其他源")
+	if first, second := m.CallStatisticsOf(1, time.Now(), time.Hour), m.CallStatisticsOf(2, time.Now(), time.Hour); first.InFlight != 0 || second.Total.Calls != 0 {
+		t.Fatalf("取消后必须收回额度且不再尝试其它音源: %+v %+v", first.Total, second.Total)
 	}
 }

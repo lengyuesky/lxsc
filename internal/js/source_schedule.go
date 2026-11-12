@@ -21,14 +21,11 @@ const (
 	scheduleSuccess
 	// scheduleStrongFail 超时、脚本失败、返回无效或媒体校验明确拒绝：计入连续失败。
 	scheduleStrongFail
-	// scheduleSlow 其他音源先成功后本调用被取消：只作为"较慢"弱负面样本。
-	scheduleSlow
 )
 
 // classifyOutcome 依据调用错误区分调度口径。
-// parent 为原始请求 ctx；budgetCtx 为本音源派生的预算 ctx——
-// parent 已终止时不惩罚任何源，budgetCtx 被内部取消且 parent 存活说明赢家已出现。
-func classifyOutcome(parent, budgetCtx context.Context, err error) scheduleOutcome {
+// parent 为发起调用的请求 ctx：它已终止（用户取消，或其它候选先胜出）时不惩罚音源。
+func classifyOutcome(parent context.Context, err error) scheduleOutcome {
 	switch {
 	case err == nil:
 		return scheduleSuccess
@@ -38,8 +35,6 @@ func classifyOutcome(parent, budgetCtx context.Context, err error) scheduleOutco
 		return scheduleIgnore
 	case errors.Is(err, ErrNoQuality):
 		return scheduleIgnore
-	case errors.Is(budgetCtx.Err(), context.Canceled):
-		return scheduleSlow
 	default:
 		return scheduleStrongFail
 	}
@@ -51,9 +46,8 @@ const (
 	scheduleFailGrace    = 5 * time.Second  // 失败合并窗口：窗口内并发失败只递增一次连续失败
 	scheduleBaseCooldown = 30 * time.Second
 	scheduleMaxCooldown  = 5 * time.Minute
-	// 降级成功与"较慢"取消的权重；强失败为 -1，普通成功为 +1。
+	// 降级成功的权重；强失败为 -1，普通成功为 +1。
 	scheduleDowngradeWeight = 0.9
-	scheduleSlowWeight      = -0.25
 )
 
 type scheduleKey struct {
@@ -78,25 +72,19 @@ type sourceScheduleState struct {
 }
 
 // sourceScheduler 按运行表现为音源排序：滑动窗口评分 + 指数退避冷却。
-// 冷却中的音源排最后但不删除，全部源冷却时仍可兜底；到期后回到正常排序层自然获得探测机会。
+// 冷却中的音源排最后但不删除：播放选源仍会尝试它，只是并发名额先给健康的音源。
 type sourceScheduler struct {
 	mu           sync.Mutex
 	states       map[scheduleKey]*sourceScheduleState
 	now          func() time.Time
-	probes       map[scheduleKey]*scheduleProbe
 	retryUntil   map[scheduleKey]time.Time
 	fingerprints map[int64]string
 	dirty        map[int64]bool
 	persistence  *schedulePersistence
 }
 
-type scheduleProbe struct {
-	active bool
-	next   time.Time
-}
-
 func newSourceScheduler() *sourceScheduler {
-	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, probes: map[scheduleKey]*scheduleProbe{}, retryUntil: map[scheduleKey]time.Time{}, fingerprints: map[int64]string{}, dirty: map[int64]bool{}, now: time.Now}
+	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, retryUntil: map[scheduleKey]time.Time{}, fingerprints: map[int64]string{}, dirty: map[int64]bool{}, now: time.Now}
 }
 
 func (g *sourceScheduler) canCall(id int64, platform string) bool {
@@ -119,39 +107,6 @@ func (m *SourceManager) BackoffMusicURL(id int64, platform string, delay time.Du
 		g.retryUntil[key] = until
 		g.changed(id)
 	}
-}
-
-// AcquirePlaybackProbe 冷却源保留兜底，但同时只能有一个请求试探；一个请求可继续同源降档。
-func (m *SourceManager) AcquirePlaybackProbe(id int64, platform string) (func(), bool) {
-	g := m.schedule
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.now().Before(g.retryUntil[scheduleKey{id, platform, "musicUrl"}]) {
-		return func() {}, false
-	}
-	recovering := false
-	for _, action := range []string{"musicUrl", "media"} {
-		if state := g.states[scheduleKey{id, platform, action}]; state != nil && !state.cooldown.IsZero() {
-			recovering = true
-		}
-	}
-	if !recovering {
-		return func() {}, true
-	}
-	key := scheduleKey{id, platform, "playback"}
-	probe := g.probes[key]
-	if probe == nil {
-		probe = &scheduleProbe{}
-		g.probes[key] = probe
-	}
-	now := g.now()
-	if probe.active || now.Before(probe.next) {
-		return func() {}, false
-	}
-	probe.active = true
-	probe.next = now.Add(scheduleFailGrace + time.Duration(id%1000)*time.Millisecond)
-	var once sync.Once
-	return func() { once.Do(func() { g.mu.Lock(); probe.active = false; g.mu.Unlock() }) }, true
 }
 
 func (g *sourceScheduler) stateOf(key scheduleKey) *sourceScheduleState {
@@ -198,8 +153,6 @@ func (g *sourceScheduler) record(id int64, platform, action string, outcome sche
 		}
 		sample.weight = -1
 		sample.ms = -1
-	case scheduleSlow:
-		sample.weight = scheduleSlowWeight
 	}
 	s.samples[s.next] = sample
 	s.next = (s.next + 1) % len(s.samples)
@@ -254,11 +207,6 @@ func (g *sourceScheduler) forgetLocked(id int64) {
 	for key := range g.states {
 		if key.sourceID == id {
 			delete(g.states, key)
-		}
-	}
-	for key := range g.probes {
-		if key.sourceID == id {
-			delete(g.probes, key)
 		}
 	}
 	for key := range g.retryUntil {

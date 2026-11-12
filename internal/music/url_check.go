@@ -19,6 +19,8 @@ const (
 type urlCheckKey struct {
 	token cacheToken
 	audio bool
+	// direct 表示按客户端直连的条件验证（不带平台 Referer）；与代理条件下的结论互不复用。
+	direct bool
 }
 
 // 只保存媒体头，不保留上游请求、正文、Cookie 或重定向地址。
@@ -51,16 +53,17 @@ func urlCheckCacheTTL(urlTTL int) time.Duration {
 // HEAD 与随后播放共用媒体头；失败短暂保存为失败，新解析版本必须重新校验。
 // check 必须自行关闭响应体；返回值始终是独立副本，不能修改共享缓存。
 func (c *Catalog) CheckPlaybackURL(ctx context.Context, resolution URLResolution, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
-	return c.checkPlaybackURL(ctx, resolution, false, check)
+	return c.checkPlaybackURL(ctx, urlCheckKey{token: resolution.token}, check)
 }
 
 // CheckPlaybackAudio 不把只取头诊断的缓存当作解码证据，即使解析版本相同。
-func (c *Catalog) CheckPlaybackAudio(ctx context.Context, resolution URLResolution, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
-	return c.checkPlaybackURL(ctx, resolution, true, check)
+// direct 为真时结论只对客户端直连有效，代理与直连的验证条件不同，各自缓存。
+func (c *Catalog) CheckPlaybackAudio(ctx context.Context, resolution URLResolution, direct bool, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
+	return c.checkPlaybackURL(ctx, urlCheckKey{token: resolution.token, audio: true, direct: direct}, check)
 }
 
-func (c *Catalog) checkPlaybackURL(ctx context.Context, resolution URLResolution, audio bool, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
-	result, err := c.urlChecks.load(ctx, urlCheckKey{token: resolution.token, audio: audio}, nil, URLCheckTimeout, func(ctx context.Context) (mediaHeaders, bool, error) {
+func (c *Catalog) checkPlaybackURL(ctx context.Context, key urlCheckKey, check func(context.Context) (*http.Response, error)) (*http.Response, error) {
+	result, err := c.urlChecks.load(ctx, key, nil, URLCheckTimeout, func(ctx context.Context) (mediaHeaders, bool, error) {
 		checkCtx, cancel := context.WithTimeout(ctx, URLCheckTimeout-250*time.Millisecond)
 		response, err := check(checkCtx)
 		cancel()

@@ -477,14 +477,14 @@ func (m *SourceManager) SupportsMusicURLQuality(id int64, platform, quality stri
 	return false
 }
 
-// MusicURL 按评分顺序并发请求音源，先成功者返回；音质不支持时向下降级。
+// MusicURL 按评分顺序逐个请求音源，返回第一个取得的地址；音质不支持时在音源内向下降级。
 func (m *SourceManager) MusicURL(ctx context.Context, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	return m.MusicURLForSources(ctx, platform, musicInfo, quality, nil)
 }
 
 // MusicURLForSources 仅在给定脚本集合内取链；nil 表示不限制。
-// 调度评分决定启动顺序，按并发上限同时请求，先成功者返回；保留源内音质降级。
-// 此处不校验音频响应，播放层独立决定是否刷新或换源，调试解析不会隐式探测媒体。
+// 按调度评分顺序逐个请求，返回第一个取得的地址；WithExactMusicURL 可关闭源内音质降级。
+// 此处不校验音频响应：播放选源逐个音源、逐档调用并自行验证，调试解析不会隐式探测媒体。
 func (m *SourceManager) MusicURLForSources(ctx context.Context, platform string, musicInfo any, quality string, sourceIDs []int64) (*MusicURLResult, error) {
 	candidates := m.candidates(platform, "musicUrl")
 	candidates = slices.DeleteFunc(candidates, func(ls *loadedSource) bool {
@@ -497,7 +497,7 @@ func (m *SourceManager) musicURLFromSource(ctx context.Context, ls *loadedSource
 	var lastErr error = ErrNoQuality
 	attempts := 0
 	chain := downgradeChain(quality, ls.platforms[platform].Qualitys)
-	if urlPolicy(ctx).exact {
+	if exactMusicURL(ctx) {
 		chain = nil
 		if q, ok := scriptQuality(quality, ls.platforms[platform].Qualitys); ok {
 			chain = []string{q}
@@ -564,7 +564,7 @@ func (m *SourceManager) Lyric(ctx context.Context, platform string, musicInfo an
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "lyric", Attempts: 1}, musicInfo, err)
-		m.schedule.record(ls.id, platform, "lyric", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds(), ls.fingerprint)
+		m.schedule.record(ls.id, platform, "lyric", classifyOutcome(ctx, err), false, time.Since(started).Milliseconds(), ls.fingerprint)
 		cancel()
 		if err != nil {
 			lastErr = err
@@ -595,7 +595,7 @@ func (m *SourceManager) Pic(ctx context.Context, platform string, musicInfo any)
 			err = errInvalidSourceResponse
 		}
 		ls.calls.finish(started, SourceCall{Platform: platform, Action: "pic", Attempts: 1}, musicInfo, err)
-		m.schedule.record(ls.id, platform, "pic", classifyOutcome(ctx, cctx, err), false, time.Since(started).Milliseconds(), ls.fingerprint)
+		m.schedule.record(ls.id, platform, "pic", classifyOutcome(ctx, err), false, time.Since(started).Milliseconds(), ls.fingerprint)
 		cancel()
 		if err != nil {
 			lastErr = err

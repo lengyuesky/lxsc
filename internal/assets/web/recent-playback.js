@@ -55,7 +55,7 @@
   }
 
   const stageNames = { metadata: '读取歌曲', resolve: '音源取链', source_fallback: '尝试备用音源', refresh: '刷新失效直链', url_check: '验证音频', cache_check: '验证缓存音频', proxy_response: '代理响应验证', cross_source: '跨平台兜底', redirect: '交付直链', proxy_copy: '代理传输' }
-  const errorNames = { timeout: '超时', cancelled: '已取消', busy: '服务繁忙', invalid_response: '无效响应', non_audio: '返回内容不是音频', non_audio_response: '返回内容不是音频', invalid_audio: '音频验证失败', decode_failed: '音频解码失败', decoder_unavailable: '解码器不可用', expired: '直链已失效', rate_limited: '上游限流', source_auth: '音源认证失效', source_error: '音源不可用', script: '脚本调用失败', upstream_status: '上游响应被拒绝', unsupported_quality: '不支持此音质', not_found: '歌曲不存在' }
+  const errorNames = { timeout: '超时', cancelled: '已取消', busy: '服务繁忙', invalid_response: '无效响应', non_audio: '返回内容不是音频', non_audio_response: '返回内容不是音频', invalid_audio: '音频验证失败', incomplete_audio: '试听片段或文件不完整', decode_failed: '音频解码失败', decoder_unavailable: '解码器不可用', expired: '直链已失效', rate_limited: '上游限流', source_auth: '音源认证失效', source_error: '音源不可用', script: '脚本调用失败', upstream_status: '上游响应被拒绝', unsupported_quality: '不支持此音质', not_found: '歌曲不存在' }
   function outcome(item) {
     if (item.outcome === 'success') return { tone: 'ok', label: item.delivery === '302' ? '直链已交付' : '传输完成' }
     return { pending: { tone: 'pri', label: '准备／传输中' }, failed: { tone: 'err', label: '交付失败' }, interrupted: { tone: 'warn', label: '传输中断' }, reported: { tone: 'off', label: '开始播放上报' }, unknown: { tone: 'warn', label: '结束结果未确认' } }[item.outcome] || { tone: 'off', label: '结果未知' }

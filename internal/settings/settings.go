@@ -53,7 +53,7 @@ func parseTTL(value string) (int, error) {
 type Values struct {
 	SearchSources     []string            `json:"searchSources"`     // 聚合搜索的平台及顺序
 	StreamMode        string              `json:"streamMode"`        // 播放方式：redirect / force_redirect / proxy
-	SourceSelection   string              `json:"sourceSelection"`   // quality 按档并发 / speed 源内降档并发
+	SourceSelection   string              `json:"sourceSelection"`   // quality 为在途的更高音质短暂等待 / speed 第一个可播放的候选直接胜出
 	SourceConcurrency int                 `json:"sourceConcurrency"` // 播放取链同时请求的音源数
 	CoverMode         string              `json:"coverMode"`         // redirect / proxy
 	CustomLyricsURL   string              `json:"customLyricsURL"`   // 现有歌词来源失败后的自定义接口

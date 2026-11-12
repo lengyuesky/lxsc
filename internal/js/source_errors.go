@@ -1,7 +1,6 @@
 package js
 
 import (
-	"context"
 	"errors"
 	"time"
 )
@@ -11,10 +10,6 @@ var (
 	ErrSourceRateLimited = errors.New("音源暂时限流")
 	ErrSourceUnavailable = errors.New("音源接口暂不可用")
 )
-
-func sourceWideFailure(err error) bool {
-	return errors.Is(err, ErrSourceAuth) || errors.Is(err, ErrSourceRateLimited) || errors.Is(err, ErrSourceUnavailable) || errors.Is(err, ErrInvalidSourceResponse) || errors.Is(err, context.DeadlineExceeded)
-}
 
 // SourceRequestError 仅保留受控类别和退避秒数，不携带脚本错误原文。
 type SourceRequestError struct {

@@ -14,9 +14,13 @@ var FLAC []byte
 var MP3 []byte
 
 // WAV 返回一秒钟 440Hz、8kHz、16bit 单声道合成 PCM，不包含真实歌曲。
-func WAV() []byte {
+func WAV() []byte { return Tone(1) }
+
+// Tone 返回指定秒数的同一合成音频，用于时长需要与歌曲元数据相符的测试。
+func Tone(seconds int) []byte {
 	const sampleRate = 8000
-	data := make([]byte, 44+sampleRate*2)
+	samples := sampleRate * seconds
+	data := make([]byte, 44+samples*2)
 	copy(data, "RIFF")
 	binary.LittleEndian.PutUint32(data[4:], uint32(len(data)-8))
 	copy(data[8:], "WAVEfmt ")
@@ -29,7 +33,7 @@ func WAV() []byte {
 	binary.LittleEndian.PutUint16(data[34:], 16)
 	copy(data[36:], "data")
 	binary.LittleEndian.PutUint32(data[40:], uint32(len(data)-44))
-	for i := range sampleRate {
+	for i := range samples {
 		binary.LittleEndian.PutUint16(data[44+i*2:], uint16(int16(math.Sin(float64(i)*2*math.Pi*440/sampleRate)*1000)))
 	}
 	return data

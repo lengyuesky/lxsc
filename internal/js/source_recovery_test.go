@@ -61,60 +61,19 @@ func TestURLSuccessCannotClearMediaFailure(t *testing.T) {
 	}
 }
 
-func TestSameQualityBackupPrecedesPrimaryDowngrade(t *testing.T) {
-	m := newCallStatisticsManager(t)
-	pre := `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['flac','320k','128k']}}});`
-	for i, body := range []string{
-		`globalThis.__lx_request=({info})=>{if(info.type!=='128k')throw new Error('不可用');return {url:'https://media.invalid/low'}}`,
-		`globalThis.__lx_request=()=>({url:'https://media.invalid/high'})`,
-	} {
-		if _, err := m.Load(context.Background(), int64(i+1), pre+body); err != nil {
-			t.Fatal(err)
-		}
-	}
-	r, err := m.MusicURL(context.Background(), "wy", nil, "flac")
-	if err != nil || r.SourceID != 2 || r.Quality != "flac" {
-		t.Fatalf("%+v %v", r, err)
-	}
-	if got := m.CallStatisticsOf(1, time.Now(), time.Hour).Total.Attempts; got != 1 {
-		t.Fatalf("首源不能先独占全部降档: %d", got)
-	}
-}
-
-func TestSpeedPolicyBoundsWaitForHigherQuality(t *testing.T) {
-	m := newCallStatisticsManager(t)
-	pre := `lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['flac','128k']}}});`
-	for i, body := range []string{
-		`globalThis.__lx_request=({info})=>{if(info.type!=='128k')throw new Error('不可用');return {url:'https://media.invalid/low'}}`,
-		`globalThis.__lx_request=()=>new Promise(()=>{})`,
-	} {
-		if _, err := m.Load(context.Background(), int64(i+1), pre+body); err != nil {
-			t.Fatal(err)
-		}
-	}
-	started := time.Now()
-	r, err := m.MusicURL(WithMusicURLPolicy(context.Background(), "speed", false), "wy", nil, "flac")
-	if err != nil || r.SourceID != 1 || r.Quality != "128k" || time.Since(started) > time.Second {
-		t.Fatalf("%+v %v %v", r, err, time.Since(started))
-	}
-	if stats := m.CallStatisticsOf(2, time.Now(), time.Hour); stats.Total.Calls != 1 || stats.InFlight != 0 {
-		t.Fatal(stats.Total)
-	}
-}
-
 func TestStructuredErrorsStopSourceWideDowngrade(t *testing.T) {
 	for _, tc := range []struct {
 		code string
 		want error
 	}{{"EAUTH", ErrSourceAuth}, {"ERATELIMIT", ErrSourceRateLimited}, {"EUPSTREAM", ErrSourceUnavailable}, {"EINVALIDRESPONSE", ErrInvalidSourceResponse}} {
-		for _, strategy := range []string{"quality", "speed"} {
-			t.Run(tc.code+"/"+strategy, func(t *testing.T) {
+		{
+			t.Run(tc.code, func(t *testing.T) {
 				m := newCallStatisticsManager(t)
 				script := fmt.Sprintf(`lx.send(lx.EVENT_NAMES.inited,{status:true,sources:{wy:{type:'music',actions:['musicUrl'],qualitys:['flac','320k','128k']}}});globalThis.__lx_request=()=>Promise.reject(Object.assign(new Error('不得导出的错误'),{code:%q,retryAfter:60}));`, tc.code)
 				if _, err := m.Load(context.Background(), 1, script); err != nil {
 					t.Fatal(err)
 				}
-				_, err := m.MusicURL(WithMusicURLPolicy(context.Background(), strategy, false), "wy", nil, "flac")
+				_, err := m.MusicURL(context.Background(), "wy", nil, "flac")
 				if !errors.Is(err, tc.want) || m.CallStatisticsOf(1, time.Now(), time.Hour).Total.Attempts != 1 {
 					t.Fatal(err)
 				}
@@ -126,37 +85,6 @@ func TestStructuredErrorsStopSourceWideDowngrade(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestCooldownHasSinglePlaybackProbe(t *testing.T) {
-	m := newCallStatisticsManager(t)
-	g, now := newTestClock()
-	m.schedule = g
-	for range 2 {
-		m.ReportMediaOutcome(1, "wy", false)
-		*now = now.Add(scheduleFailGrace + time.Second)
-	}
-	release, ok := m.AcquirePlaybackProbe(1, "wy")
-	if !ok {
-		t.Fatal("应保留一次兜底")
-	}
-	if _, ok := m.AcquirePlaybackProbe(1, "wy"); ok {
-		t.Fatal("并发试探不能重复进入")
-	}
-	release()
-	release()
-	if _, ok := m.AcquirePlaybackProbe(1, "wy"); ok {
-		t.Fatal("立即重试不能绕过间隔")
-	}
-	*now = g.states[scheduleKey{1, "wy", "media"}].cooldown.Add(time.Second)
-	release, ok = m.AcquirePlaybackProbe(1, "wy")
-	if !ok {
-		t.Fatal("到期允许单次试探")
-	}
-	defer release()
-	if _, ok := m.AcquirePlaybackProbe(1, "wy"); ok {
-		t.Fatal("到期不能恢复并发洪峰")
 	}
 }
 

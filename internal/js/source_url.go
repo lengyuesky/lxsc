@@ -4,190 +4,52 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"lxsc/internal/admission"
 )
 
-const (
-	// DefaultMusicURLConcurrency 是未指定并发数时同时请求的音源数。
-	DefaultMusicURLConcurrency = 3
-	MusicURLSourceTimeout      = 4 * time.Second
-	musicURLQualityWait        = 200 * time.Millisecond
-)
+// MusicURLSourceTimeout 是向一个音源取链（含音源内降档）的上限。
+const MusicURLSourceTimeout = 4 * time.Second
 
-type musicURLPolicyKey struct{}
-type musicURLPolicy struct {
-	strategy string
-	exact    bool
+type exactMusicURLKey struct{}
+
+// WithExactMusicURL 要求只请求指定音质，不在音源内向下降档。
+// 播放选源用它逐个音源、逐档取链，并自行验证音频后决定是否换档或换源。
+func WithExactMusicURL(ctx context.Context) context.Context {
+	return context.WithValue(ctx, exactMusicURLKey{}, true)
 }
 
-// WithMusicURLPolicy 在共享工作创建前读取策略，不把单个等待者的截止带入共享任务。
-func WithMusicURLPolicy(ctx context.Context, strategy string, exact bool) context.Context {
-	return context.WithValue(ctx, musicURLPolicyKey{}, musicURLPolicy{strategy, exact})
+func exactMusicURL(ctx context.Context) bool {
+	exact, _ := ctx.Value(exactMusicURLKey{}).(bool)
+	return exact
 }
 
-func urlPolicy(ctx context.Context) musicURLPolicy {
-	p, _ := ctx.Value(musicURLPolicyKey{}).(musicURLPolicy)
-	return p
-}
-
-type musicURLConcurrencyKey struct{}
-
-// WithMusicURLConcurrency 指定一次取链同时请求的音源数，非正数使用默认值。
-func WithMusicURLConcurrency(ctx context.Context, n int) context.Context {
-	return context.WithValue(ctx, musicURLConcurrencyKey{}, n)
-}
-
-func urlConcurrency(ctx context.Context) int {
-	if n, _ := ctx.Value(musicURLConcurrencyKey{}).(int); n > 0 {
-		return n
-	}
-	return DefaultMusicURLConcurrency
-}
-
-// 候选按并发上限同时取链，先成功者胜出，失败立即补位。
-// 调用结束前取消并收回所有工作，避免切歌后遗留 HTTP、计数或脚本任务。
+// musicURLCandidates 按调度顺序逐个请求音源，返回第一个取得的地址。
+// 这里不并发也不验证音频：播放时的换源、降档和竞速只在播放选源一处实现，
+// 多音源路径只服务调试与管理端"能否取到地址"的检查。
 func (m *SourceManager) musicURLCandidates(ctx context.Context, candidates []*loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(candidates) == 0 {
-		return nil, ErrNoSource
-	}
 	quality = CanonicalQuality(quality)
-	// 单源不存在跨源同档竞争，保留一次逻辑调用中的尝试和降级统计。
-	if policy := urlPolicy(ctx); len(candidates) > 1 && !policy.exact && policy.strategy != "speed" {
-		excluded := map[int64]bool{}
-		var lastErr error = ErrNoQuality
-		for _, q := range QualityChain(quality) {
-			var matching []*loadedSource
-			for _, candidate := range candidates {
-				if _, ok := scriptQuality(q, candidate.platforms[platform].Qualitys); ok && !excluded[candidate.id] {
-					matching = append(matching, candidate)
-				}
-			}
-			if len(matching) == 0 {
-				continue
-			}
-			result, err := m.raceMusicURLCandidates(WithMusicURLPolicy(ctx, "quality", true), matching, platform, musicInfo, q, excluded)
-			if err == nil {
-				return result, nil
-			}
-			lastErr = err
-			if ctx.Err() != nil || errors.Is(err, admission.ErrBusy) || errors.Is(err, context.DeadlineExceeded) {
-				return nil, err
-			}
-		}
-		return nil, lastErr
-	}
-	return m.raceMusicURLCandidates(ctx, candidates, platform, musicInfo, quality, nil)
-}
-
-func (m *SourceManager) raceMusicURLCandidates(ctx context.Context, candidates []*loadedSource, platform string, musicInfo any, quality string, excluded map[int64]bool) (*MusicURLResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(candidates) == 0 {
-		return nil, ErrNoSource
-	}
-	// 单源和定向刷新不需要并行调度；父请求同时作为预算与归属判断。
-	if len(candidates) == 1 {
-		result, err := m.callMusicURLSource(ctx, ctx, candidates[0], platform, musicInfo, quality, 1)
-		if excluded != nil && sourceWideFailure(err) {
-			excluded[candidates[0].id] = true
-		}
-		return result, err
-	}
-	// callCtx 只由本函数在收尾或赢家出现时取消；外层 ctx 保持原样，
-	// 用于区分"用户取消"与"其他音源先成功导致的取消"。
-	callCtx, cancel := context.WithCancel(ctx)
-	var workers sync.WaitGroup
-	defer func() { cancel(); workers.Wait() }()
-	type outcome struct {
-		id     int64
-		result *MusicURLResult
-		err    error
-	}
-	concurrency := min(urlConcurrency(ctx), len(candidates))
-	results := make(chan outcome, concurrency)
-	next, active := 0, 0
-	start := func() {
-		index := next
-		next++
-		active++
-		// 同时启动的候选各自享有完整预算，只按尚未开始的波次预留时间。
-		waves := (len(candidates) - index + concurrency - 1) / concurrency
-		workers.Go(func() {
-			result, err := m.callMusicURLSource(callCtx, ctx, candidates[index], platform, musicInfo, quality, waves)
-			results <- outcome{candidates[index].id, result, err}
-		})
-	}
-	for next < concurrency {
-		start()
-	}
 	var lastErr error = ErrNoSource
-	var best *MusicURLResult
-	busy := false
-	qualityTimer := time.NewTimer(time.Hour)
-	defer qualityTimer.Stop()
-	qualityTimer.Stop()
-	var qualityDeadline <-chan time.Time
-	for active > 0 {
-		select {
-		case <-ctx.Done():
-			if best != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return best, nil
-			}
-			return nil, ctx.Err()
-		case <-qualityDeadline:
-			return best, nil
-		case completed := <-results:
-			active--
-			if excluded != nil && sourceWideFailure(completed.err) {
-				excluded[completed.id] = true
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			if completed.err == nil {
-				if QualityRank(completed.result.Quality) >= QualityRank(quality) {
-					return completed.result, nil
-				}
-				if best == nil || QualityRank(completed.result.Quality) > QualityRank(best.Quality) {
-					best = completed.result
-				}
-				if qualityDeadline == nil {
-					qualityTimer.Reset(musicURLQualityWait)
-					qualityDeadline = qualityTimer.C
-				}
-			} else {
-				lastErr = completed.err
-				busy = busy || errors.Is(completed.err, admission.ErrBusy)
-			}
-			// 繁忙时不扩大请求，仍允许在途音源完成。
-			if !busy && next < len(candidates) {
-				start()
-			}
+	for _, source := range candidates {
+		result, err := m.callMusicURLSource(ctx, source, platform, musicInfo, quality)
+		if err == nil {
+			return result, nil
 		}
-	}
-	if best != nil {
-		return best, nil
-	}
-	if busy {
-		return nil, admission.ErrBusy
+		lastErr = err
+		if ctx.Err() != nil || errors.Is(err, admission.ErrBusy) {
+			return nil, err
+		}
 	}
 	return nil, lastErr
 }
 
-func (m *SourceManager) callMusicURLSource(ctx, parent context.Context, source *loadedSource, platform string, musicInfo any, quality string, remaining int) (*MusicURLResult, error) {
-	// 同一音源的全部降级尝试共用预算，并为后续媒体校验留出时间。
-	budget := min(m.CallTime, MusicURLSourceTimeout)
-	if deadline, ok := ctx.Deadline(); ok {
-		budget = min(budget, time.Until(deadline)/time.Duration(remaining+1))
-	}
-	ctx, cancel := context.WithTimeout(ctx, budget)
+// callMusicURLSource 调用一个音源并记录统计、健康度与调度评分。
+func (m *SourceManager) callMusicURLSource(parent context.Context, source *loadedSource, platform string, musicInfo any, quality string) (*MusicURLResult, error) {
+	ctx, cancel := context.WithTimeout(parent, min(m.CallTime, MusicURLSourceTimeout))
 	defer cancel()
 	started := time.Now()
 	source.calls.begin()
@@ -201,7 +63,7 @@ func (m *SourceManager) callMusicURLSource(ctx, parent context.Context, source *
 	}
 	source.calls.finish(started, call, musicInfo, err)
 	source.health.record(started, err, result != nil && result.Quality != quality)
-	m.schedule.record(source.id, platform, "musicUrl", classifyOutcome(parent, ctx, err), result != nil && result.Quality != quality, time.Since(started).Milliseconds(), source.fingerprint)
+	m.schedule.record(source.id, platform, "musicUrl", classifyOutcome(parent, err), result != nil && result.Quality != quality, time.Since(started).Milliseconds(), source.fingerprint)
 	var sourceErr *SourceRequestError
 	if errors.As(err, &sourceErr) && errors.Is(err, ErrSourceRateLimited) {
 		m.BackoffMusicURL(source.id, platform, sourceErr.RetryAfter(), source.fingerprint)
