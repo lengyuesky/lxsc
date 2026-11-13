@@ -49,3 +49,15 @@
   .client-app-grid { gap: 10px }
   .client-connection-fields { gap: 14px }
 }
+.client-protocols { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px }
+.client-fn .card-title .badge { margin-left: 2px }
+.client-fn-value { color: var(--pri); font-weight: 600; user-select: all }
+.client-fn-support { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 4px }
+.client-fn-support > div { min-width: 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--card-2); border: 1px solid var(--line) }
+.client-fn-support h4 { font-size: 13px }
+.client-fn-support p { margin: 0; color: var(--fg-2); font-size: 12.5px; line-height: 1.7 }
+.client-fn-support > div:last-child h4 { color: var(--warn) }
+@media (max-width: 600px) {
+  .client-fn-support { grid-template-columns: 1fr }
+  .client-protocols { justify-content: flex-start }
+}

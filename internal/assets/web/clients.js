@@ -3,6 +3,8 @@ const LXSCClients = (() => {
   const fields = ['#clientServerURL', '#clientUsername']
   function reset() {
     for (const selector of fields) $(selector).value = ''
+    $('#clientFnHost').textContent = '—'
+    $('#clientFnTLS').textContent = '与地址一致'
     $('#clientNetworkNotice').textContent = ''
     $('#clientNetworkNotice').classList.add('hidden')
   }
@@ -10,6 +12,9 @@ const LXSCClients = (() => {
     if (!sessionState.me) return reset()
     $('#clientServerURL').value = location.origin
     $('#clientUsername').value = sessionState.me.name
+    // 飞牛 App 的地址栏只填主机和端口，协议由单独的 HTTPS 开关决定。
+    $('#clientFnHost').textContent = location.host
+    $('#clientFnTLS').textContent = location.protocol === 'https:' ? '打开' : '关闭'
     const notices = []
     if (location.protocol !== 'https:') notices.push('当前使用 HTTP，公网连接请优先配置 HTTPS，避免账号密码在传输中泄露。')
     if (/^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\]|\[::\])$/i.test(location.hostname)) notices.push('当前地址仅供本机访问，不能直接用于另一台手机或电脑；请在客户端填写服务器的局域网 IP、公网域名或 VPN 地址。')

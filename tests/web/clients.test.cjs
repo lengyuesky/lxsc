@@ -34,6 +34,17 @@ test('客户端说明使用浏览器实际地址及本人账号，保留协议�
   }
 })
 
+test('飞牛地址只含主机和端口，HTTPS 开关跟随当前协议，退出后清空', () => {
+  for (const [address, host, tls] of [['https://music.example:27880', 'music.example:27880', '打开'], ['http://192.168.1.2:27880', '192.168.1.2:27880', '关闭'], ['https://music.example', 'music.example', '打开']]) {
+    const f = fixture(address + '/#clients')
+    f.ui.load()
+    assert.equal(f.$('#clientFnHost').textContent, host)
+    assert.equal(f.$('#clientFnTLS').textContent, tls)
+    f.ui.reset()
+    assert.equal(f.$('#clientFnHost').textContent, '—')
+  }
+})
+
 test('连接提示区分 HTTPS、HTTP 和本机地址', () => {
   const safe = fixture()
   safe.ui.load()
@@ -112,6 +123,6 @@ test('客户端说明集成公共路由、版本化资源和会话清理，不�
   assert.doesNotMatch(guide, /type="password"|二维码|<canvas|<img/)
   assert.match(guide, /id="clientAPIHelp" class="card client-key-help admin-only hidden"/)
   assert.match(guide, /<p class="admin-only hidden">设备 API Key/)
-  for (const client of ['箭头音乐', '音流', 'Feishin', 'Symfonium']) assert(guide.includes(client))
+  for (const client of ['箭头音乐', '飞牛音乐', '音流', 'Feishin', 'Symfonium']) assert(guide.includes(client))
   for (const link of guide.matchAll(/<a[^>]+target="_blank"[^>]*>/g)) assert.match(link[0], /rel="noopener noreferrer"/)
 })

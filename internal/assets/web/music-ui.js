@@ -142,7 +142,7 @@ function searchMessage(message, error = false) {
 }
 function renderSongResults() {
   if (!songSearchState.tracks.length) return searchMessage('没有找到可用结果，请更换关键词或平台再试')
-  LXSCSearch.appendRows($('#searchTable tbody'), songSearchState.tracks, (track, index) => `<tr data-playing-id="${esc(track.id)}"><td><div class="song-title" title="${esc(track.name)}">${esc(track.name)}</div></td><td>${esc(track.singer)}</td><td class="muted song-album">${esc(track.album)}</td><td><span class="badge">${esc(platName[track.source] || track.source)}</span></td><td class="muted song-duration">${track.duration ? formatSongTime(track.duration) : '—'}</td><td class="muted song-quality">${esc((track.qualities || []).join('/'))}</td><td class="song-actions"><button type="button" class="sec sm" data-song-action="play" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg>播放</button><button type="button" class="sec sm" data-song-action="queue" data-song-index="${index}">加入队列</button><button type="button" class="sm" data-song-action="collect" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}>收藏到歌单</button></td></tr>`)
+  LXSCSearch.appendRows($('#searchTable tbody'), songSearchState.tracks, (track, index) => `<tr data-playing-id="${esc(track.id)}"><td><div class="song-title" title="${esc(track.name)}">${esc(track.name)}</div></td><td>${esc(track.singer)}</td><td class="muted song-album">${esc(track.album)}</td><td><span class="badge">${esc(platName[track.source] || track.source)}</span></td><td class="muted song-duration">${track.duration ? formatSongTime(track.duration) : '—'}</td><td class="muted song-quality">${esc((track.qualities || []).join('/'))}</td><td class="song-actions"><button type="button" class="icon-btn play" title="播放" aria-label="播放 ${esc(track.name)}" data-song-action="play" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-play"/></svg></button><button type="button" class="icon-btn" title="加入播放队列" aria-label="加入播放队列 ${esc(track.name)}" data-song-action="queue" data-song-index="${index}"><svg class="icon"><use href="#i-queue"/></svg></button><button type="button" class="sec sm collect" title="收藏到歌单" aria-label="收藏到歌单 ${esc(track.name)}" data-song-action="collect" data-song-index="${index}" ${track.unavailable ? 'disabled' : ''}><svg class="icon"><use href="#i-heart"/></svg><span>收藏</span></button></td></tr>`)
   renderPlaybackMarkers()
 }
 $('#songSearchForm').addEventListener('submit', async event => {
@@ -360,7 +360,7 @@ function renderSearchPaging() {
   $('#searchPaging').innerHTML = results ? results.sources.map(source => {
     const item = results.platforms.get(source), page = songSearchState.pages[source] || 0
     const more = item.status === 'ok', exhausted = more && (item.lastCount === 0 || page >= 100)
-    return `<button class="sec sm" data-search-page="${esc(source)}" ${songSearchState.busy || results.pending || exhausted ? 'disabled' : ''}>${esc(platName[source] || source)} · ${more ? exhausted ? '已到底' : '加载更多' : '重试'}</button>`
+    return `<button class="ghost sm" data-search-page="${esc(source)}" ${songSearchState.busy || results.pending || exhausted ? 'disabled' : ''}>${esc(platName[source] || source)} · ${more ? exhausted ? '已到底' : '加载更多' : '重试'}</button>`
   }).join('') : ''
 }
 $('#searchPaging').addEventListener('click', async event => {
