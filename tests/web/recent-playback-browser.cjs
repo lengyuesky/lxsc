@@ -6,8 +6,33 @@ module.exports = async function ({ check, url, artifacts, login, search, playSea
   async function mode(value) { assert.equal((await admin.put(url + '/api/admin/settings', { data: { streamMode: value } })).status(), 200) }
   async function show(page) {
     await page.locator('nav [data-tab=listening]').click()
+    const panel = page.locator('#recentPlaybackPanel')
+    await panel.waitFor({ state: 'attached' })
+    if (!await panel.evaluate(element => element.open)) await panel.locator(':scope > summary').click()
     await page.waitForFunction(() => globalThis.LXSCRecent?.state.loaded && !LXSCRecent.state.loading)
   }
+  await check('最近播放默认收起在页面底部，展开才读取并记住状态', async page => {
+    let requests = 0
+    page.on('request', request => { if (request.url().includes('/api/app/listening/recent')) requests++ })
+    await page.locator('nav [data-tab=listening]').click()
+    await page.locator('.listening-hero').waitFor()
+    const panel = page.locator('#recentPlaybackPanel')
+    assert.equal(await panel.evaluate(element => element.open), false, '最近播放应默认收起')
+    assert.equal(await page.locator('#recentPlaybackRows').isVisible(), false)
+    assert.equal(requests, 0, '收起时不应读取最近播放')
+    const [box, grid, footer] = await Promise.all([panel.boundingBox(), page.locator('.listening-main-grid').boundingBox(), page.locator('.listening-footnote').boundingBox()])
+    assert.ok(box.y >= grid.y + grid.height && box.y + box.height <= footer.y, '最近播放应位于统计内容之后、说明之前')
+    assert.ok(box.height < 120, '收起时只占一行摘要')
+    await panel.locator(':scope > summary').click()
+    await page.waitForFunction(() => LXSCRecent.state.loaded && !LXSCRecent.state.loading)
+    assert.ok(requests >= 1)
+    assert.match(await page.locator('#recentPlaybackCount').innerText(), /条/)
+    await page.reload(); await page.locator('#app:not(.hidden)').waitFor()
+    await page.locator('nav [data-tab=listening]').click()
+    await page.waitForFunction(() => LXSCRecent.panel?.open && LXSCRecent.state.loaded)
+    await page.locator('#recentPlaybackPanel > summary').click()
+    await page.waitForFunction(() => localStorage.getItem('lxsc.recentPlayback.open') === null)
+  })
   await check('最近播放真实302交付、歌曲用户音源和展开详情', async page => {
     await mode('redirect'); await search(page, '最近播放真实测试'); await playSearch(page)
     await page.locator('#playerToggle').click(); await show(page)

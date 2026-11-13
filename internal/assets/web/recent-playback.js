@@ -75,12 +75,16 @@
     const values = Object.fromEntries(new FormData(panel.querySelector('form')))
     return Object.fromEntries(Object.entries({ ...scopeParams(), ...values }).filter(([, value]) => value !== ''))
   }
+  const openKey = 'lxsc.recentPlayback.open'
+  function openPreference() { try { return localStorage.getItem(openKey) === '1' } catch { return false } }
+  function saveOpenPreference(open) { try { open ? localStorage.setItem(openKey, '1') : localStorage.removeItem(openKey) } catch { /* 无痕模式等无法保存时仅本次生效。 */ } }
   function ensurePanel() {
     if (panel) return
-    panel = document.createElement('section'); panel.id = 'recentPlaybackPanel'; panel.className = 'card recent-playback'; panel.setAttribute('aria-label', '最近播放')
-    panel.innerHTML = `<div class="section-title recent-playback-head"><div><h3>最近播放</h3><p>查看歌曲、音源与客户端的交付情况</p></div><button type="button" class="sec sm" id="recentPlaybackRefresh"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div>
-      <form class="recent-playback-filters" aria-label="播放日志筛选"><label class="recent-query">歌曲／歌手<input name="query" id="recentPlaybackQuery" type="search" maxlength="200" placeholder="搜索最近播放" autocomplete="off"></label><label>音源<select name="sourceId" id="recentPlaybackSource"><option value="">全部音源</option></select></label><label>客户端<select name="client" id="recentPlaybackClient"><option value="">全部客户端</option></select></label><label>交付方式<select name="delivery" id="recentPlaybackDelivery"><option value="">全部方式</option><option value="302">302 直链</option><option value="proxy">代理</option></select></label><label>结果<select name="outcome" id="recentPlaybackOutcome"><option value="">全部结果</option><option value="success">交付成功</option><option value="failed">交付失败</option><option value="interrupted">传输中断</option><option value="pending">准备／传输中</option><option value="reported">开始播放上报</option><option value="unknown">结束结果未确认</option></select></label><button type="submit" class="sec">筛选</button></form>
-      <div id="recentPlaybackStatus" class="recent-playback-status muted hint" role="status"></div><div class="table-wrap recent-playback-table"><table><thead><tr><th>时间</th><th>歌曲</th><th>用户</th><th>音源／取链平台</th><th>客户端</th><th>交付</th><th>结果</th><th>详情</th></tr></thead><tbody id="recentPlaybackRows"></tbody></table></div><div class="recent-playback-more"><button type="button" class="sec sm hidden" id="recentPlaybackMore">加载更多</button></div><p class="recent-playback-note">日志保留最近 30 天，按北京时间显示。302 表示服务端交付了直链，代理完成表示服务器传输结束；实际收听量以听歌统计的口径为准。</p>`
+    // 默认收起：日志是排查用的明细，展开时才读取，避免挤占统计视图并减少请求。
+    panel = document.createElement('details'); panel.id = 'recentPlaybackPanel'; panel.className = 'card recent-playback'; panel.open = openPreference()
+    panel.innerHTML = `<summary class="recent-playback-summary"><span class="recent-playback-icon" aria-hidden="true"><svg class="icon"><use href="#i-play"/></svg></span><h3>最近播放</h3><small class="recent-playback-desc">歌曲、音源与客户端的交付记录，保留 30 天</small><span id="recentPlaybackCount" class="recent-playback-count"></span><svg class="icon recent-playback-chevron" aria-hidden="true"><use href="#i-down"/></svg></summary>
+      <div class="recent-playback-body"><form class="recent-playback-filters" aria-label="播放日志筛选"><label class="recent-query">歌曲／歌手<input name="query" id="recentPlaybackQuery" type="search" maxlength="200" placeholder="搜索最近播放" autocomplete="off"></label><label>音源<select name="sourceId" id="recentPlaybackSource"><option value="">全部音源</option></select></label><label>客户端<select name="client" id="recentPlaybackClient"><option value="">全部客户端</option></select></label><label>交付方式<select name="delivery" id="recentPlaybackDelivery"><option value="">全部方式</option><option value="302">302 直链</option><option value="proxy">代理</option></select></label><label>结果<select name="outcome" id="recentPlaybackOutcome"><option value="">全部结果</option><option value="success">交付成功</option><option value="failed">交付失败</option><option value="interrupted">传输中断</option><option value="pending">准备／传输中</option><option value="reported">开始播放上报</option><option value="unknown">结束结果未确认</option></select></label><button type="submit" class="sec">筛选</button></form>
+      <div class="recent-playback-toolbar"><div id="recentPlaybackStatus" class="recent-playback-status muted hint" role="status"></div><button type="button" class="ghost sm" id="recentPlaybackRefresh"><svg class="icon"><use href="#i-refresh"/></svg>刷新</button></div><div class="table-wrap recent-playback-table"><table><thead><tr><th>时间</th><th>歌曲</th><th>用户</th><th>音源／取链平台</th><th>客户端</th><th>交付</th><th>结果</th><th>详情</th></tr></thead><tbody id="recentPlaybackRows"></tbody></table></div><div class="recent-playback-more"><button type="button" class="sec sm hidden" id="recentPlaybackMore">加载更多</button></div><p class="recent-playback-note">按北京时间显示。302 表示服务端交付了直链，代理完成表示服务器传输结束；实际收听量以听歌统计的口径为准。</p></div>`
     panel.querySelector('form').onsubmit = event => { event.preventDefault(); state.select(filters()); load() }
     panel.querySelector('form').onchange = event => { if (event.target.matches('select')) { state.select(filters()); load() } }
     panel.querySelector('#recentPlaybackRefresh').onclick = () => load({ preserve: state.paged })
@@ -88,6 +92,12 @@
     panel.addEventListener('click', event => { if (event.target.closest('[data-recent-retry]')) load({ preserve: state.paged }) })
     panel.addEventListener('toggle', event => {
       const details = event.target
+      if (details === panel) {
+        saveOpenPreference(panel.open)
+        // 收起期间可能已过时，展开时总是读取一次；已翻页的记录保留。
+        if (panel.open && !state.loading) load({ preserve: state.paged })
+        return
+      }
       if (details.matches('details[data-playback-details]')) {
         const row = panel.querySelector(`[data-playback-detail-row="${details.dataset.playbackDetails}"]`)
         if (row) row.hidden = !details.open
@@ -130,6 +140,7 @@
     const status = panel.querySelector('#recentPlaybackStatus')
     status.innerHTML = state.error ? `${esc(state.error)}${state.items.length ? '；保留上次记录。' : ''} <button type="button" class="ghost sm" data-recent-retry>重试</button>` : state.loading ? '正在读取最近播放…' : `更新于 ${esc(timeText(state.generatedAt))} · 已显示 ${state.items.length} 条${state.paged ? ' · 正在查看已加载记录，可手动刷新' : ''}`
     status.classList.toggle('err', !!state.error)
+    panel.querySelector('#recentPlaybackCount').textContent = state.loaded ? `${state.items.length}${state.cursor ? '+' : ''} 条` : ''
     setOptions('#recentPlaybackSource', state.sources.map(source => ({ value: source.id, label: source.name })), '全部音源', String(state.params.sourceId || ''))
     setOptions('#recentPlaybackClient', state.clients, '全部客户端', state.params.client || '')
     if (focus?.isConnected && document.activeElement !== focus) focus.focus({ preventScroll: true })
@@ -175,13 +186,14 @@
       // 未提交的搜索输入不因汇总静默刷新而自动生效。
       const params = { ...state.params, ...scopeParams() }
       const changed = state.select(Object.fromEntries(Object.entries(params).filter(([, value]) => value !== '')))
+      if (!panel.open) { if (changed) render(); return }
       if (changed || !state.loaded) load()
     },
-    refresh() { return load({ preserve: state.paged }) },
+    refresh() { return panel?.open ? load({ preserve: state.paged }) : Promise.resolve() },
     reset() { state.reset(); panel?.remove(); panel = null },
   }
   setInterval(() => {
-    if (document.hidden || !sessionState.me || location.hash !== '#listening' || !panel?.isConnected || state.loading || state.paged || panel.contains(document.activeElement) || panel.querySelector('details[open]')) return
+    if (document.hidden || !sessionState.me || location.hash !== '#listening' || !panel?.isConnected || !panel.open || state.loading || state.paged || panel.contains(document.activeElement) || panel.querySelector('details[open]')) return
     const box = panel.getBoundingClientRect()
     if (box.top < 0 && box.bottom > 0) return
     load()
