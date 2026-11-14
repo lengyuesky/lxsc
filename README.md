@@ -51,7 +51,7 @@ LXSC_ADMIN_PASSWORD='至少12个字符的强密码' LXSC_DATA_DIR=./data ./lxsc
 | 飞牛音乐（实验性） | 飞牛 App 登录页 | `<host>:27880`，HTTPS 开关与实际协议一致 | lxsc 用户名 + 密码 |
 
 - 搜索可用前缀限定平台：`wy:` `tx:` `kw:` `kg:` `mg:`；`local:` 只搜本服务器已缓存的歌曲。
-- 飞牛音乐需在 App 中把播放音质设为「原始音质」（不支持转码）；目前仅在 Mac 版 1.0.3 实测，详见 [兼容说明](docs/fnmusic-compatibility.md)。
+- 飞牛音乐选择「标准音质」时也交付原始音频，不转码；移动网络可保留默认标准设置。缺少时长元数据的歌曲仍需选择「原始音质」。目前仅在 Mac 版 1.0.3 实测，详见 [兼容说明](docs/fnmusic-compatibility.md)。
 
 ## 配置
 
@@ -83,7 +83,7 @@ node tests/web/browser.cjs                 # 浏览器验收（隔离环境、�
 ## 文档
 
 - [音源选择设计（ADR 0005）](docs/adr/0005-playback-selection-single-race.md) · [音频内容验证](docs/audio-validation.md) · [音源自动更新](docs/source-updates.md)
-- [飞牛音乐兼容](docs/fnmusic-compatibility.md) · [管理员 API 调试](docs/debug-api.md)
+- [飞牛音乐兼容](docs/fnmusic-compatibility.md) · [标准设置使用原始音频验收](docs/fnmusic-standard-original-verification-20261114.md) · [管理员 API 调试](docs/debug-api.md)
 - 各项验收记录见 [docs/](docs/)
 
 ## 许可证
