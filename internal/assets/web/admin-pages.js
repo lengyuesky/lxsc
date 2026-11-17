@@ -150,10 +150,13 @@ function selectSourceStatistics(id) {
   $('#sourceStatsPanel').scrollIntoView({ block: 'start' })
 }
 
+const versionText = source => { const version = source.version || source.status?.version || ''; return version ? 'v' + version : '' }
+
 function sourceUpdateHTML(source) {
   const state = sourceUpdateState(source)
   const date = value => value ? sourceTimeFormatter.format(new Date(Number(value) * 1000)) : '暂无记录'
-  return `<div class="source-update-head"><span>${esc(state.automatic)}</span><span class="badge ${state.failed ? 'err' : source.updateRunning ? 'pri' : 'off'}">${esc(state.result)}</span></div><div class="muted hint">最近检查：${esc(date(source.lastCheckedAt))}<br>脚本更新时间：${esc(date(source.scriptUpdatedAt))}${source.nextCheckAt && !source.updateRunning ? `<br>下次检查：${esc(date(source.nextCheckAt))}` : ''}</div>${state.failed && source.updateError ? `<p class="err hint">${esc(source.updateError)}</p>` : ''}`
+  const detail = `脚本更新时间：${date(source.scriptUpdatedAt)}${source.nextCheckAt && !source.updateRunning ? `\n下次检查：${date(source.nextCheckAt)}` : ''}`
+  return `<div class="source-update-line"><span class="badge ${state.failed ? 'err' : source.updateRunning ? 'pri' : 'off'}">${esc(state.result)}</span><span>${esc(state.automatic)}</span>${source.lastCheckedAt ? `<span class="muted" title="${esc(detail)}">最近检查 ${esc(date(source.lastCheckedAt))}</span>` : ''}</div>${state.failed && source.updateError ? `<p class="err hint">${esc(source.updateError)}</p>` : ''}`
 }
 
 function cancelSourceUpdates() {
@@ -181,7 +184,7 @@ async function refreshSourceUpdates() {
       const summary = sourceUpdateHTML(source)
       if (state && state.innerHTML !== summary) state.innerHTML = summary
       const versionLabel = $(`[data-source-version="${source.id}"]`)
-      if (versionLabel) versionLabel.textContent = 'v' + (source.version || source.status?.version || '')
+      if (versionLabel) versionLabel.textContent = versionText(source)
       const parts = sourceRuntimeParts(source)
       for (const key of ['badge', 'chips', 'error', 'alert', 'health', 'meta']) {
         const node = $(`[data-source-${key}="${source.id}"]`)
@@ -283,7 +286,8 @@ function sourceRuntimeParts(s) {
   const badge = !s.enabled ? '<span class="badge off">已停用</span>' : !st ? '<span class="badge off">未加载</span>' : st.state === 'ready' ? '<span class="badge ok">就绪</span>' : st.state === 'loading' ? '<span class="badge pri">加载中</span>' : '<span class="badge err">错误</span>'
   const chips = st && st.platforms ? Object.entries(st.platforms).map(([p, c]) => `<span class="chip"><b>${esc(platName[p] || p)}</b><span>${esc((c.qualitys || []).join('/'))}</span></span>`).join('') : ''
   const h = st?.health
-  const health = h?.samples ? `<div class="note">近一小时最近 ${h.samples} 次解析：成功率 ${Math.round(h.success / h.samples * 100)}% · 平均 ${h.averageMs} ms · 降级 ${h.downgrades} 次<br><small>失败分类：${esc(Object.entries(h.errors || {}).map(([key, count]) => `${({ timeout: '超时', busy: '繁忙', cancelled: '取消', script: '脚本失败' })[key] || key} ${count}`).join(' · ') || '无')}。解析成功不代表客户端实际播放成功；重载后重置。</small></div>` : '<p class="muted hint">暂无近期解析样本</p>'
+  const healthErrors = Object.entries(h?.errors || {}).filter(([, count]) => count > 0).map(([key, count]) => `${({ timeout: '超时', busy: '繁忙', cancelled: '取消', script: '脚本失败' })[key] || key} ${count}`).join('、')
+  const health = h?.samples ? `<span class="src-health" title="近一小时最近 ${h.samples} 次解析。解析成功不代表客户端实际播放成功；重载后重置。">近一小时 ${h.samples} 次解析 · 成功率 <b>${Math.round(h.success / h.samples * 100)}%</b> · 平均 ${h.averageMs} ms${h.downgrades ? ` · 降级 ${h.downgrades} 次` : ''}${healthErrors ? ` · <span class="err">失败 ${esc(healthErrors)}</span>` : ''}</span>` : '<span class="src-health muted">暂无近期解析样本</span>'
   const error = st && st.error ? `<div class="note err">${esc(st.error)}</div>` : ''
   const alert = st && st.alert ? `<div class="note warn">脚本提示更新：${esc(st.alert)}</div>` : ''
   const homepage = /^https?:\/\//i.test(s.homepage || '') ? `<a href="${esc(s.homepage)}" target="_blank" rel="noopener">主页</a>` : esc(s.homepage || '')
@@ -291,26 +295,43 @@ function sourceRuntimeParts(s) {
   return { badge, chips: chips || '<span class="muted hint">无平台信息</span>', error, alert, health, meta }
 }
 
-function sourceCard(s, brief) {
+function sourceCard(s) {
   const st = s.status
   const parts = sourceRuntimeParts(s)
-  const actions = brief ? '' : `<div class="actions">
-      <button class="sec sm" data-source-action="toggle" data-source-id="${s.id}" data-enabled="${!s.enabled}">${s.enabled ? '停用' : '启用'}</button>
-      <button class="sec sm" data-source-action="reload" data-source-id="${s.id}"><svg class="icon"><use href="#i-refresh"/></svg>重新加载</button>
-      <button class="sec sm" data-source-action="check" data-source-id="${s.id}" ${!s.url || s.updateRunning || sourceChecks.has(s.id) ? 'disabled' : ''}>立即检查更新</button>
-      <button class="sec sm" data-source-action="update-settings" data-source-id="${s.id}">更新设置</button>
-      <button class="sec sm" data-source-action="test" data-source-id="${s.id}"><svg class="icon"><use href="#i-zap"/></svg>测试取链</button>
-      <button class="sec sm" data-source-action="statistics" data-source-id="${s.id}">调用统计</button>
-      <a class="btn sec sm" href="/api/admin/sources/${s.id}/script" download>下载脚本</a>
-      <button class="danger sm" data-source-action="delete" data-source-id="${s.id}">删除</button>
-    </div><div id="test-${s.id}"></div>
-    ${st && st.logs && st.logs.length ? `<details><summary>脚本日志（${st.logs.length}）</summary><pre>${esc(st.logs.slice(-50).join('\n'))}</pre></details>` : ''}`
-  return `<div class="card src">
-    <div class="src-head"><div>
-      <div class="src-title"><span data-source-name="${s.id}">${esc(s.name)}</span><span data-source-badge="${s.id}">${parts.badge}</span><span class="ver" data-source-version="${s.id}">v${esc(s.version || st?.version || '')}</span></div>
-      <div class="meta" data-source-meta="${s.id}">${parts.meta}</div>
-    </div></div>
-    <div class="chips" data-source-chips="${s.id}">${parts.chips}</div><div data-source-error="${s.id}">${parts.error}</div><div data-source-alert="${s.id}">${parts.alert}</div><div data-source-health="${s.id}">${parts.health}</div>${brief ? '' : `<div class="source-update" data-source-update="${s.id}">${sourceUpdateHTML(s)}</div>`}${actions}</div>`
+  return `<article class="card src">
+    <div class="src-head">
+      <div class="src-main">
+        <div class="src-title"><span class="src-name" data-source-name="${s.id}">${esc(s.name)}</span><span data-source-badge="${s.id}">${parts.badge}</span><span class="ver" data-source-version="${s.id}">${esc(versionText(s))}</span></div>
+        <div class="meta" data-source-meta="${s.id}">${parts.meta}</div>
+      </div>
+      <div class="src-actions">
+        <button class="sec sm" data-source-action="test" data-source-id="${s.id}"><svg class="icon"><use href="#i-zap"/></svg>测试取链</button>
+        <button class="sec sm" data-source-action="toggle" data-source-id="${s.id}" data-enabled="${!s.enabled}">${s.enabled ? '停用' : '启用'}</button>
+        <div class="menu">
+          <button type="button" class="sec sm icon-only" data-source-menu="${s.id}" aria-haspopup="menu" aria-expanded="false" aria-label="更多操作" title="更多操作"><svg class="icon"><use href="#i-more"/></svg></button>
+          <div class="menu-list" role="menu" hidden>
+            <button type="button" role="menuitem" data-source-action="reload" data-source-id="${s.id}"><svg class="icon"><use href="#i-refresh"/></svg>重新加载</button>
+            <button type="button" role="menuitem" data-source-action="statistics" data-source-id="${s.id}"><svg class="icon"><use href="#i-chart"/></svg>调用统计</button>
+            <a role="menuitem" href="/api/admin/sources/${s.id}/script" download><svg class="icon"><use href="#i-download"/></svg>下载脚本</a>
+            <button type="button" role="menuitem" class="menu-danger" data-source-action="delete" data-source-id="${s.id}"><svg class="icon"><use href="#i-trash"/></svg>删除音源</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="src-body"><div class="chips" data-source-chips="${s.id}">${parts.chips}</div><div data-source-health="${s.id}">${parts.health}</div></div>
+    <div data-source-error="${s.id}">${parts.error}</div><div data-source-alert="${s.id}">${parts.alert}</div>
+    <div class="source-update"><div class="source-update-state" data-source-update="${s.id}">${sourceUpdateHTML(s)}</div><div class="source-update-actions"><button class="ghost sm" data-source-action="check" data-source-id="${s.id}" ${!s.url || s.updateRunning || sourceChecks.has(s.id) ? 'disabled' : ''}>检查更新</button><button class="ghost sm" data-source-action="update-settings" data-source-id="${s.id}">更新设置</button></div></div>
+    <div id="test-${s.id}" class="src-test"></div>
+    ${st && st.logs && st.logs.length ? `<details class="src-logs"><summary>脚本日志（${st.logs.length}）</summary><pre>${esc(st.logs.slice(-50).join('\n'))}</pre></details>` : ''}
+  </article>`
+}
+
+function closeSourceMenus(except) {
+  for (const button of document.querySelectorAll('#sourceList [data-source-menu][aria-expanded="true"]')) {
+    if (button === except) continue
+    button.setAttribute('aria-expanded', 'false')
+    button.nextElementSibling.hidden = true
+  }
 }
 
 async function loadDashboard() {
@@ -353,7 +374,8 @@ async function loadSourceList() {
     if (version !== sourceListVersion) return
     sourceCache.clear()
     for (const source of srcs) sourceCache.set(source.id, source)
-    $('#sourceList').innerHTML = srcs.length ? srcs.map(s => sourceCard(s, false)).join('') : '<div class="card empty">暂无音源脚本，请在上方上传或从 URL 导入</div>'
+    $('#sourceList').innerHTML = srcs.length ? srcs.map(s => sourceCard(s)).join('') : '<div class="card empty">暂无音源脚本，请在上方上传或从 URL 导入</div>'
+    $('#sourceCount').textContent = srcs.length ? String(srcs.length) : ''
     scheduleSourceUpdates(srcs.some(source => source.updateRunning) ? 2000 : 30000)
   } finally { if (version === sourceListVersion) sourceListController = null }
 }
@@ -374,24 +396,50 @@ async function reloadSource(id) { const r = await adminAPI('/sources/' + id + '/
 async function deleteSource(id) { if (!confirm('确定删除该音源？')) return; await adminAPI('/sources/' + id, { method: 'DELETE' }); await loadSources() }
 async function testSource(id) {
   const box = $('#test-' + id)
-  box.innerHTML = '<div class="muted hint" style="margin-top:10px">测试中（搜索“晴天 周杰伦”并取 128k 直链）…</div>'
+  box.innerHTML = '<div class="muted hint">测试中（搜索“晴天 周杰伦”并取 128k 直链）…</div>'
   try {
     const r = await adminAPI('/sources/' + id + '/test', { method: 'POST', body: {} })
-    box.innerHTML = '<div class="table-wrap sm"><table><thead><tr><th>平台</th><th>歌曲</th><th>结果</th><th>耗时</th></tr></thead><tbody>' + Object.entries(r).map(([p, v]) => `<tr><td>${platName[p] || p}</td><td>${esc(v.song || '')}</td><td>${v.ok ? `<span class="badge ok">成功 ${esc(v.quality)}</span> <a href="${esc(v.url)}" target="_blank" rel="noopener">打开链接</a>` : `<span class="badge err">失败</span> <span class="err">${esc(v.error)}</span>`}</td><td class="muted">${v.ms ?? ''} ms</td></tr>`).join('') + '</tbody></table></div>'
+    box.innerHTML = '<div class="src-test-head"><span>测试结果</span><button type="button" class="ghost sm" data-source-test-close>收起</button></div><div class="table-wrap sm"><table><thead><tr><th>平台</th><th>歌曲</th><th>结果</th><th>耗时</th></tr></thead><tbody>' + Object.entries(r).map(([p, v]) => `<tr><td>${platName[p] || p}</td><td>${esc(v.song || '')}</td><td>${v.ok ? `<span class="badge ok">成功 ${esc(v.quality)}</span> <a href="${esc(v.url)}" target="_blank" rel="noopener">打开链接</a>` : `<span class="badge err">失败</span> <span class="err">${esc(v.error)}</span>`}</td><td class="muted">${v.ms ?? ''} ms</td></tr>`).join('') + '</tbody></table></div>'
   } catch (err) { if (!isAbort(err)) box.innerHTML = `<div class="note err">${esc(err.message)}</div>` }
   if (sourceStatsVisible()) await loadSourceStatistics()
 }
 
 // ---- 日志 ----
+let logEntries = [], logLevel = ''
+const logLevelOf = entry => { const level = String(entry.level || '').toLowerCase(); return level.startsWith('err') ? 'error' : level.startsWith('warn') ? 'warn' : level.startsWith('debug') ? 'debug' : 'info' }
+function renderLogs() {
+  const box = $('#logBox'), keyword = $('#logFilter').value.trim().toLowerCase()
+  const counts = { '': logEntries.length, error: 0, warn: 0, info: 0 }
+  for (const entry of logEntries) { const level = logLevelOf(entry); if (level in counts) counts[level]++ }
+  for (const button of document.querySelectorAll('#logLevels [data-log-level]')) {
+    button.setAttribute('aria-pressed', String(button.dataset.logLevel === logLevel))
+    button.querySelector('b').textContent = counts[button.dataset.logLevel] ? countText(counts[button.dataset.logLevel]) : ''
+  }
+  const shown = logEntries.filter(entry => (!logLevel || logLevelOf(entry) === logLevel) && (!keyword || String(entry.message).toLowerCase().includes(keyword)))
+  const stick = box.scrollHeight - box.scrollTop - box.clientHeight < 40
+  box.innerHTML = shown.length ? shown.map(l => `<div class="log-line lv-${logLevelOf(l)}"><span class="t" title="${esc(l.time)}">${esc(String(l.time).replace(/^\d{4}-/, ''))}</span><span class="lv">${esc(l.level)}</span><span class="m">${esc(l.message)}</span></div>`).join('') : `<div class="empty">${logEntries.length ? '没有符合筛选条件的日志' : '暂无日志'}</div>`
+  if (stick) box.scrollTop = box.scrollHeight
+}
 async function loadLogs() {
-  const logs = await adminAPI('/logs?n=300')
-  const box = $('#logBox')
-  box.innerHTML = logs.length ? logs.map(l => `<div class="log-line lv-${esc(String(l.level).toLowerCase())}"><span class="t">${esc(l.time)}</span><span class="lv">${esc(l.level)}</span><span class="m">${esc(l.message)}</span></div>`).join('') : '<div class="empty">暂无日志</div>'
-  box.scrollTop = box.scrollHeight
+  logEntries = await adminAPI('/logs?n=300')
+  renderLogs()
+  $('#logBox').scrollTop = $('#logBox').scrollHeight
 }
 
 
 $('#sourceList').addEventListener('click', event => {
+  const menu = event.target.closest('[data-source-menu]')
+  if (menu) {
+    const open = menu.getAttribute('aria-expanded') !== 'true'
+    closeSourceMenus(menu)
+    menu.setAttribute('aria-expanded', String(open))
+    menu.nextElementSibling.hidden = !open
+    if (open) menu.nextElementSibling.querySelector('[role=menuitem]')?.focus()
+    return
+  }
+  if (event.target.closest('.menu-list')) closeSourceMenus()
+  const close = event.target.closest('[data-source-test-close]')
+  if (close) { close.closest('.src-test').innerHTML = ''; return }
   const button = event.target.closest('[data-source-action]')
   if (!button) return
   const id = Number(button.dataset.sourceId)
@@ -399,6 +447,24 @@ $('#sourceList').addEventListener('click', event => {
   Promise.resolve(actions[button.dataset.sourceAction]?.()).catch(error => { if (!isAbort(error)) toast(error.message, true) })
 })
 $('#uploadSourceForm').addEventListener('submit', uploadSource)
+document.addEventListener('click', event => { if (!event.target.closest('#sourceList .menu')) closeSourceMenus() })
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return
+  const open = document.querySelector('#sourceList [data-source-menu][aria-expanded="true"]')
+  if (open) { closeSourceMenus(); open.focus() }
+})
+for (const tab of document.querySelectorAll('[data-source-add]')) tab.addEventListener('click', () => {
+  for (const other of document.querySelectorAll('[data-source-add]')) other.setAttribute('aria-selected', String(other === tab))
+  $('#importSourceForm').classList.toggle('hidden', tab.dataset.sourceAdd !== 'import')
+  $('#uploadSourceForm').classList.toggle('hidden', tab.dataset.sourceAdd !== 'upload')
+})
+$('#logLevels').addEventListener('click', event => {
+  const button = event.target.closest('[data-log-level]')
+  if (!button) return
+  logLevel = button.dataset.logLevel
+  renderLogs()
+})
+$('#logFilter').addEventListener('input', () => renderLogs())
 $('#importSourceForm').addEventListener('submit', importSource)
 $('#sourceUpdateForm').addEventListener('submit', saveSourceUpdate)
 $('#closeSourceUpdate').addEventListener('click', closeSourceUpdate)
@@ -444,6 +510,11 @@ function reset() {
   $('#sourceStatsBody').innerHTML = ''
   $('#sourceStatsStatus').textContent = ''
   $('#sourceList').innerHTML = ''
+  $('#sourceCount').textContent = ''
+  logEntries = []
+  logLevel = ''
+  $('#logFilter').value = ''
+  $('#logBox').innerHTML = ''
 }
 
 return { loadDashboard, loadSources, loadLogs, reset }

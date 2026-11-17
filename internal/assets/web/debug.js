@@ -28,8 +28,9 @@ async function loadDebug() {
   $('#debugTokenList').innerHTML = data.tokens.length ? data.tokens.map(item => {
     const expired = Date.parse(item.expiresAt) <= Date.now()
     const status = item.revoked ? '已撤销' : expired ? '已过期' : '有效'
-    return `<div class="card"><b>${esc(item.id)}</b> · ${esc(status)}<p>权限：${esc(item.scopes.join(', '))} · 调用：${esc(item.calls)}</p><p>创建：${esc(new Date(item.createdAt).toLocaleString())}<br>绝对到期：${esc(new Date(item.expiresAt).toLocaleString())}<br>最近使用：${item.lastUsedAt ? esc(new Date(item.lastUsedAt).toLocaleString()) : '尚未使用'}</p><button class="danger sm" data-debug-revoke="${esc(item.id)}" ${item.revoked || expired ? 'disabled' : ''}>撤销</button></div>`
-  }).join('') : '<p class="muted">暂无临时凭据</p>'
+    const tone = item.revoked ? 'off' : expired ? 'warn' : 'ok'
+    return `<div class="card debug-token"><div class="debug-token-head"><b class="mono">${esc(item.id)}</b><span class="badge ${tone}">${esc(status)}</span><button class="danger sm" data-debug-revoke="${esc(item.id)}" ${item.revoked || expired ? 'disabled' : ''}>撤销</button></div><dl class="debug-token-meta"><div><dt>权限</dt><dd>${esc(item.scopes.join(', '))}</dd></div><div><dt>调用</dt><dd>${esc(item.calls)} 次</dd></div><div><dt>创建</dt><dd>${esc(new Date(item.createdAt).toLocaleString())}</dd></div><div><dt>绝对到期</dt><dd>${esc(new Date(item.expiresAt).toLocaleString())}</dd></div><div><dt>最近使用</dt><dd>${item.lastUsedAt ? esc(new Date(item.lastUsedAt).toLocaleString()) : '尚未使用'}</dd></div></dl></div>`
+  }).join('') : '<p class="empty">暂无临时凭据</p>'
   document.querySelectorAll('[data-debug-revoke]').forEach(button => { button.onclick = () => revokeDebugToken(button.dataset.debugRevoke) })
 }
 async function createDebugToken(event) {
