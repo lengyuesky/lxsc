@@ -32,6 +32,32 @@ func (s *Server) coverVersionID(kind, guid string, metadata ...string) string {
 	return kind + "_" + guid + "_v1-" + hex.EncodeToString(sum[:6])
 }
 
+// boundCoverMaxAge 是封面标识已绑定图片地址时允许客户端缓存的时长。
+const boundCoverMaxAge = 7 * 24 * time.Hour
+
+// coverEdge 把客户端请求的像素尺寸归入 120、160、640 三档（公开客户端记录的官方服务端档位）；
+// 缺失或无法识别的取值按最大档处理，避免把大图位置降成缩略图。
+func coverEdge(size string) int {
+	pixels, err := strconv.Atoi(size)
+	switch {
+	case err != nil || pixels < 64:
+		return 640
+	case pixels <= 120:
+		return 120
+	case pixels <= 160:
+		return 160
+	default:
+		return 640
+	}
+}
+
+// boundCover 判断请求的展示标识是否就是当前元数据生成的标识，且图片地址来自该元数据。
+// 满足时图片地址一旦变化标识也随之变化，旧标识不会再指向另一张图片。
+func (s *Server) boundCover(id string, track *music.Info) bool {
+	kind, guid, ok := parseCoverID(id)
+	return ok && strings.HasPrefix(track.Img(), "http") && id == s.coverID(kind, guid, track)
+}
+
 func parseCoverID(id string) (kind, guid string, valid bool) {
 	kind, tail, ok := strings.Cut(id, "_")
 	if !ok {
@@ -77,10 +103,14 @@ func (s *Server) cover(w http.ResponseWriter, r *http.Request) {
 			stop()
 		}
 		resource.Template = s.Settings.Get().CustomCoverURL
+		if s.boundCover(r.URL.Query().Get("coverId"), track) {
+			resource.MaxAge = boundCoverMaxAge
+		}
 	}
 	if strings.HasPrefix(resource.Address, "http://") {
 		resource.Address = "https://" + strings.TrimPrefix(resource.Address, "http://")
 	}
+	resource.MaxEdge = coverEdge(r.URL.Query().Get("size"))
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	s.Covers.Serve(w, r, resource, event)
 }

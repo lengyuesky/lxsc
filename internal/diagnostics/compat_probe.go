@@ -35,6 +35,7 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 			"endpoint":    "getCoverArt",
 			"origins":     []string{"original", "custom", "stale", "placeholder", "board", "redirect"},
 			"degraded":    "旧图或默认封面仍返回有效图片与 HTTP 200，但 result=unavailable，并保留 busy、timeout 或上游错误分类；不能当成真实封面恢复",
+			"revalidated": "status=304 表示客户端带回的校验值与当前图片一致，只确认缓存、不重发正文，bytesWritten=0 属正常；飞牛封面按请求尺寸读取缩略图，同一曲目不同尺寸的字节数不同",
 			"performance": "inspect/performance 的 covers 包含独立的下载排队、传输、字节缓存、共享请求及默认封面计数",
 		},
 		"authentication": "Authorization: Bearer <temporary-debug-token>",

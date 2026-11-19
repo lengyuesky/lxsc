@@ -19,6 +19,9 @@ import (
 
 const maxCoverBytes = 8 << 20
 
+// defaultCoverMaxAge 适用于无法确认图片地址与封面标识绑定的真实封面。
+const defaultCoverMaxAge = 15 * time.Minute
+
 // RequestTimeout includes metadata resolution when the caller sets an earlier deadline.
 const RequestTimeout = coverRequestTimeout
 
@@ -40,12 +43,17 @@ type Resource struct {
 	Address  string
 	Template string
 	Fields   map[string]string
+	// MaxEdge 请求不超过该边长的缩略图，仅对支持按需缩放的图床生效；0 表示原图。
+	MaxEdge int
+	// MaxAge 延长原图的客户端缓存时长；仅当协议层确认封面标识随图片地址变化时设置。
+	MaxAge time.Duration
 }
 
 type coverImage struct {
 	data        []byte
 	contentType string
 	origin      string
+	etag        string
 }
 
 func (s *Service) init() {
@@ -91,29 +99,34 @@ func (s *Service) serveCover(ctx context.Context, w http.ResponseWriter, r *http
 	if resource.Template != "" && resource.Fields != nil {
 		customURL, _ = httpguard.ExpandTemplate(resource.Template, resource.Fields)
 	}
-	key := resource.Address + "\x00" + customURL
-	picture, cached, err := s.cache.load(ctx, key, resource.UserID, s.Limits, func(workCtx context.Context) (coverImage, error) {
-		return s.loadCover(workCtx, resource.Address, customURL)
+	address := sizedAddress(resource.Address, resource.MaxEdge)
+	key, primary := address+"\x00"+customURL, ""
+	if address != "" {
+		// 原图只取决于地址；备用接口的结果仍按各自的匹配字段分开缓存。
+		primary = address + "\x00"
+	}
+	picture, cached, err := s.cache.load(ctx, key, primary, resource.UserID, s.Limits, func(workCtx context.Context) (coverImage, error) {
+		return s.loadCover(workCtx, address, resource.Address, customURL)
 	})
 	if r.Context().Err() != nil {
 		return
 	}
 	if err == nil {
-		s.deliverCover(w, r, picture, cached, nil, resource.Fields != nil, event)
+		s.deliverCover(w, r, picture, cached, nil, resource.Fields != nil, resource.MaxAge, event)
 		return
 	}
-	safeFailure := !errors.Is(err, httpguard.ErrUnsafeTarget) && !errors.Is(err, httpguard.ErrRedirectLimit)
+	safeFailure := !unsafeFailure(err)
 	if safeFailure {
-		if old, ok := s.cache.staleImage(key); ok {
+		if old, ok := s.cache.staleImage(key, primary); ok {
 			old.origin = "stale"
-			s.deliverCover(w, r, old, true, err, resource.Fields != nil, event)
+			s.deliverCover(w, r, old, true, err, resource.Fields != nil, 0, event)
 			return
 		}
 	}
 	// 仅对已经解析且通过权限检查的资源兜底，鉴权、未知资源和不安全目标仍保留错误。
 	if resource.Fields != nil && safeFailure {
 		if placeholder, placeholderErr := placeholderCoverImage(); placeholderErr == nil {
-			s.deliverCover(w, r, placeholder, false, err, true, event)
+			s.deliverCover(w, r, placeholder, false, err, true, 0, event)
 			return
 		}
 	}
@@ -127,7 +140,11 @@ func (s *Service) serveCover(ctx context.Context, w http.ResponseWriter, r *http
 	}
 }
 
-func (s *Service) deliverCover(w http.ResponseWriter, r *http.Request, picture coverImage, cached bool, cause error, allowPlaceholder bool, event *diagnostics.Event) {
+func unsafeFailure(err error) bool {
+	return errors.Is(err, httpguard.ErrUnsafeTarget) || errors.Is(err, httpguard.ErrRedirectLimit)
+}
+
+func (s *Service) deliverCover(w http.ResponseWriter, r *http.Request, picture coverImage, cached bool, cause error, allowPlaceholder bool, maxAge time.Duration, event *diagnostics.Event) {
 	if picture.origin != "placeholder" {
 		release, err := s.Delivery.Acquire(r.Context(), 0)
 		if err != nil {
@@ -136,7 +153,7 @@ func (s *Service) deliverCover(w http.ResponseWriter, r *http.Request, picture c
 			}
 			if allowPlaceholder {
 				if fallback, fallbackErr := placeholderCoverImage(); fallbackErr == nil {
-					s.deliverCover(w, r, fallback, false, err, false, event)
+					s.deliverCover(w, r, fallback, false, err, false, 0, event)
 					return
 				}
 			}
@@ -150,10 +167,11 @@ func (s *Service) deliverCover(w http.ResponseWriter, r *http.Request, picture c
 		s.cache.placeholder()
 	}
 	RecordOutcome(event, picture.origin, cached, cause)
-	writeCoverImage(w, r, picture)
+	writeCoverImage(w, r, picture, maxAge)
 }
 
-func (s *Service) loadCover(ctx context.Context, address, customURL string) (coverImage, error) {
+// loadCover 依次尝试 address、未缩放的 original 和备用接口；address 为空时只用备用接口。
+func (s *Service) loadCover(ctx context.Context, address, original, customURL string) (coverImage, error) {
 	var picture coverImage
 	err := errors.New("封面地址为空")
 	if address != "" {
@@ -168,6 +186,10 @@ func (s *Service) loadCover(ctx context.Context, address, customURL string) (cov
 			primaryCtx, stop = context.WithTimeout(ctx, budget)
 		}
 		picture, err = s.fetchCover(primaryCtx, address, false)
+		if err != nil && original != address && !unsafeFailure(err) && primaryCtx.Err() == nil {
+			// 缩略图由图床按需生成，偶发失败时退回未缩放的原图，不直接降级为备用图或默认图。
+			picture, err = s.fetchCover(primaryCtx, original, false)
+		}
 		stop()
 		picture.origin = "original"
 	}
@@ -207,7 +229,7 @@ func (s *Service) fetchCover(ctx context.Context, address string, allowReference
 	contentType := http.DetectContentType(data)
 	switch contentType {
 	case "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp", "image/x-icon":
-		return coverImage{data: data, contentType: contentType}, nil
+		return coverImage{data: data, contentType: contentType, etag: coverETag(data)}, nil
 	}
 	if allowReference && len(data) <= 64<<10 {
 		// 自定义接口可返回图片 URL；只再读取一次，所有目标与重定向仍须通过公网校验。
@@ -244,18 +266,34 @@ func coverReference(data []byte, depth int) string {
 	return ""
 }
 
-func writeCoverImage(w http.ResponseWriter, r *http.Request, picture coverImage) {
-	w.Header().Set("Content-Type", picture.contentType)
+func writeCoverImage(w http.ResponseWriter, r *http.Request, picture coverImage, maxAge time.Duration) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	w.Header().Set("Cache-Control", "private, max-age=900")
-	if picture.origin == "placeholder" {
+	switch picture.origin {
+	case "placeholder":
 		w.Header().Set("Cache-Control", "private, no-store, max-age=0")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
-	} else if picture.origin == "stale" {
+	case "stale":
 		w.Header().Set("Cache-Control", "private, no-cache, max-age=0")
+	default:
+		// 备用接口按歌曲文字匹配，结果可能随原图恢复而变化，不延长缓存。
+		if picture.origin != "original" || maxAge < defaultCoverMaxAge {
+			maxAge = defaultCoverMaxAge
+		}
+		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(maxAge/time.Second)))
 	}
+	// 默认图在本地生成，不带校验值，始终完整返回。
+	if picture.etag != "" {
+		w.Header().Set("ETag", picture.etag)
+		if notModified(r, picture.etag) {
+			// 客户端缓存到期后只需重新确认，不再重复下载图片正文。
+			w.WriteHeader(http.StatusNotModified)
+			_ = http.NewResponseController(w).Flush()
+			return
+		}
+	}
+	w.Header().Set("Content-Type", picture.contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(picture.data)))
 	_, _ = w.Write(picture.data)
 	// 归还大图传输名额前刷出最后一段；诊断包装器会保留刷新失败。

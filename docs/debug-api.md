@@ -176,6 +176,7 @@ LXSC_CHROMIUM_PATH=/path/to/chrome node tests/web/browser.cjs
 - `requestId`：服务端独立生成的关联 ID，与普通响应的 `X-Request-ID` 对应，不复用客户端传入的请求头。
 - `bytesWritten` / `responseBytes`：协议或封面正文实际被 ResponseWriter 接受的字节数 / 预期正文长度；HEAD、304 无正文时为零。正文写入并刷新网络缓冲后才记录结果，写入报错、短写或刷新失败均为 `failed`、`write_error`；刷新失败时两个字节数仍可能相等。不适用的音频传输不伪造这两个字段。
 - `coverOrigin`：封面来源固定为 `original/custom/stale/placeholder/board/redirect`。正常缓存命中保留原来源并设置 `cached=true`；旧图和默认图仍返回 HTTP 200 图片，但标记 `result=unavailable`，保留 `busy/timeout/upstream_error` 等错误分类，不能因此宣布真实封面恢复。鉴权和访问权限失败不会被默认图掩盖。
+- 封面响应带内容校验值。客户端带回一致的校验值时返回 `status=304`、`bytesWritten=0`，表示只确认缓存、没有重发图片，不是写出失败；飞牛封面按请求尺寸读取缩略图，同一曲目在不同尺寸下的字节数不同。
 
 - `count`：协议正文中的列表条目数（歌单详情为歌曲数，非摘要的待加载标记）。`lines`：歌词行数；`synced`：结构化歌词是否含同步轨。字段不存在表示不适用；零表示构造的正文确实为空，但还需结合写出结果判断是否完整交付。
 - 飞牛歌单列表与歌单曲目列表还提供 `total`，表示分页前的总条目数；带分页参数时提供归一化后的 `page`、`pageSize`，未指定分页时省略。`pageSize=-1` 保留客户端“读取全部”的协议标记，此时 `page=1`，不按页切片；正数页长继续表示普通分页。歌单摘要 `/playlist/detail` 只记录响应状态和写出字节数，`count`、`total` 不适用。这些事件沿用 `getPlaylists`、`getPlaylist` 端点名，不记录歌单 GUID、查询字符串或歌单文本。

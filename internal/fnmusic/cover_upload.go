@@ -123,6 +123,8 @@ func (s *Server) uploadedCover(w http.ResponseWriter, r *http.Request, event *di
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.Header().Set("Cache-Control", "private, no-cache")
+	// 上传封面的内容不随标识变化；每次仍重新鉴权，未变时只回 304 不重复传图。
+	w.Header().Set("ETag", `"`+id+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("Referrer-Policy", "no-referrer")

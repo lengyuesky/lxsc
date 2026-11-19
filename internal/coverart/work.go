@@ -16,7 +16,7 @@ const (
 	coverUserConcurrent   = 4
 	coverUserQueueLimit   = 32
 	coverCacheBytes       = 16 << 20
-	coverCacheEntries     = 128
+	coverCacheEntries     = 512
 	coverCacheTTL         = 15 * time.Minute
 	coverStaleTTL         = 24 * time.Hour
 	coverRequestTimeout   = 9 * time.Second
@@ -79,19 +79,33 @@ func (c *coverWork) putLocked(key string, image coverImage) {
 	}
 }
 
-func (c *coverWork) load(ctx context.Context, key string, user int64, gate *admission.Gate, fetch func(context.Context) (coverImage, error)) (coverImage, bool, error) {
+// cacheKeys 先查只与图片地址有关的 primary，再查带备用接口参数的 key。
+func cacheKeys(key, primary string) []string {
+	if primary == "" || primary == key {
+		return []string{key}
+	}
+	return []string{primary, key}
+}
+
+// load 以 key 合并在途请求；原图成功时改用 primary 保存，
+// 使备用接口参数不同的歌曲、专辑、歌手和歌单请求共用同一张已取回的图片。
+func (c *coverWork) load(ctx context.Context, key, primary string, user int64, gate *admission.Gate, fetch func(context.Context) (coverImage, error)) (coverImage, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return coverImage{}, false, err
 	}
 	c.mu.Lock()
-	if entry, ok := c.entries.Get(key); ok {
+	for _, candidate := range cacheKeys(key, primary) {
+		entry, ok := c.entries.Get(candidate)
+		if !ok {
+			continue
+		}
 		if time.Now().Before(entry.expires) {
 			c.hits++
 			c.mu.Unlock()
 			return entry.image, true, nil
 		}
 		if time.Now().After(entry.expires.Add(coverStaleTTL)) {
-			c.entries.Remove(key)
+			c.entries.Remove(candidate)
 		}
 	}
 	call := c.calls[key]
@@ -111,7 +125,7 @@ func (c *coverWork) load(ctx context.Context, key string, user int64, gate *admi
 		call = &coverCall{done: make(chan struct{}), cancel: cancel, permit: permit}
 		c.calls[key] = call
 		c.misses++
-		go c.run(workCtx, key, call, fetch)
+		go c.run(workCtx, key, primary, call, fetch)
 	} else {
 		c.shared++
 	}
@@ -144,7 +158,7 @@ func (c *coverWork) leave(key string, call *coverCall) {
 	}
 }
 
-func (c *coverWork) run(ctx context.Context, key string, call *coverCall, fetch func(context.Context) (coverImage, error)) {
+func (c *coverWork) run(ctx context.Context, key, primary string, call *coverCall, fetch func(context.Context) (coverImage, error)) {
 	var picture coverImage
 	var err error
 	defer func() {
@@ -159,7 +173,11 @@ func (c *coverWork) run(ctx context.Context, key string, call *coverCall, fetch 
 		if c.calls[key] == call {
 			delete(c.calls, key)
 			if err == nil {
-				c.putLocked(key, picture)
+				target := key
+				if primary != "" && picture.origin == "original" {
+					target = primary
+				}
+				c.putLocked(target, picture)
 			}
 		}
 		if errors.Is(err, context.Canceled) {
@@ -182,19 +200,22 @@ func (c *coverWork) run(ctx context.Context, key string, call *coverCall, fetch 
 	}
 }
 
-func (c *coverWork) staleImage(key string) (coverImage, bool) {
+func (c *coverWork) staleImage(key, primary string) (coverImage, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries.Get(key)
-	if !ok {
-		return coverImage{}, false
+	for _, candidate := range cacheKeys(key, primary) {
+		entry, ok := c.entries.Get(candidate)
+		if !ok {
+			continue
+		}
+		if time.Now().After(entry.expires.Add(coverStaleTTL)) {
+			c.entries.Remove(candidate)
+			continue
+		}
+		c.stale++
+		return entry.image, true
 	}
-	if time.Now().After(entry.expires.Add(coverStaleTTL)) {
-		c.entries.Remove(key)
-		return coverImage{}, false
-	}
-	c.stale++
-	return entry.image, true
+	return coverImage{}, false
 }
 
 func (c *coverWork) placeholder() {

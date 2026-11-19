@@ -33,9 +33,9 @@ func TestCoverSharedCancellationKeepsOtherWaiter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	first, second := make(chan error, 1), make(chan error, 1)
-	go func() { _, _, err := c.load(ctx, "same", 1, gate, fetch); first <- err }()
+	go func() { _, _, err := c.load(ctx, "same", "", 1, gate, fetch); first <- err }()
 	workCtx := <-started
-	go func() { _, _, err := c.load(context.Background(), "same", 1, gate, fetch); second <- err }()
+	go func() { _, _, err := c.load(context.Background(), "same", "", 1, gate, fetch); second <- err }()
 	waitCoverCondition(t, func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.waiters == 2 })
 	cancel()
 	if err := <-first; !errors.Is(err, context.Canceled) || workCtx.Err() != nil {
@@ -45,7 +45,7 @@ func TestCoverSharedCancellationKeepsOtherWaiter(t *testing.T) {
 	if err := <-second; err != nil || calls.Load() != 1 {
 		t.Fatal("相同图片没有合并为一次上游请求", err, calls.Load())
 	}
-	if _, cached, err := c.load(context.Background(), "same", 1, gate, fetch); err != nil || !cached || calls.Load() != 1 {
+	if _, cached, err := c.load(context.Background(), "same", "", 1, gate, fetch); err != nil || !cached || calls.Load() != 1 {
 		t.Fatal("共享成功结果未缓存", err)
 	}
 	if gate.Stats().Active != 0 || gate.Stats().Queued != 0 {
@@ -61,7 +61,7 @@ func TestCoverAllWaitersCancelledAllowsFreshRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := c.load(ctx, "same", 1, gate, func(ctx context.Context) (coverImage, error) {
+		_, _, err := c.load(ctx, "same", "", 1, gate, func(ctx context.Context) (coverImage, error) {
 			close(started)
 			<-ctx.Done()
 			close(stopped)
@@ -80,7 +80,7 @@ func TestCoverAllWaitersCancelledAllowsFreshRetry(t *testing.T) {
 		t.Fatal("所有等待者取消后，上游没有取消")
 	}
 	waitCoverCondition(t, func() bool { return gate.Stats().Active == 0 })
-	image, cached, err := c.load(context.Background(), "same", 1, gate, func(context.Context) (coverImage, error) {
+	image, cached, err := c.load(context.Background(), "same", "", 1, gate, func(context.Context) (coverImage, error) {
 		return coverImage{data: []byte("新图片"), origin: "original"}, nil
 	})
 	if err != nil || cached || string(image.data) != "新图片" {
@@ -105,14 +105,14 @@ func TestCoverCacheUsesTotalByteBudgetAndExpiresStale(t *testing.T) {
 	old.expires = time.Now().Add(-time.Minute)
 	c.entries.Add("second", old)
 	c.mu.Unlock()
-	if _, ok := c.staleImage("second"); !ok {
+	if _, ok := c.staleImage("second", ""); !ok {
 		t.Fatal("近期成功的旧封面应可用于暂时降级")
 	}
 	c.mu.Lock()
 	old.expires = time.Now().Add(-coverStaleTTL - time.Hour)
 	c.entries.Add("second", old)
 	c.mu.Unlock()
-	if _, ok := c.staleImage("second"); ok {
+	if _, ok := c.staleImage("second", ""); ok {
 		t.Fatal("过期太久的旧图不能继续兜底")
 	}
 	c.mu.Lock()
