@@ -22,6 +22,7 @@
 | `wp_MusicApi-reference` | `bf9307dd138dc8ac6c4f7de29361209d4f5b665f` | Apache-2.0 | [原文](upstream/wp_MusicApi/LICENSE) |
 | `alpine-license-references` | `2026-09-06` | GPL-2.0、OpenSSL 3.5.7、musl 1.2.6、zlib 1.3.2；具体以实际包记录为准 | [原文目录](alpine/) |
 | `GNU-LGPL-2.1` | `2.1` | LGPL-2.1-or-later（对应头文件声明允许后续版本） | [原文](texts/LGPL-2.1.txt) |
+| `ffmpeg` | `8.1.3` | LGPL-2.1-or-later（仅启用 LGPL 组件，镜像内静态编译的音频验证解码器） | [原文目录](ffmpeg/8.1.3/) |
 | `go-stdlib` | `1.27.0` | BSD-3-Clause 及标准库内联第三方条款 | [原文](go-stdlib/go1.27.0/LICENSE) |
 | `filippo.io/age` | `v1.2.1` | BSD-3-Clause；bech32 部分 MIT | [原文](go/filippo.io/age@v1.2.1/AUTHORS) |
 | `github.com/dlclark/regexp2/v2` | `v2.5.2` | MIT | [原文](go/github.com/dlclark/regexp2/v2@v2.5.2/LICENSE) |

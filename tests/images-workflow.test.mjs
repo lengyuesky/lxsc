@@ -84,6 +84,31 @@ test('Docker 构建使用固定 Bun、严格锁文件、交叉编译并随附许
   assert.match(dockerfile, /FROM runtime AS final/)
 })
 
+test('运行层只带为音频验证静态编译的 FFmpeg，源码校验摘要且组件与解码白名单一致', () => {
+  const dockerfile = read('Dockerfile')
+  const runtime = dockerfile.split(/^FROM alpine:3\.24 AS runtime$/m)[1].split(/^FROM /m)[0]
+  assert.match(dockerfile, /^FROM alpine:3\.24 AS ffmpeg$/m)
+  assert.match(dockerfile, /ARG FFMPEG_SHA256=[0-9a-f]{64}\n/)
+  assert.match(dockerfile, /sha256sum -c -/)
+  assert.match(dockerfile, /RUN sh \/tmp\/build-ffmpeg\.sh \/tmp\/ffmpeg \/out/)
+  assert.match(runtime, /RUN apk add --no-cache ca-certificates tzdata && adduser/)
+  assert.doesNotMatch(runtime, /apk add[^\n]*ffmpeg/, '运行层不能再安装 Alpine 完整 ffmpeg')
+  assert.match(runtime, /COPY --from=ffmpeg \/out\/ffmpeg \/usr\/local\/bin\/ffmpeg/)
+  assert.match(runtime, /COPY --from=ffmpeg \/out\/legal\/ \/usr\/share\/licenses\/lxsc\/ffmpeg\//)
+  const build = read('scripts/build-ffmpeg.sh')
+  const configure = build.split('\nset -- \\\n')[1].split('\n\n')[0]
+  assert.match(configure, /--disable-everything/)
+  assert.doesNotMatch(configure, /--enable-(gpl|nonfree|network)/)
+  assert.match(configure, /--enable-protocol=pipe \\/)
+  const demuxers = build.match(/^demuxers=(\S+)$/m)[1]
+  const whitelist = read('internal/httpguard/audio.go').match(/"-format_whitelist", "([^"]+)"/)[1]
+  assert.equal(demuxers, whitelist, '最小 FFmpeg 的解复用器须与解码白名单一致')
+  const check = read('scripts/check-image-audio.sh')
+  assert.match(check, /checkDecode internal\/testaudio\/tone\.mp3/)
+  assert.match(check, /checkDecode internal\/testaudio\/tone\.flac/)
+  assert.match(check, /ffmpeg\/BUILD\.txt/)
+})
+
 test('公有仓库使用免费标准原生 runner，架构并行且解码门禁先于最终标签', () => {
   for (const job of ['build-only', 'publish']) {
     const content = workflow.split(`\n  ${job}:`)[1].split(/\n  [a-z][a-z-]*:/)[0]

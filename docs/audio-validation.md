@@ -34,7 +34,7 @@
 
 ## 运行与验证
 
-Docker 镜像包含 FFmpeg；直接运行二进制时，`ffmpeg` 必须位于 PATH。缺少解码器时应安装依赖，不能退回仅检查响应头的假成功。
+Docker 镜像包含只为音频验证编译的静态 FFmpeg（[`scripts/build-ffmpeg.sh`](../scripts/build-ffmpeg.sh)）：仅管道输入，解复用器与上面的格式白名单一致（mp3、flac、ogg、wav、aac、mov/m4a、ape、wv、aiff、au），解码器覆盖 MP3/MP2、FLAC、ALAC、AAC、Vorbis、Opus、APE、WavPack、AC-3/E-AC-3 与常见 PCM/ADPCM，不含视频、图形、网络与硬件加速组件，镜像因此小了约 150 MB。增减白名单格式时须同步该脚本，并用 `scripts/check-image-audio.sh` 在实际镜像中重新验证。直接运行二进制时，`ffmpeg` 必须位于 PATH，发行版的完整 FFmpeg 同样可用。缺少解码器时应安装依赖，不能退回仅检查响应头的假成功。
 
 隔离测试使用自主生成的 440 Hz PCM、MP3、FLAC，不使用真实歌曲、线上账号或音源。覆盖假音频、空正文、伪造签名、真实解码、错误 MIME、验证前缀完整交付、同源降档、不同源恢复、只取头权限隔离、私有音频探测，以及 QQ/HTTP 继续直链。
 

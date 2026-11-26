@@ -128,6 +128,7 @@ func decodeAudio(ctx context.Context, sample []byte) (*audioMetadata, error) {
 	if err != nil {
 		return nil, ErrDecoderUnavailable
 	}
+	// 镜像中的 FFmpeg 只编译了这些组件：增减格式白名单须同步 scripts/build-ffmpeg.sh。
 	command := exec.CommandContext(ctx, program,
 		"-hide_banner", "-loglevel", "info", "-nostdin",
 		"-max_alloc", "16777216", "-threads", "1", "-filter_threads", "1",
