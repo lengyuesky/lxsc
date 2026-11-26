@@ -109,14 +109,14 @@ test('竞态、浏览器和基准拥有独立编译缓存，APT 等待有界且�
   assert.match(check, /cache-dependency-path: \|\n\s+go\.sum\n\s+scripts\/check\.sh/)
   assert.match(browser, /cache-dependency-path: \|\n\s+go\.sum\n\s+tests\/web\/package-lock\.json/)
   assert.match(benchmark, /cache-dependency-path: go\.sum/)
-  for (const job of [check, browser]) assert.match(job, /安装音频解码验证依赖\n\s+timeout-minutes: 4\n\s+run: bash scripts\/prepare-ci-media\.sh/)
+  for (const job of [check, browser]) assert.match(job, /安装音频解码验证依赖\n\s+timeout-minutes: 12\n\s+run: bash scripts\/prepare-ci-media\.sh/)
   const prepare = read('scripts/prepare-ci-media.sh')
   assert.match(prepare, /https:\/\/archive\.ubuntu\.com\/ubuntu/)
   assert.match(prepare, /Signed-By: \/usr\/share\/keyrings\/ubuntu-archive-keyring\.gpg/)
   assert.match(prepare, /APT::Update::Error-Mode "any"/)
-  assert.match(prepare, /timeout --kill-after=10s 90s/)
-  assert.match(prepare, /timeout --kill-after=10s 120s/)
-  assert.match(prepare, /--no-install-recommends ffmpeg/)
+  assert.match(prepare, /timeout --kill-after=10s "\$limit"/)
+  assert.match(prepare, /ciApt 90s update/)
+  assert.match(prepare, /ciApt 120s install -y --no-install-recommends ffmpeg/)
 })
 
 test('涉及 LGPL 的四个头文件翻译单元完整归档且没有函数实现', () => {
