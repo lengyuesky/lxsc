@@ -81,7 +81,7 @@ type preparation struct {
 	proxy, head bool
 	concurrency int
 	grace       time.Duration
-	calls       atomic.Int32
+	calls       *atomic.Int32 // 同一请求内各路选源共享的尝试序号
 	// failure 是最近一次有意义的失败，全部候选耗尽时作为返回的错误类别。
 	failure error
 }
@@ -89,6 +89,7 @@ type preparation struct {
 // Prepare 为一次播放请求选出可播放的音频。
 // 顺序固定为：已验证的缓存 → 歌曲所在平台的全部音源和音质 → 其它平台上的同一首歌。
 // 近期已确认所在平台全部失败并换平台播放成功的曲目，先复用那首替代曲目。
+// 所在平台近期连续多首歌都确认全部失败时，后两步同时进行，先得到可播放音频的一路胜出。
 // 返回错误且请求未被取消时，上述候选均已逐一确认失败。
 func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
 	finish := s.Catalog.MediaPreparation.Start()
@@ -98,7 +99,7 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, prepareLimit)
 	defer cancel()
-	p := &preparation{Service: s, request: r, quality: quality, proxy: proxy, head: headMetadata, concurrency: s.sourceConcurrency(), failure: errMediaUnavailable}
+	p := &preparation{Service: s, request: r, quality: quality, proxy: proxy, head: headMetadata, concurrency: s.sourceConcurrency(), calls: new(atomic.Int32), failure: errMediaUnavailable}
 	if s.Settings.Get().SourceSelection != "speed" {
 		p.grace = qualityGrace
 	}
@@ -113,19 +114,13 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 			s.Catalog.ForgetPlaybackSubstitute(in, !proxy)
 		}
 	}
-	if winner == nil && err == nil {
-		winner, err = p.pick(ctx, []*music.Info{in})
-	}
 	found := false
 	if winner == nil && err == nil {
-		started := time.Now()
-		searchCtx, stop := context.WithTimeout(ctx, crossSearchLimit)
-		substitutes := s.Catalog.FindCrossSourceCandidates(searchCtx, in)
-		s.mediaRequestEvent(r, "cross_source", in.TrackID(), in.Source(), quality, false, 0, started, searchCtx.Err())
-		stop()
-		if winner, err = p.pick(ctx, substitutes); winner != nil {
-			found = true
-			s.mediaRequestEvent(r, "cross_source", in.TrackID(), winner.track.Source(), winner.resolution.Result.Quality, false, winner.status, started, nil)
+		if s.Catalog.HomePlatformFailing(in.Source(), !proxy) {
+			winner, found, err = p.hedge(ctx, in)
+		} else if winner, err = p.home(ctx, in); winner == nil && err == nil {
+			winner, err = p.crossSource(ctx, in)
+			found = winner != nil
 		}
 	}
 	if winner == nil {
@@ -154,6 +149,90 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 	return result, winner.response, nil
 }
 
+// fork 为同一请求的另一路选源创建独立的失败记录，共享尝试序号。
+func (p *preparation) fork() *preparation {
+	return &preparation{Service: p.Service, request: p.request, quality: p.quality, proxy: p.proxy, head: p.head, concurrency: p.concurrency, grace: p.grace, calls: p.calls, failure: errMediaUnavailable}
+}
+
+// home 在歌曲所在平台选源，并记录有结论的结果，供后续请求判断该平台是否整体持续失败。
+// 刚确认过全部失败、本次直接跳过的曲目不重复计数。
+func (p *preparation) home(ctx context.Context, in *music.Info) (*selection, error) {
+	record := !headersOnly(ctx) && !p.Catalog.PlaybackExhausted(in, p.quality, !p.proxy)
+	winner, err := p.pick(ctx, []*music.Info{in})
+	if record {
+		switch {
+		case winner != nil:
+			p.Catalog.RecordHomePlatform(in.Source(), !p.proxy, true)
+		case err == nil && ctx.Err() == nil:
+			p.Catalog.RecordHomePlatform(in.Source(), !p.proxy, false)
+		}
+	}
+	return winner, err
+}
+
+// crossSource 到其它平台搜索同一首歌并选源。
+func (p *preparation) crossSource(ctx context.Context, in *music.Info) (*selection, error) {
+	started := time.Now()
+	searchCtx, stop := context.WithTimeout(ctx, crossSearchLimit)
+	substitutes := p.Catalog.FindCrossSourceCandidates(searchCtx, in)
+	p.mediaRequestEvent(p.request, "cross_source", in.TrackID(), in.Source(), p.quality, false, 0, started, searchCtx.Err())
+	stop()
+	winner, err := p.pick(ctx, substitutes)
+	if winner != nil {
+		p.mediaRequestEvent(p.request, "cross_source", in.TrackID(), winner.track.Source(), winner.resolution.Result.Quality, false, winner.status, started, nil)
+	}
+	return winner, err
+}
+
+// hedge 在所在平台整体持续失败时让所在平台与换平台同时选源：先得到可播放音频的一路胜出，另一路随即取消。
+// 两路各自独立确认失败，都确认失败才报告失败；found 表示由其它平台胜出。
+func (p *preparation) hedge(ctx context.Context, in *music.Info) (winner *selection, found bool, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type outcome struct {
+		winner  *selection
+		err     error
+		failure error
+		cross   bool
+	}
+	results := make(chan outcome, 2)
+	run := func(cross bool) {
+		q := p.fork()
+		out := outcome{cross: cross}
+		if cross {
+			out.winner, out.err = q.crossSource(ctx, in)
+		} else {
+			out.winner, out.err = q.home(ctx, in)
+		}
+		out.failure = q.failure
+		results <- out
+	}
+	go run(false)
+	go run(true)
+	for pending := 2; pending > 0; pending-- {
+		out := <-results
+		if out.winner != nil {
+			if pending == 2 {
+				// 落败一路随返回取消，在后台结束并关闭它可能已拿到的响应。
+				go func() {
+					if late := <-results; late.winner != nil {
+						late.winner.close()
+					}
+				}()
+			}
+			return out.winner, out.cross, nil
+		}
+		if err == nil {
+			err = out.err
+		}
+		// 报告的失败类别优先取所在平台的。
+		if out.failure != errMediaUnavailable && (!out.cross || p.failure == errMediaUnavailable) {
+			p.failure = out.failure
+		}
+	}
+	return nil, false, err
+}
+
 // selection 在 attempt 之外记住胜出候选所属的曲目，换平台时缓存与评分都记在实际播放的曲目上。
 type selection struct {
 	attempt
@@ -164,6 +243,7 @@ type selection struct {
 func (p *preparation) pick(ctx context.Context, tracks []*music.Info) (*selection, error) {
 	remember := !headersOnly(ctx)
 	var lanes []*lane
+	var selected []*music.Info // 本次真正参与选源的曲目
 	for _, track := range tracks {
 		if remember {
 			if found := p.cached(ctx, track); found != nil {
@@ -174,6 +254,7 @@ func (p *preparation) pick(ctx context.Context, tracks []*music.Info) (*selectio
 				continue
 			}
 		}
+		selected = append(selected, track)
 		lanes = append(lanes, p.lanes(track)...)
 	}
 	p.order(lanes)
@@ -195,7 +276,8 @@ func (p *preparation) pick(ctx context.Context, tracks []*music.Info) (*selectio
 		return &selection{*best, lanes[best.lane].track}, nil
 	}
 	if err == nil && complete && remember {
-		for _, track := range tracks {
+		// 只记本次跑过的曲目：直接跳过的曲目若也重新记一遍，客户端持续重试时失败结论会无限续期。
+		for _, track := range selected {
 			p.Catalog.MarkPlaybackExhausted(track, p.quality, !p.proxy)
 		}
 	}

@@ -116,3 +116,133 @@ func TestExpiredCandidatesAreRefetchedConcurrently(t *testing.T) {
 		t.Fatal("重取应并发进行，不应逐档排队")
 	}
 }
+
+// 所在平台整体持续失败时，换平台不再等所在平台全部失败：两路同时选源，先可播放的一路胜出。
+func TestFailingHomePlatformRacesCrossPlatform(t *testing.T) {
+	s, user, info := newMediaStabilityServer(t, exhaustiveScript("a"))
+	withAlternatePlatform(t, s)
+	var homeCancelled atomic.Int32
+	s.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(r.URL.Path, "/a/wy/") {
+			// 所在平台的音频地址迟迟不响应，只能等到被取消。
+			<-r.Context().Done()
+			homeCancelled.Add(1)
+			return nil, r.Context().Err()
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/mpeg"}}, Body: http.NoBody}, nil
+	})}
+	for range 3 {
+		s.Catalog.RecordHomePlatform("wy", true, false)
+	}
+	started := time.Now()
+	resolution, response, err := s.prepareMedia(context.Background(), mediaStabilityRequest(user, info, ""), info, "320k", false, false)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err != nil || !resolution.Validated || resolution.Platform != "kg" || resolution.TrackID != "tr-kg-alternate" {
+		t.Fatalf("应由其它平台胜出：%+v %v", resolution, err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("不应等所在平台的候选耗尽：%v", elapsed)
+	}
+	if substitute := s.Catalog.PlaybackSubstitute(info, "320k", true); substitute == nil || substitute.TrackID() != "tr-kg-alternate" {
+		t.Fatalf("平台持续失败时换平台胜出也应记住替代曲目：%v", substitute)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for homeCancelled.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if homeCancelled.Load() == 0 {
+		t.Fatal("落败的所在平台选源应被取消")
+	}
+	if !s.Catalog.HomePlatformFailing("wy", true) {
+		t.Fatal("被取消的所在平台选源没有结论，不应改变平台状态")
+	}
+}
+
+// 并行时所在平台先可播放就用所在平台，并清除平台持续失败的结论。
+func TestFailingHomePlatformRecoversWhenHomeWins(t *testing.T) {
+	s, user, info := newMediaStabilityServer(t, exhaustiveScript("a"))
+	withAlternatePlatform(t, s)
+	s.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(r.URL.Path, "/a/kg/") {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"audio/mpeg"}}, Body: http.NoBody}, nil
+	})}
+	for range 3 {
+		s.Catalog.RecordHomePlatform("wy", true, false)
+	}
+	resolution, response, err := s.prepareMedia(context.Background(), mediaStabilityRequest(user, info, ""), info, "320k", false, false)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err != nil || resolution.Platform != "wy" {
+		t.Fatalf("所在平台可播放时应由所在平台胜出：%+v %v", resolution, err)
+	}
+	if s.Catalog.HomePlatformFailing("wy", true) || s.Catalog.PlaybackSubstitute(info, "320k", true) != nil {
+		t.Fatal("所在平台恢复后应清除持续失败结论，且不记替代曲目")
+	}
+}
+
+// 所在平台按歌曲确认全部失败才累计；连续达到阈值后下一首直接并行换平台。
+func TestHomePlatformFailureStreakComesFromConfirmedSelections(t *testing.T) {
+	s, user, info := newMediaStabilityServer(t, exhaustiveScript("a"))
+	s.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 500, Header: make(http.Header), Body: http.NoBody}, nil
+	})}
+	prepare := func(track *music.Info, quality string) {
+		t.Helper()
+		_, response, err := s.prepareMedia(context.Background(), mediaStabilityRequest(user, track, "&quality="+quality), track, quality, false, false)
+		if response != nil {
+			response.Body.Close()
+		}
+		if err == nil {
+			t.Fatal("全部候选失败应报告失败")
+		}
+	}
+	prepare(info, "320k")
+	// 刚确认过的曲目被直接跳过，重试不重复计数。
+	prepare(info, "320k")
+	prepare(info, "320k")
+	if s.Catalog.HomePlatformFailing("wy", true) {
+		t.Fatal("同一首歌的重试不应累计平台失败")
+	}
+	for _, id := range []string{"second", "third"} {
+		track := music.FromMap(map[string]any{"source": "wy", "songmid": id, "name": "临时歌曲" + id, "types": []any{map[string]any{"type": "320k"}}})
+		s.Catalog.Cache([]*music.Info{track})
+		prepare(track, "320k")
+	}
+	if !s.Catalog.HomePlatformFailing("wy", true) || s.Catalog.HomePlatformFailing("wy", false) {
+		t.Fatal("连续三首确认失败后应判定直连条件下的平台整体失败")
+	}
+}
+
+// 直接跳过的已确认失败曲目不能重新记一遍：否则降档重试会压低结论的音质档，
+// 客户端持续重试时结论也会无限续期。
+func TestSkippedExhaustedTrackIsNotRemarked(t *testing.T) {
+	s, user, info := newMediaStabilityServer(t, exhaustiveScript("a"))
+	var seen recordedPaths
+	s.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		seen.add(r.URL.Path)
+		return &http.Response{StatusCode: 500, Header: make(http.Header), Body: http.NoBody}, nil
+	})}
+	prepare := func(quality string) {
+		t.Helper()
+		_, response, err := s.prepareMedia(context.Background(), mediaStabilityRequest(user, info, "&quality="+quality), info, quality, false, false)
+		if response != nil {
+			response.Body.Close()
+		}
+		if err == nil {
+			t.Fatal("全部候选失败应报告失败")
+		}
+	}
+	prepare("flac")
+	confirmed := len(seen.sorted())
+	prepare("128k")
+	prepare("flac")
+	if got := seen.sorted(); len(got) != confirmed {
+		t.Fatalf("已确认 flac 失败后，降档重试不应让 flac 重新整轮选源：%v", got)
+	}
+}

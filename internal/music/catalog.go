@@ -51,6 +51,8 @@ type Catalog struct {
 	failures           *lru.LRU[string, string]
 	exhausted          *lru.LRU[exhaustedKey, int] // 曲目与验证条件 → 已确认全部失败的最高音质档
 	substitutes        *lru.LRU[exhaustedKey, playbackSubstitute]
+	platformMu         sync.Mutex
+	platformFailures   map[platformKey]platformFailure
 	flight             requestGroup
 	observeMu          sync.RWMutex
 	observer           func(RemoteRequest)
@@ -581,7 +583,7 @@ type playbackSubstitute struct {
 }
 
 // RememberPlaybackSubstitute 记录"这首曲目在所在平台已确认全部失败，其它平台上的同一首歌播放成功"。
-// 只能在完整确认所在平台失败、且替代曲目通过音频验证后调用。
+// 只能在替代曲目通过音频验证、且所在平台已完整确认失败或整体持续失败（见 HomePlatformFailing）时调用。
 func (c *Catalog) RememberPlaybackSubstitute(in *Info, quality string, direct bool, substitute *Info) {
 	c.substitutes.Add(exhaustedKey{in.TrackID(), direct}, playbackSubstitute{QualityRank(SelectQuality(quality, in.Qualities())), substitute})
 }
@@ -600,12 +602,59 @@ func (c *Catalog) ForgetPlaybackSubstitute(in *Info, direct bool) {
 	c.substitutes.Remove(exhaustedKey{in.TrackID(), direct})
 }
 
+// 所在平台连续 platformFailureStreak 首歌都确认全部失败时，通常是该平台的音源整体失效，
+// 而不是个别曲目的限制。此后 platformFailureTTL 内同平台的歌曲同时换平台选源，不再先等所在平台全部失败。
+const (
+	platformFailureStreak = 3
+	platformFailureTTL    = 10 * time.Minute
+)
+
+type platformKey struct {
+	platform string
+	direct   bool
+}
+
+type platformFailure struct {
+	streak int
+	at     time.Time
+}
+
+// RecordHomePlatform 记录一次有结论的所在平台选源：成功清零，完整确认全部失败则累加。
+// 被取消、超时或繁忙打断的选源没有结论，不能调用。
+func (c *Catalog) RecordHomePlatform(platform string, direct, success bool) {
+	key := platformKey{platform, direct}
+	c.platformMu.Lock()
+	defer c.platformMu.Unlock()
+	if success {
+		delete(c.platformFailures, key)
+		return
+	}
+	if c.platformFailures == nil {
+		c.platformFailures = map[platformKey]platformFailure{}
+	}
+	failure := c.platformFailures[key]
+	failure.streak++
+	failure.at = time.Now()
+	c.platformFailures[key] = failure
+}
+
+// HomePlatformFailing 报告该平台近期是否连续多首歌都确认全部失败。
+func (c *Catalog) HomePlatformFailing(platform string, direct bool) bool {
+	c.platformMu.Lock()
+	defer c.platformMu.Unlock()
+	failure, ok := c.platformFailures[platformKey{platform, direct}]
+	return ok && failure.streak >= platformFailureStreak && time.Since(failure.at) < platformFailureTTL
+}
+
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
 func (c *Catalog) InvalidateURLs() {
 	c.urls.purge()
 	c.urlChecks.purge()
 	c.exhausted.Purge()
 	c.substitutes.Purge()
+	c.platformMu.Lock()
+	c.platformFailures = nil
+	c.platformMu.Unlock()
 }
 
 // scriptInfo 传给音源脚本的 musicInfo：扁平字段 + meta 结构（兼容两种脚本写法）
