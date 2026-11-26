@@ -48,6 +48,11 @@ const (
 	scheduleMaxCooldown  = 5 * time.Minute
 	// 降级成功的权重；强失败为 -1，普通成功为 +1。
 	scheduleDowngradeWeight = 0.9
+	// 取链连续等满上限仍没有任何回应的音源暂停取链：第 silenceThreshold 次起暂停 silenceBaseSuspend，
+	// 逐次翻倍，封顶 silenceMaxSuspend。暂停期间不再让每次选源为它等满取链上限。
+	silenceThreshold   = 2
+	silenceBaseSuspend = 2 * time.Minute
+	silenceMaxSuspend  = 30 * time.Minute
 )
 
 type scheduleKey struct {
@@ -71,20 +76,28 @@ type sourceScheduleState struct {
 	cooldown time.Time // 冷却截止时间；零值表示未冷却
 }
 
+// silence 记录一个音源在某平台连续无响应的次数；任何回应（包括脚本报错）都会清零。
+type silence struct {
+	count int
+	last  time.Time // 最近计入的一次，scheduleFailGrace 内的并发超时只算一次
+}
+
 // sourceScheduler 按运行表现为音源排序：滑动窗口评分 + 指数退避冷却。
 // 冷却中的音源排最后但不删除：播放选源仍会尝试它，只是并发名额先给健康的音源。
+// 只有两种情况会暂时不调用音源（retryUntil）：音源自己要求退避，或者连续无响应。
 type sourceScheduler struct {
 	mu           sync.Mutex
 	states       map[scheduleKey]*sourceScheduleState
 	now          func() time.Time
 	retryUntil   map[scheduleKey]time.Time
+	silent       map[scheduleKey]silence
 	fingerprints map[int64]string
 	dirty        map[int64]bool
 	persistence  *schedulePersistence
 }
 
 func newSourceScheduler() *sourceScheduler {
-	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, retryUntil: map[scheduleKey]time.Time{}, fingerprints: map[int64]string{}, dirty: map[int64]bool{}, now: time.Now}
+	return &sourceScheduler{states: map[scheduleKey]*sourceScheduleState{}, retryUntil: map[scheduleKey]time.Time{}, silent: map[scheduleKey]silence{}, fingerprints: map[int64]string{}, dirty: map[int64]bool{}, now: time.Now}
 }
 
 func (g *sourceScheduler) canCall(id int64, platform string) bool {
@@ -103,6 +116,37 @@ func (m *SourceManager) BackoffMusicURL(id int64, platform string, delay time.Du
 	}
 	key := scheduleKey{id, platform, "musicUrl"}
 	until := g.now().Add(min(5*time.Minute, max(time.Second, delay)))
+	if until.After(g.retryUntil[key]) {
+		g.retryUntil[key] = until
+		g.changed(id)
+	}
+}
+
+// heard 跟踪音源取链是否还有回应。responded 为假表示这次调用等满了取链上限。
+// 连续无响应的音源每次都让选源白等一个上限，却不可能胜出，因此暂停一段时间；
+// 暂停结束后的第一次调用就是恢复探测：有回应即清零，仍无响应则暂停更久。
+func (g *sourceScheduler) heard(id int64, platform string, responded bool, fingerprint string) {
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if fingerprint != "" && fingerprint != g.fingerprints[id] {
+		return
+	}
+	key := scheduleKey{id, platform, "musicUrl"}
+	if responded {
+		delete(g.silent, key)
+		return
+	}
+	s := g.silent[key]
+	if !s.last.IsZero() && now.Sub(s.last) < scheduleFailGrace {
+		return
+	}
+	s.count, s.last = s.count+1, now
+	g.silent[key] = s
+	if s.count < silenceThreshold {
+		return
+	}
+	until := now.Add(min(silenceBaseSuspend<<min(s.count-silenceThreshold, 10), silenceMaxSuspend))
 	if until.After(g.retryUntil[key]) {
 		g.retryUntil[key] = until
 		g.changed(id)
@@ -212,6 +256,11 @@ func (g *sourceScheduler) forgetLocked(id int64) {
 	for key := range g.retryUntil {
 		if key.sourceID == id {
 			delete(g.retryUntil, key)
+		}
+	}
+	for key := range g.silent {
+		if key.sourceID == id {
+			delete(g.silent, key)
 		}
 	}
 }

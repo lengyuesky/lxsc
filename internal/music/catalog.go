@@ -50,6 +50,7 @@ type Catalog struct {
 	boardNames         *lru.LRU[string, string]
 	failures           *lru.LRU[string, string]
 	exhausted          *lru.LRU[exhaustedKey, int] // 曲目与验证条件 → 已确认全部失败的最高音质档
+	substitutes        *lru.LRU[exhaustedKey, playbackSubstitute]
 	flight             requestGroup
 	observeMu          sync.RWMutex
 	observer           func(RemoteRequest)
@@ -106,6 +107,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		boardNames:        lru.NewLRU[string, string](2000, nil, 30*time.Minute),
 		failures:          lru.NewLRU[string, string](500, nil, 30*time.Second),
 		exhausted:         lru.NewLRU[exhaustedKey, int](2000, nil, exhaustedTTL),
+		substitutes:       lru.NewLRU[exhaustedKey, playbackSubstitute](2000, nil, substituteTTL),
 		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
 		urlChecks:         newRequestCache[urlCheckKey, mediaHeaders](2000, urlCheckCacheTTL(v.URLCacheTTL)),
 		mediaFeedback:     map[urlCheckKey]bool{},
@@ -568,11 +570,42 @@ type exhaustedKey struct {
 	direct  bool
 }
 
+// substituteTTL 内同一曲目直接复用上次换平台的结论，不再重新确认一遍所在平台全部失败。
+// 所在平台全部失败通常是曲目本身的限制（如会员曲目），几分钟后重播不会有不同结果，
+// 而重新确认要等遍所有音源；替代曲目一旦不能播放，结论立即作废并恢复完整选源。
+const substituteTTL = 30 * time.Minute
+
+type playbackSubstitute struct {
+	rank  int // 确认所在平台全部失败时请求的音质档
+	track *Info
+}
+
+// RememberPlaybackSubstitute 记录"这首曲目在所在平台已确认全部失败，其它平台上的同一首歌播放成功"。
+// 只能在完整确认所在平台失败、且替代曲目通过音频验证后调用。
+func (c *Catalog) RememberPlaybackSubstitute(in *Info, quality string, direct bool, substitute *Info) {
+	c.substitutes.Add(exhaustedKey{in.TrackID(), direct}, playbackSubstitute{QualityRank(SelectQuality(quality, in.Qualities())), substitute})
+}
+
+// PlaybackSubstitute 返回近期替这首曲目播放成功的其它平台曲目；没有可复用的结论时返回 nil。
+func (c *Catalog) PlaybackSubstitute(in *Info, quality string, direct bool) *Info {
+	found, ok := c.substitutes.Get(exhaustedKey{in.TrackID(), direct})
+	if !ok || QualityRank(SelectQuality(quality, in.Qualities())) > found.rank {
+		return nil
+	}
+	return found.track
+}
+
+// ForgetPlaybackSubstitute 在替代曲目不再能播放时作废结论。
+func (c *Catalog) ForgetPlaybackSubstitute(in *Info, direct bool) {
+	c.substitutes.Remove(exhaustedKey{in.TrackID(), direct})
+}
+
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
 func (c *Catalog) InvalidateURLs() {
 	c.urls.purge()
 	c.urlChecks.purge()
 	c.exhausted.Purge()
+	c.substitutes.Purge()
 }
 
 // scriptInfo 传给音源脚本的 musicInfo：扁平字段 + meta 结构（兼容两种脚本写法）

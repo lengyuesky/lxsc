@@ -48,6 +48,7 @@ type lane struct {
 	next      int
 	// again 收集首轮中被上游以过期类状态（403/404/410）拒绝的档位：
 	// 全部候选都失败后，这些档位各向原音源重新取一次；retried 标记第二轮，不再继续重取。
+	// 第二轮每档单独一条 lane：它们都已失败过一次，没有理由再让低档排在高档后面等。
 	again   []string
 	retried bool
 }
@@ -87,6 +88,7 @@ type preparation struct {
 
 // Prepare 为一次播放请求选出可播放的音频。
 // 顺序固定为：已验证的缓存 → 歌曲所在平台的全部音源和音质 → 其它平台上的同一首歌。
+// 近期已确认所在平台全部失败并换平台播放成功的曲目，先复用那首替代曲目。
 // 返回错误且请求未被取消时，上述候选均已逐一确认失败。
 func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
 	finish := s.Catalog.MediaPreparation.Start()
@@ -100,7 +102,21 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 	if s.Settings.Get().SourceSelection != "speed" {
 		p.grace = qualityGrace
 	}
-	winner, err := p.pick(ctx, []*music.Info{in})
+	var winner *selection
+	var err error
+	remember := !headersOnly(ctx)
+	if substitute := s.Catalog.PlaybackSubstitute(in, quality, !proxy); remember && substitute != nil {
+		started := time.Now()
+		if winner, err = p.pick(ctx, []*music.Info{substitute}); winner != nil {
+			s.mediaRequestEvent(r, "cross_source", in.TrackID(), winner.track.Source(), winner.resolution.Result.Quality, true, winner.status, started, nil)
+		} else if err == nil {
+			s.Catalog.ForgetPlaybackSubstitute(in, !proxy)
+		}
+	}
+	if winner == nil && err == nil {
+		winner, err = p.pick(ctx, []*music.Info{in})
+	}
+	found := false
 	if winner == nil && err == nil {
 		started := time.Now()
 		searchCtx, stop := context.WithTimeout(ctx, crossSearchLimit)
@@ -108,6 +124,7 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 		s.mediaRequestEvent(r, "cross_source", in.TrackID(), in.Source(), quality, false, 0, started, searchCtx.Err())
 		stop()
 		if winner, err = p.pick(ctx, substitutes); winner != nil {
+			found = true
 			s.mediaRequestEvent(r, "cross_source", in.TrackID(), winner.track.Source(), winner.resolution.Result.Quality, false, winner.status, started, nil)
 		}
 	}
@@ -130,6 +147,9 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 		result = s.Catalog.PublishPlaybackURL(track, quality, result)
 		result.Validated = true
 		s.Catalog.ReportPlaybackOutcome(result, track.Source(), true, winner.ms)
+		if found {
+			s.Catalog.RememberPlaybackSubstitute(in, quality, !proxy, track)
+		}
 	}
 	return result, winner.response, nil
 }
@@ -156,22 +176,18 @@ func (p *preparation) pick(ctx context.Context, tracks []*music.Info) (*selectio
 		}
 		lanes = append(lanes, p.lanes(track)...)
 	}
-	if p.grace > 0 {
-		// 音质优先：并发名额先给能提供更高音质的音源，同档保持调度评分顺序。
-		slices.SortStableFunc(lanes, func(a, b *lane) int {
-			return music.QualityRank(b.qualities[0]) - music.QualityRank(a.qualities[0])
-		})
-	}
+	p.order(lanes)
 	best, complete, err := p.race(ctx, lanes)
 	if best == nil && err == nil && complete {
 		var again []*lane
 		for _, l := range lanes {
-			if len(l.again) > 0 {
-				again = append(again, &lane{track: l.track, source: l.source, qualities: l.again, retried: true})
+			for _, quality := range l.again {
+				again = append(again, &lane{track: l.track, source: l.source, qualities: []string{quality}, retried: true})
 			}
 		}
 		if len(again) > 0 {
 			lanes = again
+			p.order(lanes)
 			best, complete, err = p.race(ctx, lanes)
 		}
 	}
@@ -184,6 +200,15 @@ func (p *preparation) pick(ctx context.Context, tracks []*music.Info) (*selectio
 		}
 	}
 	return nil, err
+}
+
+// order 在音质优先时把并发名额先给能提供更高音质的 lane，同档保持调度评分顺序。
+func (p *preparation) order(lanes []*lane) {
+	if p.grace > 0 {
+		slices.SortStableFunc(lanes, func(a, b *lane) int {
+			return music.QualityRank(b.qualities[0]) - music.QualityRank(a.qualities[0])
+		})
+	}
 }
 
 // lanes 按调度评分顺序列出一首曲目的全部候选：每个支持该平台的音源一条，音质从高到低。

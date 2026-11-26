@@ -64,6 +64,10 @@ func (m *SourceManager) callMusicURLSource(parent context.Context, source *loade
 	source.calls.finish(started, call, musicInfo, err)
 	source.health.record(started, err, result != nil && result.Quality != quality)
 	m.schedule.record(source.id, platform, "musicUrl", classifyOutcome(parent, err), result != nil && result.Quality != quality, time.Since(started).Milliseconds(), source.fingerprint)
+	// 请求被取消或本机繁忙时无从判断音源是否有回应，不计入。
+	if parent.Err() == nil && !errors.Is(err, admission.ErrBusy) {
+		m.schedule.heard(source.id, platform, !errors.Is(err, context.DeadlineExceeded), source.fingerprint)
+	}
 	var sourceErr *SourceRequestError
 	if errors.As(err, &sourceErr) && errors.Is(err, ErrSourceRateLimited) {
 		m.BackoffMusicURL(source.id, platform, sourceErr.RetryAfter(), source.fingerprint)

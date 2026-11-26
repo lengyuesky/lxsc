@@ -222,7 +222,7 @@ func (m *SourceManager) EnableSchedulePersistence(ctx context.Context, store Sch
 			}
 			g.states[key] = state
 			if until := fromMS(item.RetryUntil); item.Action == "musicUrl" && now.Before(until) {
-				g.retryUntil[key] = minTime(until, now.Add(scheduleMaxCooldown))
+				g.retryUntil[key] = minTime(until, now.Add(silenceMaxSuspend))
 			}
 		}
 	}

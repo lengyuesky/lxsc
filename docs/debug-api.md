@@ -61,7 +61,8 @@ unset DEBUG_TOKEN DEBUG_BASE
 
 每条事件仅含 `time`、`stage`、受限 `trackId`、平台代号、音质、模式、是否命中缓存、HTTP `status`、安全 `error` 分类和 `elapsedMs`。阶段包括：
 
-- `metadata`：元数据查询；`resolve`：调度顺序第一位音源的取链；`source_fallback`：其余音源的取链；`refresh`：缓存地址失效后的重新取链，或全部候选失败后对被 403/404/410 拒绝的候选再取一次；`cross_source`：到其它平台搜索同一首歌。
+- `metadata`：元数据查询；`resolve`：调度顺序第一位音源的取链；`source_fallback`：其余音源的取链；`refresh`：缓存地址失效后的重新取链，或全部候选失败后对被 403/404/410 拒绝的候选再取一次（各档并发）；`cross_source`：到其它平台搜索同一首歌，`cached=true` 表示直接复用 30 分钟内换平台播放成功的替代曲目，没有重新搜索，也没有重新确认所在平台。
+- 取链连续两次等满 4 秒上限仍无回应的音源会在该平台暂停取链（2 分钟起逐次翻倍，封顶 30 分钟），期间它的取链事件立即以 `upstream_error` 结束；截止时间见 `inspect/sources` 的 `retryUntil`。暂停到期后的第一次调用即恢复探测，有任何回应就恢复正常。
 - `url_check`：新解析、刷新或备选直链的最小 Range 校验；`cache_check`：缓存直链 Range 校验；`redirect`：交付 302 给客户端。
 - `proxy_response`：代理取得上游响应；`proxy_copy`：代理传输结束/中断。
 - `probe`：独立主动探测 HTTP 响应头。
