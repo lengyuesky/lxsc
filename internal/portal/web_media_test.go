@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,12 @@ func (fn webMediaTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func webMediaFixture(t *testing.T) (*portalFixture, *subsonic.Server) {
 	t.Helper()
+	return webMediaFixtureAt(t, "https://media.invalid/")
+}
+
+// webMediaFixtureAt 的音源按 base+音质+序号返回地址，序号可观察是否重新取链。
+func webMediaFixtureAt(t *testing.T, base string) (*portalFixture, *subsonic.Server) {
+	t.Helper()
 	f := newPortalFixture(t)
 	prelude, err := assets.JS.ReadFile("js/prelude.js")
 	if err != nil {
@@ -31,7 +38,7 @@ func webMediaFixture(t *testing.T) (*portalFixture, *subsonic.Server) {
 	sources := js.NewSourceManager(string(prelude), client, client, f.service.Log)
 	t.Cleanup(sources.UnloadAll)
 	script := `let count=0;
-lx.on(lx.EVENT_NAMES.request, ({info}) => Promise.resolve('https://media.invalid/'+info.type+'/'+(++count)));
+lx.on(lx.EVENT_NAMES.request, ({info}) => Promise.resolve(` + strconv.Quote(base) + `+info.type+'/'+(++count)));
 lx.send(lx.EVENT_NAMES.inited, {status:true,sources:{wy:{name:'测试',type:'music',actions:['musicUrl'],qualitys:['128k','320k','flac','flac24bit']}}});`
 	if _, err := sources.Load(context.Background(), 1, script); err != nil {
 		t.Fatal(err)
@@ -188,5 +195,91 @@ func TestWebProxyMediaStatusesAndRecovery(t *testing.T) {
 				t.Fatalf("播放元数据持久化边界错误: %v", storedErr)
 			}
 		})
+	}
+}
+
+// HTTPS 页面无法加载明文直链：普通 302 模式下只对 http 地址改由本站转发，其余交付契约不变。
+func TestWebStreamSecurePageProxiesPlainURL(t *testing.T) {
+	type upstreamCall struct{ url, rangeHeader, referer, cookie string }
+	for _, tc := range []struct {
+		name, base, mode, query string
+		proxied                 bool
+	}{
+		{"HTTPS 页面遇到明文直链改为转发", "http://media.invalid/", "redirect", "&secure=1", true},
+		{"HTTP 页面保持直连", "http://media.invalid/", "redirect", "", false},
+		{"HTTPS 直链保持直连", "https://media.invalid/", "redirect", "&secure=1", false},
+		{"强制 302 禁止转发", "http://media.invalid/", "force_redirect", "&secure=1", false},
+		{"非 1 的 secure 不生效", "http://media.invalid/", "redirect", "&secure=true", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, media := webMediaFixtureAt(t, tc.base)
+			if _, err := f.service.Settings.Update(context.Background(), map[string]json.RawMessage{"streamMode": json.RawMessage(strconv.Quote(tc.mode))}); err != nil {
+				t.Fatal(err)
+			}
+			var calls []upstreamCall
+			media.HTTP = &http.Client{Transport: webMediaTransport(func(r *http.Request) (*http.Response, error) {
+				calls = append(calls, upstreamCall{r.URL.String(), r.Header.Get("Range"), r.Header.Get("Referer"), r.Header.Get("Cookie")})
+				headers := http.Header{"Content-Type": {"audio/mpeg"}, "Accept-Ranges": {"bytes"}, "Content-Range": {"bytes 0-9/100"}}
+				return &http.Response{StatusCode: 206, Header: headers, Body: io.NopCloser(strings.NewReader("0123456789")), Request: r}, nil
+			})}
+			alice := f.client(t, "alice")
+			alice.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			req, _ := http.NewRequest(http.MethodGet, f.server.URL+"/stream?id=tr-wy-1"+tc.query, nil)
+			req.Header.Set("Range", "bytes=0-")
+			resp, err := alice.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			want := tc.base + "320k/1"
+			if !tc.proxied {
+				if resp.StatusCode != 302 || resp.Header.Get("Location") != want || len(calls) != 1 {
+					t.Fatalf("应保持直连: %d %v calls=%v", resp.StatusCode, resp.Header, calls)
+				}
+				return
+			}
+			if resp.StatusCode != 206 || string(body) != "0123456789" || resp.Header.Get("Content-Type") != "audio/mpeg" || resp.Header.Get("Location") != "" {
+				t.Fatalf("HTTPS 页面应收到本站转发的音频: %d %v %q", resp.StatusCode, resp.Header, body)
+			}
+			// 第一次是直连方式的片段校验，第二次才是带客户端范围与平台 Referer 的转发。
+			if len(calls) != 2 || calls[1].url != want || calls[1].rangeHeader != "bytes=0-" || calls[1].referer != "https://music.163.com/" || calls[1].cookie != "" {
+				t.Fatalf("转发请求错误: %+v", calls)
+			}
+		})
+	}
+}
+
+func TestWebStreamSecurePageInvalidatesRejectedPlainURL(t *testing.T) {
+	f, media := webMediaFixtureAt(t, "http://media.invalid/")
+	var proxied atomic.Int32
+	media.HTTP = &http.Client{Transport: webMediaTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Range") != "bytes=0-0" && proxied.Add(1) == 1 {
+			return &http.Response{StatusCode: 403, Header: http.Header{"Content-Type": {"text/html"}}, Body: io.NopCloser(strings.NewReader("expired")), Request: r}, nil
+		}
+		headers := http.Header{"Content-Type": {"audio/mpeg"}, "Content-Range": {"bytes 0-9/100"}}
+		return &http.Response{StatusCode: 206, Header: headers, Body: io.NopCloser(strings.NewReader("0123456789")), Request: r}, nil
+	})}
+	alice := f.client(t, "alice")
+	alice.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	url := f.server.URL + "/stream?id=tr-wy-1&secure=1"
+	if status := requestStatus(t, alice, http.MethodGet, url); status != 502 {
+		t.Fatalf("转发被上游拒绝时应报告失败，实际 %d", status)
+	}
+	resp, err := alice.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 && resp.StatusCode != 206 {
+		t.Fatalf("重试应重新取链后转发成功，实际 %d", resp.StatusCode)
+	}
+	resp, err = alice.Get(f.server.URL + "/stream?id=tr-wy-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("Location") != "http://media.invalid/320k/2" {
+		t.Fatalf("被拒绝的直链应作废并重新取链: %v", resp.Header)
 	}
 }

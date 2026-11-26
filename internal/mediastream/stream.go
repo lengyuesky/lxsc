@@ -164,6 +164,33 @@ func (s *Service) Serve(w http.ResponseWriter, r *http.Request, persistPlayback 
 		s.WriteHead(w, r, res, resp)
 		return
 	}
+	// 普通 302 模式本就允许代理；HTTPS 页面拿到明文直链只会被浏览器拦截，改由本站转发这一次响应。
+	// 强制 302 仍禁止服务器转发。
+	if !proxy && mode != "force_redirect" && secureDelivery(r.Context()) && plainMediaURL(res.Result.URL) {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		var transferRelease func()
+		resp, transferRelease, err = s.openSecureDelivery(r, in, res)
+		if err != nil {
+			trace.Delivery("proxy")
+			if event, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); event != nil {
+				event.Mode = "proxy"
+				event.Error = diagnostics.ErrorCode(err)
+			}
+			if errors.Is(err, admission.ErrBusy) {
+				fail(w, r, ErrBusy, err.Error())
+				return
+			}
+			s.Log.Warn("转发明文直链失败", "id", id, "quality", res.Result.Quality)
+			if r.Context().Err() == nil {
+				fail(w, r, ErrGeneric, "无法获取可用的播放地址")
+			}
+			return
+		}
+		defer transferRelease()
+		proxy = true
+	}
 	if event, _ := r.Context().Value(clientEventKey{}).(*diagnostics.Event); event != nil && proxy {
 		event.Mode = "proxy"
 	}
@@ -414,6 +441,45 @@ func (s *Service) openMedia(ctx context.Context, r *http.Request, in *music.Info
 	}
 	resp.Body = &mediaResponseBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
+}
+
+// openSecureDelivery 为 HTTPS 页面打开已选明文直链的代理响应。
+// Prepare 刚按直连方式验证过同一地址，这里只确认上游仍返回可读媒体；上游明确拒绝时作废缓存，重试会重新取链。
+func (s *Service) openSecureDelivery(r *http.Request, in *music.Info, res music.URLResolution) (*http.Response, func(), error) {
+	ctx, cancel := context.WithTimeout(r.Context(), attemptLimit)
+	defer cancel()
+	release, err := s.Catalog.MediaLimits.Acquire(ctx, currentUser(r).ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	started := time.Now()
+	resp, err := s.openMedia(ctx, r, in, res.Result.URL)
+	status := 0
+	if err == nil {
+		status = resp.StatusCode
+		switch status {
+		case http.StatusOK, http.StatusPartialContent:
+			if err = httpguard.CheckMediaResponse(resp); err == nil {
+				err = httpguard.VerifyMediaReadable(ctx, resp)
+			}
+		case http.StatusRequestedRangeNotSatisfiable:
+			// 越界范围原样交给客户端。
+		default:
+			err = mediaHTTPError(status)
+		}
+	}
+	s.mediaRequestEvent(r, "proxy_response", in.TrackID(), res.Platform, res.Result.Quality, res.Cached, status, started, err)
+	if err != nil {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		release()
+		if status != 0 && r.Context().Err() == nil {
+			s.Catalog.InvalidatePlaybackURL(res)
+		}
+		return nil, nil, err
+	}
+	return resp, release, nil
 }
 
 type mediaResponseBody struct {

@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"lxsc/internal/db"
+	"lxsc/internal/httpguard"
 	"lxsc/internal/mediastream"
 	"lxsc/internal/music"
 	"lxsc/internal/playback"
@@ -38,6 +39,10 @@ func (s *Server) ServeWebStream(w http.ResponseWriter, r *http.Request, user *db
 	// 只传递网页契约中的参数，不接受 proxy 或其他 Subsonic 参数覆盖服务器设置。
 	request := r.Clone(withUser(r.Context(), user))
 	request = playback.Bind(request, playback.Client{Protocol: "web", Name: "网页播放器", Key: key})
+	// secure 只声明页面运行在 HTTPS 下；普通 302 模式本就允许代理，它不能覆盖强制 302 或代理设置。
+	if httpguard.Secure(r) || r.URL.Query().Get("secure") == "1" {
+		request = mediastream.RequireSecureDelivery(request)
+	}
 	query := url.Values{"id": {id}}
 	if quality != "" {
 		query.Set("quality", quality)

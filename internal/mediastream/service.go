@@ -42,6 +42,7 @@ type clientEventKey struct{}
 type abortTransferKey struct{}
 type headerProbeKey struct{}
 type mediaDescriptionKey struct{}
+type secureDeliveryKey struct{}
 
 // MediaDescription 只包含实际验证响应的文件属性，不包含媒体地址或认证值。
 type MediaDescription struct {
@@ -67,6 +68,23 @@ func HeaderProbe(ctx context.Context) context.Context {
 func headersOnly(ctx context.Context) bool {
 	value, _ := ctx.Value(headerProbeKey{}).(bool)
 	return value
+}
+
+// RequireSecureDelivery 标记请求来自 HTTPS 页面：浏览器会拦截明文 http 媒体或强制升级为 https，
+// 裸 IP 等不支持 TLS 的地址因此无法播放。普通 302 模式遇到这类地址改由本站转发该次响应。
+func RequireSecureDelivery(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), secureDeliveryKey{}, true))
+}
+
+func secureDelivery(ctx context.Context) bool {
+	value, _ := ctx.Value(secureDeliveryKey{}).(bool)
+	return value
+}
+
+// plainMediaURL 判断地址是否为浏览器在 HTTPS 页面中无法直接加载的明文 http 地址。
+func plainMediaURL(address string) bool {
+	parsed, err := url.Parse(address)
+	return err == nil && parsed.Scheme == "http"
 }
 
 // Bind 只供已认证的协议入口使用，共享原请求取消及诊断生命周期。

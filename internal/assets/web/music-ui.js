@@ -24,7 +24,12 @@ function formatSongTime(seconds) {
 
 const webPlayer = new LXSCMusic.PlayerController({
   audio: $('#webAudio'),
-  streamURL: (track, recovery) => '/api/app/stream?' + new URLSearchParams({ id: track.id, quality: recovery?.quality || sessionState.me?.quality || '320k', playbackId: recovery.playbackId }),
+  streamURL: (track, recovery) => {
+    const query = { id: track.id, quality: recovery?.quality || sessionState.me?.quality || '320k', playbackId: recovery.playbackId }
+    // HTTPS 页面无法加载明文 http 直链，告知服务端此类地址需由本站转发。
+    if (location.protocol === 'https:') query.secure = '1'
+    return '/api/app/stream?' + new URLSearchParams(query)
+  },
   recoveryQualities: () => {
     const quality = sessionState.me?.quality || '320k'
     return quality === '128k' ? [] : quality === '320k' ? ['128k'] : ['320k', '128k']
