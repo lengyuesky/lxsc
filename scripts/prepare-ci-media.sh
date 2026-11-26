@@ -36,6 +36,8 @@ Acquire::https::Timeout "15";
 Acquire::ForceIPv4 "true";
 APT::Update::Error-Mode "any";
 DPkg::Lock::Timeout "30";
+Acquire::Languages "none";
+Acquire::IndexTargets::deb::CNF::DefaultEnabled "false";
 EOF
   # runner 的镜像列表曾持续解析失败；直接使用同发行版的签名官方源。
   # 兼容仍采用 sources.list 的 runner，避免旧镜像条目继续参与下载。
@@ -61,7 +63,17 @@ if command -v ffmpeg >/dev/null 2>&1 && ffmpeg -hide_banner -version >/dev/null 
 fi
 [[ "${GITHUB_ACTIONS:-}" == "true" ]] || { echo '请先安装可运行的 FFmpeg。' >&2; exit 1; }
 
-# 限定每阶段等待时间；索引失败即停止，不能继续逐个等待旧索引中的包。
-timeout --kill-after=10s 90s sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update
-timeout --kill-after=10s 120s sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y --no-install-recommends ffmpeg
+# 限定每次等待时间；索引失败即停止，不能继续逐个等待旧索引中的包。
+# 部分 runner 到 Ubuntu 源只有几百 KB/s：已下载的索引与包保留在 APT 缓存，重试从断点继续。
+ciApt() {
+  local limit=$1 attempt
+  shift
+  for attempt in 1 2 3; do
+    timeout --kill-after=10s "$limit" sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get "$@" && return 0
+    echo "apt-get $1 第 ${attempt} 次未在 ${limit} 内完成。" >&2
+  done
+  return 1
+}
+ciApt 90s update
+ciApt 120s install -y --no-install-recommends ffmpeg
 ffmpeg -hide_banner -version

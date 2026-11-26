@@ -42,7 +42,7 @@ jobs:
         with:
           bun-version: '1.3.14'
       - name: 安装音频解码验证依赖
-        timeout-minutes: 4
+        timeout-minutes: 12
         run: bash scripts/prepare-ci-media.sh
       - name: Go 竞态检测、静态检查与 Node 单元测试
         run: bash scripts/check.sh --race
@@ -114,7 +114,7 @@ jobs:
         run: npm --prefix tests/web ci --ignore-scripts
       # 浏览器夹具也走真实的服务端音频内容验证。
       - name: 安装音频解码验证依赖
-        timeout-minutes: 4
+        timeout-minutes: 12
         run: bash scripts/prepare-ci-media.sh
       - name: 安装匹配版本的 Chromium Headless Shell
         timeout-minutes: 5
