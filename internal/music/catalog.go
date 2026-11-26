@@ -15,6 +15,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 
 	"lxsc/internal/admission"
+	"lxsc/internal/chksz"
 	"lxsc/internal/db"
 	"lxsc/internal/httpguard"
 	"lxsc/internal/js"
@@ -37,6 +38,8 @@ type Catalog struct {
 	// AudioCheck 仅供隔离协议夹具注入；生产使用 httpguard.VerifyAudio。
 	// 客户端请求与运行设置不能关闭内容验证。
 	AudioCheck func(context.Context, *http.Response) error
+	// Fallback 在全部音源和平台都失败后兜底取链；未配置密钥时不调用。
+	Fallback *chksz.Client
 
 	tracks             *lru.LRU[string, *Info]
 	albums             *lru.LRU[string, []*Info]
@@ -51,6 +54,7 @@ type Catalog struct {
 	failures           *lru.LRU[string, string]
 	exhausted          *lru.LRU[exhaustedKey, int] // 曲目与验证条件 → 已确认全部失败的最高音质档
 	substitutes        *lru.LRU[exhaustedKey, playbackSubstitute]
+	fallbacks          *lru.LRU[exhaustedKey, playbackSubstitute] // 近期由兜底接口播放成功的曲目
 	platformMu         sync.Mutex
 	platformFailures   map[platformKey]platformFailure
 	flight             requestGroup
@@ -59,6 +63,7 @@ type Catalog struct {
 	remoteCall         func(context.Context, string, ...any) (json.RawMessage, error)
 	configMu           sync.Mutex
 	urls               *requestCache[urlKey, js.MusicURLResult]
+	fallbackURLs       *requestCache[urlKey, js.MusicURLResult] // 兜底直链，不持久化
 	urlChecks          *requestCache[urlCheckKey, mediaHeaders]
 	mediaFeedbackMu    sync.Mutex
 	mediaFeedback      map[urlCheckKey]bool
@@ -96,7 +101,7 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		RequestLimits: admission.New(16, 32, 4, 4),
 		MediaLimits:   admission.New(32, 0, 4, 0),
 		workLimits:    admission.New(32, 64, 0, 0),
-		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log, Playback: playback.New(d, log),
+		DB:            d, SDK: sdk, Sources: src, Settings: st, Log: log, Playback: playback.New(d, log), Fallback: chksz.New(nil),
 		tracks:            lru.NewLRU[string, *Info](5000, nil, time.Hour),
 		albums:            lru.NewLRU[string, []*Info](2000, nil, time.Hour),
 		artists:           lru.NewLRU[string, string](2000, nil, time.Hour),
@@ -110,6 +115,8 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		failures:          lru.NewLRU[string, string](500, nil, 30*time.Second),
 		exhausted:         lru.NewLRU[exhaustedKey, int](2000, nil, exhaustedTTL),
 		substitutes:       lru.NewLRU[exhaustedKey, playbackSubstitute](2000, nil, substituteTTL),
+		fallbacks:         lru.NewLRU[exhaustedKey, playbackSubstitute](2000, nil, substituteTTL),
+		fallbackURLs:      newFallbackURLCache(),
 		urls:              newRequestCache[urlKey, js.MusicURLResult](2000, time.Duration(v.URLCacheTTL)*time.Second),
 		urlChecks:         newRequestCache[urlCheckKey, mediaHeaders](2000, urlCheckCacheTTL(v.URLCacheTTL)),
 		mediaFeedback:     map[urlCheckKey]bool{},
@@ -131,6 +138,8 @@ func NewCatalog(d *db.DB, sdk *js.SDKPool, src *js.SourceManager, st *settings.S
 		c.searchMetrics[platform] = &metrics.Operation{}
 	}
 	c.urls.gate, c.search.gate, c.urlChecks.gate, c.flight.gate = c.workLimits, c.workLimits, c.workLimits, c.workLimits
+	c.fallbackURLs.gate = c.workLimits
+	c.fallbackURLs.configure(fallbackCacheTTL(v.URLCacheTTL))
 	c.urls.expiry = playbackURLExpiry
 	c.urlChecks.expiry = playbackCheckExpiry
 	c.boardFlight.gate = c.workLimits
@@ -502,7 +511,8 @@ func (c *Catalog) PublishPlaybackURL(in *Info, quality string, resolution URLRes
 	key := urlKey{in.TrackID(), SelectQuality(quality, in.Qualities())}
 	c.urls.mu.Lock()
 	defer c.urls.mu.Unlock()
-	if c.urls.ttl == 0 || resolution.token.generation != c.urls.generation {
+	// 兜底接口的地址不是音源结果，不能进入音源直链缓存。
+	if c.urls.ttl == 0 || resolution.token.generation != c.urls.generation || resolution.token.space != 0 {
 		return resolution
 	}
 	entry, exists := c.urls.entries.Peek(resolution.key)
@@ -539,13 +549,15 @@ func (c *Catalog) PublishPlaybackURL(in *Info, quality string, resolution URLRes
 func (c *Catalog) InvalidatePlaybackURL(failed URLResolution) {
 	// 同一解析版本可能同时作为实际档位和请求档位的降级结果发布。
 	// 只删除仍引用失败版本的别名，不能清除并发产生的新版本。
-	c.urls.mu.Lock()
-	for _, key := range c.urls.entries.Keys() {
-		if entry, ok := c.urls.entries.Peek(key); ok && entry.result.token == failed.token {
-			c.urls.removeLocked(key)
+	for _, cache := range []*requestCache[urlKey, js.MusicURLResult]{c.urls, c.fallbackURLs} {
+		cache.mu.Lock()
+		for _, key := range cache.entries.Keys() {
+			if entry, ok := cache.entries.Peek(key); ok && entry.result.token == failed.token {
+				cache.removeLocked(key)
+			}
 		}
+		cache.mu.Unlock()
 	}
-	c.urls.mu.Unlock()
 	c.urlChecks.forget(urlCheckKey{token: failed.token})
 	c.urlChecks.forget(urlCheckKey{token: failed.token, audio: true})
 	c.urlChecks.forget(urlCheckKey{token: failed.token, audio: true, direct: true})
@@ -649,9 +661,11 @@ func (c *Catalog) HomePlatformFailing(platform string, direct bool) bool {
 // InvalidateURLs 在运行中音源发生变更后使直链及旧代次的在途结果失效。
 func (c *Catalog) InvalidateURLs() {
 	c.urls.purge()
+	c.fallbackURLs.purge()
 	c.urlChecks.purge()
 	c.exhausted.Purge()
 	c.substitutes.Purge()
+	c.fallbacks.Purge()
 	c.platformMu.Lock()
 	c.platformFailures = nil
 	c.platformMu.Unlock()
@@ -1020,6 +1034,7 @@ func (c *Catalog) RefreshTTL() {
 	defer c.configMu.Unlock()
 	v := c.Settings.Get()
 	c.urls.configure(time.Duration(v.URLCacheTTL) * time.Second)
+	c.fallbackURLs.configure(fallbackCacheTTL(v.URLCacheTTL))
 	c.urlChecks.configure(urlCheckCacheTTL(v.URLCacheTTL))
 	if c.sourceSelection != v.SourceSelection {
 		c.sourceSelection = v.SourceSelection

@@ -143,6 +143,7 @@ func run(cfgPath string) error {
 	sources := js.NewSourceManager(string(prelude), httpSecure, httpInsecure, log)
 	defer sources.UnloadAll()
 	catalog := music.NewCatalog(database, sdkPool, sources, st, log)
+	catalog.Fallback.HTTP = httpSecure // ChKSz 兜底接口与音源一样走上游代理
 	defer catalog.StopBoardWarm()
 
 	// 加载已保存的音源脚本

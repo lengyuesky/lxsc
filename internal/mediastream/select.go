@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"lxsc/internal/admission"
+	"lxsc/internal/chksz"
 	"lxsc/internal/db"
 	"lxsc/internal/diagnostics"
 	"lxsc/internal/httpguard"
@@ -32,6 +33,9 @@ const (
 	crossSearchLimit = 5 * time.Second
 	// qualityGrace 是音质优先时，已有可播放结果后为在途的更高音质最多再等的时间；速度优先不等。
 	qualityGrace = time.Second
+	// fallbackReserve 是启用 ChKSz 兜底时为它预留的时间：音源与换平台选源最多用到 prepareLimit 减去该值，
+	// 音源迟迟没有结论时仍来得及兜底。
+	fallbackReserve = 8 * time.Second
 )
 
 var (
@@ -87,9 +91,9 @@ type preparation struct {
 }
 
 // Prepare 为一次播放请求选出可播放的音频。
-// 顺序固定为：已验证的缓存 → 歌曲所在平台的全部音源和音质 → 其它平台上的同一首歌。
-// 近期已确认所在平台全部失败并换平台播放成功的曲目，先复用那首替代曲目。
-// 所在平台近期连续多首歌都确认全部失败时，后两步同时进行，先得到可播放音频的一路胜出。
+// 顺序固定为：已验证的缓存 → 歌曲所在平台的全部音源和音质 → 其它平台上的同一首歌 → ChKSz API 兜底（已配置密钥时）。
+// 近期已确认所在平台全部失败并换平台播放成功的曲目，先复用那首替代曲目；近期靠兜底播放成功的曲目，先走兜底。
+// 所在平台近期连续多首歌都确认全部失败时，第二、三步同时进行，先得到可播放音频的一路胜出。
 // 返回错误且请求未被取消时，上述候选均已逐一确认失败。
 func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, quality string, proxy, headMetadata bool) (result music.URLResolution, response *http.Response, resultErr error) {
 	finish := s.Catalog.MediaPreparation.Start()
@@ -114,13 +118,40 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 			s.Catalog.ForgetPlaybackSubstitute(in, !proxy)
 		}
 	}
-	found := false
+	// 兜底接口按次计额度，只在音源结论之后调用；近期靠兜底播放成功的曲目直接复用结论。
+	fallback := s.Catalog.FallbackEnabled()
+	fallbackTried, viaFallback := false, false
+	if track := s.Catalog.PlaybackFallback(in, quality, !proxy); winner == nil && err == nil && remember && fallback && track != nil {
+		fallbackTried = true
+		if winner, err = p.fallback(ctx, in, track); winner != nil {
+			viaFallback = true
+		} else if err == nil {
+			s.Catalog.ForgetPlaybackFallback(in, !proxy)
+		}
+	}
+	found, confirmed := false, false
 	if winner == nil && err == nil {
+		sourceCtx := ctx
+		if fallback && !fallbackTried {
+			var stop context.CancelFunc
+			sourceCtx, stop = context.WithTimeout(ctx, prepareLimit-fallbackReserve)
+			defer stop()
+		}
 		if s.Catalog.HomePlatformFailing(in.Source(), !proxy) {
-			winner, found, err = p.hedge(ctx, in)
-		} else if winner, err = p.home(ctx, in); winner == nil && err == nil {
-			winner, err = p.crossSource(ctx, in)
+			winner, found, err = p.hedge(sourceCtx, in)
+		} else if winner, err = p.home(sourceCtx, in); winner == nil && err == nil {
+			winner, err = p.crossSource(sourceCtx, in)
 			found = winner != nil
+		}
+		// 只有音源和平台都确认失败才记住兜底结论；被预留时间截断的选源没有结论，下次仍先试音源。
+		confirmed = winner == nil && err == nil && sourceCtx.Err() == nil
+	}
+	// 音源全部确认失败，或被预留时间截断时兜底；客户端离开、本机繁忙或缺少解码器时不兜底。
+	if winner == nil && fallback && !fallbackTried && ctx.Err() == nil && (err == nil || errors.Is(err, context.DeadlineExceeded)) {
+		if rescued, rescueErr := p.fallback(ctx, in, nil); rescued != nil {
+			winner, err, viaFallback = rescued, nil, true
+		} else if err == nil {
+			err = rescueErr
 		}
 	}
 	if winner == nil {
@@ -139,14 +170,109 @@ func (s *Service) Prepare(ctx context.Context, r *http.Request, in *music.Info, 
 	result.Validated = !headersOnly(ctx) && winner.status != http.StatusRequestedRangeNotSatisfiable
 	if result.Validated {
 		track := winner.track
-		result = s.Catalog.PublishPlaybackURL(track, quality, result)
-		result.Validated = true
-		s.Catalog.ReportPlaybackOutcome(result, track.Source(), true, winner.ms)
-		if found {
-			s.Catalog.RememberPlaybackSubstitute(in, quality, !proxy, track)
+		switch {
+		case viaFallback:
+			// 兜底地址不进入音源直链缓存，也不计入音源评分。
+			if confirmed {
+				s.Catalog.RememberPlaybackFallback(in, quality, !proxy, track)
+			}
+		default:
+			result = s.Catalog.PublishPlaybackURL(track, quality, result)
+			result.Validated = true
+			s.Catalog.ReportPlaybackOutcome(result, track.Source(), true, winner.ms)
+			if found {
+				s.Catalog.RememberPlaybackSubstitute(in, quality, !proxy, track)
+			}
 		}
 	}
 	return result, winner.response, nil
+}
+
+// fallback 通过 ChKSz API 兜底取链并验证，第一个通过验证的地址胜出。
+// track 非空时只试这一首（复用近期结论）；否则先试所在平台，仍失败再试其它平台上最匹配的一首受支持曲目。
+// 额度按次计，曲目和音质依次尝试而不并发；返回 (nil, nil) 表示兜底也已失败。
+// 兜底不改变 p.failure：失败类别保留音源的结论，兜底的失败只记入诊断与播放日志。
+func (p *preparation) fallback(ctx context.Context, in, track *music.Info) (*selection, error) {
+	tracks := []*music.Info{track}
+	if track == nil {
+		tracks = []*music.Info{in}
+	}
+	for index := 0; index < len(tracks); index++ {
+		candidate := tracks[index]
+		if music.FallbackSupports(candidate) {
+			winner, stop, err := p.tryFallback(ctx, candidate)
+			if winner != nil || err != nil || stop {
+				return winner, err
+			}
+		}
+		if track == nil && index == 0 {
+			searchCtx, cancel := context.WithTimeout(ctx, crossSearchLimit)
+			for _, substitute := range p.Catalog.FindCrossSourceCandidates(searchCtx, in) {
+				if music.FallbackSupports(substitute) {
+					tracks = append(tracks, substitute)
+					break
+				}
+			}
+			cancel()
+		}
+	}
+	return nil, ctx.Err()
+}
+
+// tryFallback 为一首曲目取兜底地址：先取请求的音质，接口明确表示该档不可用时再取 320k。
+// stop 表示兜底接口此刻整体不可用（密钥失效、限流），不再尝试其它曲目。
+func (p *preparation) tryFallback(ctx context.Context, track *music.Info) (winner *selection, stop bool, err error) {
+	quality := music.SelectQuality(p.quality, track.Qualities())
+	qualities := []string{quality}
+	if music.QualityRank(quality) > music.QualityRank("320k") {
+		qualities = append(qualities, "320k")
+	}
+	for _, quality := range qualities {
+		out, err := p.fallbackAttempt(ctx, track, quality)
+		switch {
+		case out != nil:
+			return &selection{*out, track}, false, nil
+		case ctx.Err() != nil:
+			return nil, false, ctx.Err()
+		case errors.Is(err, admission.ErrBusy), errors.Is(err, httpguard.ErrDecoderUnavailable):
+			return nil, false, err
+		case errors.Is(err, chksz.ErrAuth), errors.Is(err, chksz.ErrRateLimited), errors.Is(err, chksz.ErrKeyInURL):
+			return nil, true, nil
+		case !errors.Is(err, chksz.ErrNoURL):
+			// 地址验证失败或接口故障：更低音质通常是同一个问题，换下一首曲目。
+			return nil, false, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// fallbackAttempt 是一次兜底尝试：取地址并按实际交付方式验证。缓存的地址失效时向接口重新取一次。
+func (p *preparation) fallbackAttempt(ctx context.Context, track *music.Info, quality string) (*attempt, error) {
+	ctx, cancel := context.WithTimeout(ctx, attemptLimit)
+	defer cancel()
+	for refreshed := false; ; refreshed = true {
+		number := int(p.calls.Add(1))
+		started := time.Now()
+		resolution, err := p.Catalog.ResolveFallbackURL(ctx, track, quality)
+		p.mediaAttemptEvent(ctx, p.request, "fallback_api", track, quality, resolution, 0, started, err, number, music.FallbackSourceID)
+		if err != nil {
+			return nil, err
+		}
+		out := p.verify(ctx, track, resolution, music.FallbackSourceID)
+		if out.err == nil {
+			return &out, nil
+		}
+		out.close()
+		if ctx.Err() != nil || errors.Is(out.err, httpguard.ErrDecoderUnavailable) {
+			return nil, out.err
+		}
+		if out.definite() || resolution.Cached {
+			p.Catalog.InvalidatePlaybackURL(resolution)
+		}
+		if !resolution.Cached || refreshed {
+			return nil, out.err
+		}
+	}
 }
 
 // fork 为同一请求的另一路选源创建独立的失败记录，共享尝试序号。
@@ -500,7 +626,7 @@ func (p *preparation) verify(ctx context.Context, track *music.Info, resolution 
 	}
 	out.ms = time.Since(started).Milliseconds()
 	p.mediaAttemptEvent(ctx, p.request, stage, track, resolution.Result.Quality, resolution, out.status, started, out.err, int(p.calls.Load()), source)
-	if out.status == http.StatusTooManyRequests && ctx.Err() == nil && !headersOnly(ctx) {
+	if out.status == http.StatusTooManyRequests && source > 0 && ctx.Err() == nil && !headersOnly(ctx) {
 		p.Catalog.Sources.BackoffMusicURL(source, track.Source(), mediaRetryAfter(out.response), resolution.Result.ScriptFingerprint)
 	}
 	// 被限流或连不上音频地址时，更低音质通常指向同一上游，不再逐档重复等待。

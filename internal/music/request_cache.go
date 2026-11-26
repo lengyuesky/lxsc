@@ -15,6 +15,7 @@ import (
 type cacheToken struct {
 	generation uint64
 	serial     uint64
+	space      uint8 // 区分签发版本的缓存，不同缓存的版本号不能相撞
 }
 
 type cachedResult[V any] struct {
@@ -70,6 +71,7 @@ type requestCache[K comparable, V any] struct {
 	now               func() time.Time
 	capacity          int
 	expiry            func(K, V, time.Time, time.Time) time.Time // 可选的结果有效期上限，在创建时设置
+	space             uint8                                      // 写入签发的 cacheToken
 	persistent        cachePersistence[K, V]
 	hits              uint64
 	misses            uint64
@@ -223,7 +225,7 @@ func (c *requestCache[K, V]) loadSelected(ctx context.Context, key K, failed *ca
 		}
 		remoteCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		c.serial++
-		call = &cacheCall[V]{done: make(chan struct{}), cancel: cancel, result: cachedResult[V]{token: cacheToken{generation: c.generation, serial: c.serial}}}
+		call = &cacheCall[V]{done: make(chan struct{}), cancel: cancel, result: cachedResult[V]{token: cacheToken{generation: c.generation, serial: c.serial, space: c.space}}}
 		call.permit = permit
 		c.calls[fk] = call
 		go c.execute(remoteCtx, fk, call, fn)

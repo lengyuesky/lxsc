@@ -202,6 +202,7 @@ async function loadSettings() {
       if (el.type === 'checkbox') el.checked = !!val
       else el.value = Array.isArray(val) ? val.join(',') : val
     }
+    showFallbackKeyState(v)
     settingsState.ready = true
     settingsState.dirty = false
     $('#settingsMsg').textContent = ''
@@ -212,6 +213,15 @@ async function loadSettings() {
     }
   }
 }
+// 兜底密钥只写不读：输入框始终留空，留空保存不修改已保存的密钥。
+function showFallbackKeyState(values) {
+  const f = $('#settingsForm')
+  f.elements.fallbackAPIKey.value = ''
+  f.elements.fallbackAPIKey.placeholder = values.fallbackAPIKeySet ? '已保存，留空不修改' : '未配置'
+  $('#fallbackAPIKeyState').textContent = values.fallbackAPIKeySet ? '已保存密钥，兜底已启用' : '尚未配置密钥'
+  $('#clearFallbackAPIKey').checked = false
+  $('#clearFallbackAPIKey').disabled = !values.fallbackAPIKeySet
+}
 async function saveSettings(e) {
   e.preventDefault()
   if (!settingsState.ready || settingsState.saving) return false
@@ -219,18 +229,21 @@ async function saveSettings(e) {
   const body = {}
   for (const el of f.elements) {
     if (!el.name) continue
-    if (el.type === 'checkbox') body[el.name] = el.checked
+    if (el.name === 'fallbackAPIKey') { if (el.value.trim()) body.fallbackAPIKey = el.value.trim() }
+    else if (el.type === 'checkbox') body[el.name] = el.checked
     else if (el.type === 'number' || el.name === 'urlCacheTTL') body[el.name] = Number(el.value)
     else if (el.name.endsWith('Sources')) body[el.name] = el.value.split(/[,，\s]+/).filter(Boolean)
     else body[el.name] = el.value
   }
+  if ($('#clearFallbackAPIKey').checked) body.fallbackAPIKey = ''
   const request = ++settingsState.request
   settingsState.saving = true
   f.inert = true
   f.setAttribute('aria-busy', 'true')
   try {
-    await adminAPI('/settings', { method: 'PUT', body })
+    const saved = await adminAPI('/settings', { method: 'PUT', body })
     if (request !== settingsState.request) return false
+    showFallbackKeyState(saved)
     settingsState.dirty = false
     $('#settingsMsg').textContent = '已保存'
     toast('设置已保存')

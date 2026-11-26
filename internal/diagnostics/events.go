@@ -79,7 +79,7 @@ func (b *Events) Add(e Event) {
 	if b == nil {
 		return
 	}
-	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "cross_source", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe", "audio_probe")
+	e.Stage = oneOf(e.Stage, "metadata", "resolve", "refresh", "source_fallback", "cross_source", "fallback_api", "url_check", "cache_check", "redirect", "proxy_response", "proxy_copy", "probe", "client_response", "board_probe", "lyrics_probe", "protocol_probe", "playback_probe", "audio_probe")
 	if e.Stage == "" {
 		return
 	}

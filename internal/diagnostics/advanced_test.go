@@ -190,6 +190,16 @@ func TestMaintenanceScopeValidationAndAudit(t *testing.T) {
 			t.Fatal("无效维护请求被接受", invalid, w.Code)
 		}
 	}
+	// 调试凭据不能管理第三方 API 密钥，也看不到已保存的密钥。
+	if w := f.call("POST", "/api/debug/maintenance", `{"operation":"settings_update","settings":{"fallbackAPIKey":"sk-debug-123456"}}`, full, nil); w.Code != 403 || f.s.Settings.Get().FallbackAPIKeySet {
+		t.Fatal("调试凭据不能写入兜底密钥", w.Code)
+	}
+	if _, err := f.s.Settings.Update(context.Background(), map[string]json.RawMessage{"fallbackAPIKey": json.RawMessage(`"sk-admin-123456"`)}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.call("GET", "/api/debug/inspect/settings", "", full, nil); w.Code != 200 || strings.Contains(w.Body.String(), "sk-admin-123456") || !strings.Contains(w.Body.String(), "fallbackAPIKeySet") {
+		t.Fatal("诊断设置不能输出兜底密钥", w.Code, w.Body.String())
+	}
 	f.s.Tokens.Revoke(view.ID)
 	if w := f.call("POST", "/api/debug/maintenance", body, full, nil); w.Code != 401 {
 		t.Fatal("撤销后仍可维护", w.Code)

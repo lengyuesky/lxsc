@@ -41,6 +41,16 @@ func normalizePatch(patch map[string]json.RawMessage) (map[string]string, error)
 				return invalid(httpguard.ErrInvalidTemplate.Error())
 			}
 			values[key] = value
+		case "fallbackAPIKey":
+			var value string
+			if json.Unmarshal(raw, &value) != nil {
+				return invalid("必须是字符串")
+			}
+			value = strings.TrimSpace(value)
+			if !validFallbackAPIKey(value) {
+				return invalid("只能包含可见 ASCII 字符且不超过 256 字节")
+			}
+			values[key] = value
 		case "boardSelections":
 			selections, err := parseBoardSelections(raw)
 			if err != nil {

@@ -197,6 +197,11 @@ func (s *Server) maintain(w http.ResponseWriter, r *http.Request) {
 			failure(w, 400, "invalid_settings_patch")
 			return
 		}
+		// 调试凭据不能管理密钥：第三方 API 密钥只能由管理员在设置页修改。
+		if _, ok := patch["fallbackAPIKey"]; ok {
+			failure(w, 403, "secret_settings_forbidden")
+			return
+		}
 		s.Tokens.RecordOperation(tokenID, operation)
 		updated, err := s.Settings.Update(r.Context(), patch)
 		if err != nil {

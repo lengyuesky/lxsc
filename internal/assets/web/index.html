@@ -324,6 +324,14 @@
           </div>
           <details><summary>接口参数与说明</summary><p class="muted hint">仅填地址时，自动传入 title（歌名）、artist（歌手）、album（专辑）。也可在地址的路径或查询参数中使用 {title}、{artist}、{album}、{id}（平台歌曲 ID）、{source}、{trackId}、{duration}（秒）；参数会自动编码。请求仅支持公网 HTTP(S) 的标准端口。</p><p class="muted hint">备用接口会接收用于匹配的歌曲信息。公共服务的可用性与匹配结果由服务提供方决定。<a href="https://docs.lrc.cx/docs/QuickStart" target="_blank" rel="noopener noreferrer">查看 LrcAPI 文档</a></p></details>
         </div>
+        <div class="card"><h4 class="card-title">播放兜底接口</h4>
+          <p class="muted hint">全部音源、音质和平台都确认失败后，改用 <a href="https://api.chksz.com/#apis" target="_blank" rel="noopener noreferrer">ChKSz API</a> 取播放地址；地址同样经过音频验证。支持网易云、QQ 音乐和酷狗，酷我、咪咕的歌曲改用其它平台上的同一首。不填密钥则不启用。</p>
+          <div class="form-grid">
+            <label>ChKSz API 密钥<input name="fallbackAPIKey" type="password" maxlength="256" autocomplete="new-password" spellcheck="false"><small id="fallbackAPIKeyState">尚未配置密钥</small></label>
+          </div>
+          <div class="secret-clear-row"><label class="inline"><input id="clearFallbackAPIKey" type="checkbox">清除已保存的密钥（关闭兜底）</label></div>
+          <details><summary>额度与说明</summary><p class="muted hint">登录 ChKSz 后点击“查看密钥”获取个人密钥，免费用户每日 400 次。取到的地址缓存 10 分钟，同一首歌的预检与播放共用一次调用；30 分钟内重播靠兜底播放成功的歌曲时直接走兜底。密钥失效或额度用尽时自动暂停调用。</p><p class="muted hint">启用后，音源与换平台选源最多用 22 秒，留出 8 秒兜底。密钥保存后不会再显示，接口会收到歌曲的平台 ID 与音质。</p></details>
+        </div>
         <div class="card"><h4 class="card-title">歌单</h4>
           <label class="switch"><span>新建歌单默认公开<small>其他用户可见</small></span><input type="checkbox" name="publicPlaylists"></label>
         </div>

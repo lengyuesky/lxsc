@@ -58,6 +58,8 @@ type Values struct {
 	CoverMode         string              `json:"coverMode"`         // redirect / proxy
 	CustomLyricsURL   string              `json:"customLyricsURL"`   // 现有歌词来源失败后的自定义接口
 	CustomCoverURL    string              `json:"customCoverURL"`    // 原封面无法读取时的自定义接口
+	FallbackAPIKey    string              `json:"-"`                 // ChKSz API 密钥：全部音源和平台失败后兜底取链，空表示关闭；只写不读，不得输出明文
+	FallbackAPIKeySet bool                `json:"fallbackAPIKeySet"` // 只公开是否已配置密钥
 	URLCacheTTL       int                 `json:"urlCacheTTL"`       // 直链缓存秒数，0 关闭，-1 永久
 	SearchCacheTTL    int                 `json:"searchCacheTTL"`    // 搜索缓存秒数
 	DefaultQuality    string              `json:"defaultQuality"`    // 新用户默认音质
@@ -154,6 +156,10 @@ func apply(v Values, m map[string]string) Values {
 					v.CustomCoverURL = val
 				}
 			}
+		case "fallbackAPIKey":
+			if validFallbackAPIKey(val) {
+				v.FallbackAPIKey, v.FallbackAPIKeySet = val, val != ""
+			}
 		case "urlCacheTTL":
 			if n, err := parseURLCacheTTL(val); err == nil {
 				v.URLCacheTTL = n
@@ -203,6 +209,19 @@ func apply(v Values, m map[string]string) Values {
 		}
 	}
 	return v
+}
+
+// validFallbackAPIKey 只接受可见 ASCII，空串表示关闭兜底。
+func validFallbackAPIKey(value string) bool {
+	if len(value) > 256 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] <= ' ' || value[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func splitList(s string) []string {
